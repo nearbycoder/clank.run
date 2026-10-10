@@ -56,3 +56,28 @@ test('native-form fixture clears all private grant/reason DOM on native revocati
     const view=createTemporaryAccessView(d.root,{projectId:project,client,account:()=>current,canManage:()=>true,members:[]});t.after(()=>view.dispose());await settle();assert.ok(descendants(d.root).some(node=>node.textContent===grant.reason));if(mode==='account')current={userId:'another_owner_01',sessionId:'another_session_01'};else denied=true;await view.refresh();assert.equal(view.disposed,true);assert.equal(d.root.children.length,0);assert.equal(d.events.has('beforeunload'),false);
   }
 });
+
+const preview={id:'temporary_preview_01',parentProjectId:project,previewName:'review-one',previewExpiresAt:Date.now()+3600000};
+test('recipient preview transport binds exact grant and current CSRF, never retries, and validates native creation',async()=>{
+  const requests=[],client=createTemporaryAccessClient({auth:auth(),fetch:async(url,options)=>{requests.push({url,options});return Response.json({ok:true,created:true,preview},{status:201});}});
+  assert.deepEqual(await client.createPreview(project,{grantId:grant.id,name:'review-one',ttlHours:1}),preview);
+  assert.equal(requests.length,1);assert.equal(requests[0].url,'/api/projects/'+project+'/previews');assert.equal(requests[0].options.headers['x-clank-temporary-access'],grant.id);assert.equal(requests[0].options.headers['x-clank-csrf'],'owned-csrf-fixture');assert.equal(requests[0].options.redirect,'error');assert.deepEqual(JSON.parse(requests[0].options.body),{name:'review-one',ttlHours:1});
+  for(const result of [{ok:true,created:false,preview},{ok:true,created:true,preview:{...preview,parentProjectId:'another_project_01'}},{ok:true,created:true,preview:{...preview,previewName:'other'}}]){
+    const invalid=createTemporaryAccessClient({auth:auth(),fetch:async()=>Response.json(result,{status:201})});await assert.rejects(invalid.createPreview(project,{grantId:grant.id,name:'review-one',ttlHours:1}),e=>e.code==='TEMPORARY_ACCESS_RESPONSE');
+  }
+});
+test('preview submission rejects unbounded or ambiguous inputs before transport',async()=>{
+  let calls=0;const client=createTemporaryAccessClient({auth:auth(),fetch:async()=>{calls++;throw new Error('Transport must not run.');}});
+  for(const input of [{grantId:'bad/header',name:'review-one',ttlHours:1},{grantId:grant.id,name:'Different spelling',ttlHours:1},{grantId:grant.id,name:'review-one',ttlHours:0},{grantId:grant.id,name:'review-one',ttlHours:1.5}])await assert.rejects(client.createPreview(project,input),e=>e.code==='TEMPORARY_ACCESS_INPUT');assert.equal(calls,0);
+});
+test('recipient form retains unknown preview outcome, forbids retries and clears only after explicit review',async t=>{
+  const d=dom(),calls=[];const own={...grant,recipientId:account.userId},inventory={...snapshot,grants:[own]};const client={read:async()=>inventory,create:async()=>({grant,acceptedVersion:1}),revoke:async()=>({grant,acceptedVersion:1}),createPreview:async(_id,input)=>{calls.push({...input});throw new Error('Actual outcome is unknown.');}};
+  const view=createTemporaryAccessView(d.root,{projectId:project,client,account:()=>account,canManage:()=>false,members:[]});t.after(()=>view.dispose());await settle();
+  const form=descendants(d.root).find(node=>node.name==='temporary-preview-form');assert.ok(form);const select=descendants(form).find(node=>node.name==='temporary-preview-grant'),name=descendants(form).find(node=>node.name==='temporary-preview-name');select.value=own.id;name.value='review-one';name.fire('input');form.fire('submit');await settle();assert.equal(calls.length,1);assert.equal(view.hasPendingChanges(),true);assert.equal(name.disabled,true);assert.equal(name.value,'review-one');await view.refresh();form.fire('submit');await settle();assert.equal(calls.length,1);
+  const clear=descendants(d.root).find(node=>node.textContent==='Clear after outcome review');d.doc.defaultView.confirm=()=>false;clear.fire('click');assert.equal(view.hasPendingChanges(),true);d.doc.defaultView.confirm=()=>true;clear.fire('click');await settle();assert.equal(view.hasPendingChanges(),false);assert.equal(name.value,'');
+});
+test('recipient preview drafts and held outcomes are removed after native access denial or account change',async t=>{
+  for(const mode of ['denial','account']){const d=dom();let current=account,deny=false,release;const held=new Promise(resolve=>{release=resolve;});const own={...grant,recipientId:account.userId};const client={read:async()=>{if(deny)throw Object.assign(new Error('Native denial'),{status:403});return {...snapshot,grants:[own]};},create:async()=>({grant,acceptedVersion:1}),revoke:async()=>({grant,acceptedVersion:1}),createPreview:async()=>{await held;return preview;}};
+    const view=createTemporaryAccessView(d.root,{projectId:project,client,account:()=>current,canManage:()=>false,members:[]});t.after(()=>view.dispose());await settle();const form=descendants(d.root).find(node=>node.name==='temporary-preview-form'),select=descendants(form).find(node=>node.name==='temporary-preview-grant'),name=descendants(form).find(node=>node.name==='temporary-preview-name');select.value=own.id;name.value='review-one';form.fire('submit');if(mode==='account')current=null;else deny=true;await view.refresh();release();await settle();assert.equal(view.disposed,true);assert.equal(d.root.children.length,0);assert.equal(name.value,'');assert.equal(d.events.has('beforeunload'),false);
+  }
+});

@@ -44,10 +44,23 @@ export interface TemporaryAccessResult {
     /** Version at acceptance; read again for the current project version. */
     readonly acceptedVersion: number;
 }
+export interface TemporaryAccessPreviewCreate {
+  readonly grantId: string;
+  readonly name: string;
+  readonly ttlHours: number;
+}
+export interface TemporaryAccessPreviewResult {
+  readonly id: string;
+  readonly parentProjectId: string;
+  readonly previewName: string;
+  readonly previewExpiresAt: number;
+}
 export interface TemporaryAccessClient {
-    read(projectId: string): Promise<TemporaryAccessSnapshot>;
-    create(projectId: string, input: TemporaryAccessCreate): Promise<TemporaryAccessResult>;
-    revoke(projectId: string, input: TemporaryAccessRevoke): Promise<TemporaryAccessResult>;
+  /** Optional for compatibility with grant-management-only clients; never retries creation. */
+  createPreview?(projectId: string, input: TemporaryAccessPreviewCreate): Promise<TemporaryAccessPreviewResult>;
+  read(projectId: string): Promise<TemporaryAccessSnapshot>;
+  create(projectId: string, input: TemporaryAccessCreate): Promise<TemporaryAccessResult>;
+  revoke(projectId: string, input: TemporaryAccessRevoke): Promise<TemporaryAccessResult>;
 }
 export interface TemporaryAccessClientOptions {
     readonly auth: Pick<AuthClient<any>, 'user' | 'session' | 'csrfHeader'>;
@@ -78,6 +91,6 @@ export interface TemporaryAccessView {
 /** Native controls; exact unknown-response intents are retained for an explicit retry. */
 export declare function createTemporaryAccessView(root: HTMLElement, options: TemporaryAccessViewOptions): TemporaryAccessView;
 /** Always rebind to the current native human session; no shared bearer credential. */
-export declare function createTemporaryAccessClient(options: TemporaryAccessClientOptions): TemporaryAccessClient;
+export declare function createTemporaryAccessClient(options: TemporaryAccessClientOptions): TemporaryAccessClient & Required<Pick<TemporaryAccessClient, 'createPreview'>>;
 /** Validates untrusted transport/state before display; never proves authority. */
 export declare function validateTemporaryAccessGrant(value: any, projectId: string): asserts value is TemporaryAccessGrant;

@@ -24,3 +24,12 @@ declare const display:AuthState;
 createTemporaryAccessClient({auth:display});
 // @ts-expect-error A token string cannot substitute for current native auth signals.
 createTemporaryAccessClient({auth:{user:'token',session:'token',csrfHeader:'token'}});
+
+const preview=await client.createPreview('current_project_01',{grantId:grant.id,name:'review-one',ttlHours:1});
+const previewId:string=preview.id;void previewId;
+// @ts-expect-error Preview creation must bind the exact current grant.
+client.createPreview('current_project_01',{name:'review-one',ttlHours:1});
+// @ts-expect-error Preview creation cannot carry secret or deploy scopes.
+client.createPreview('current_project_01',{grantId:grant.id,name:'review-one',ttlHours:1,action:'deploy'});
+// @ts-expect-error A native receipt is display data, never writable authority.
+preview.parentProjectId='another_project_01';

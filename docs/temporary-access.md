@@ -23,7 +23,7 @@ Machines, bearer tokens, delegated CLI/OAuth credentials and support impersonati
 
 ## Review and manage grants
 
-Open a parent project's **Settings** page to review temporary access. Owners and administrators can select a current member, choose a duration, record a reason, issue a grant and revoke an active grant. Other members see only grants addressed to their own account. The console shows the retained reason, action, recipient, expiry and current state.
+Open a parent project's **Settings** page to review temporary access. Owners and administrators can select a current member, choose a duration, record a reason, issue a grant and revoke an active grant. Other members see only grants addressed to their own account. The console shows the retained reason, action, recipient, expiry and current state. A recipient can select their active grant, enter a new lowercase preview name, choose a preview lifetime and submit **Create new preview**. Recent native authentication is still required; the server decides whether the current grant and configured quotas allow creation.
 
 The typed client exposes the same native endpoints:
 
@@ -74,11 +74,13 @@ const response = await fetch('/api/projects/parent_project_01/previews', {
 if (!response.ok) throw new Error('Review current native authority before retrying.');
 ```
 
-The native server repeats grant checks after reading the request body, after acquiring the project lock and inside the write transaction. An existing preview name returns a conflict for an elevated request; it cannot extend an existing preview's lifetime. After an uncertain creation response, review the existing preview with an authorized operator. Reusing the same name cannot create a second preview or turn the grant into refresh authority. The grant-management console does not currently submit this preview creation request for the recipient.
+The native server repeats grant checks after reading the request body, after acquiring the project lock and inside the write transaction. An existing preview name returns a conflict for an elevated request; it cannot extend an existing preview's lifetime. After an uncertain creation response, review the existing preview with an authorized operator. Reusing the same name cannot create a second preview or turn the grant into refresh authority. The recipient console and `client.createPreview(projectId, {grantId, name, ttlHours})` use this same endpoint. The client validates an acknowledgment of a newly created preview for the exact parent and name; it cannot report an existing-preview refresh as success.
 
 ## Exact acknowledgments and invalidation
 
 Create/revoke operation IDs identify exact reviewed intents. Retrying an identical request returns its retained acknowledgment without issuing another grant or audit event. Reusing an operation ID for different input fails. The returned `acceptedVersion` describes historical acceptance; read the current inventory before making another decision. A historical receipt never reactivates a revoked or expired grant.
+
+If preview creation times out or returns an invalid acknowledgment, the console retains the exact submitted name and lifetime and disables another creation. It never retries this request. Ask an authorized operator to check that exact preview name, then use **Clear after outcome review** and confirm that the outcome was reviewed before submitting again. This differs from grant management, whose native receipts allow an explicit unchanged retry.
 
 The native form preserves an uncertain mutation's UUID and input until the user explicitly retries the unchanged request. A failed polling read cannot replace that input. An account/session change or native access denial clears grant reasons, drafts, private DOM and timers. Unsaved drafts can be discarded explicitly, and navigation warns about a draft or unknown acknowledgment.
 

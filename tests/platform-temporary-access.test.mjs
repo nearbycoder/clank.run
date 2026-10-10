@@ -5,6 +5,7 @@ import {join} from 'node:path';
 import {randomUUID,generateKeyPairSync,createHash,sign} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
 import {fixture} from './fixtures/platform-environment-fixture.mjs';
+import {createTemporaryAccessClient} from '../dist/temporary-access.js';
 import {reservePlatformTestPorts} from './fixtures/platform-test-ports.mjs';
 
 async function step(f,db,account) {
@@ -75,4 +76,19 @@ test('SIGKILL of the native controller retires active privileges and preserves h
   assert.equal(f.db.prepare("SELECT count(*) AS n FROM clank_platform_audit WHERE action='temporary-access.create'").get().n,1);
   const next=f.input(snapshot.version,'temporary_post_loss_create_02');const replacement=(await f.http('/temporary-access',next,201)).result.grant;
   assert.notEqual(replacement.id,grant.id);await f.http('/previews',{name:'after-new-review'},201,f.recipient,replacement.id);
+});
+
+function recipientClient(f,transport=fetch){return createTemporaryAccessClient({auth:{user:{peek:()=>f.recipient.user},session:{peek:()=>({id:'recipient_current_display_01'})},csrfHeader:()=>({'x-clank-csrf':f.recipient.csrf})},fetch:(url,options)=>transport(f.origin+url,{...options,headers:{...options.headers,origin:f.origin,cookie:f.recipient.cookie}})});}
+test('recipient typed client creates one native isolated preview and loses authority immediately on revocation',async t=>{
+  const f=await setup(t),grant=await f.grant(),client=recipientClient(f);assert.equal((await client.read(f.development.id)).grants[0].id,grant.id);
+  const created=await client.createPreview(f.development.id,{grantId:grant.id,name:'recipient-console',ttlHours:1});assert.equal(created.parentProjectId,f.development.id);assert.equal(created.previewName,'recipient-console');
+  const row=f.db.prepare('SELECT * FROM clank_platform_projects WHERE id=?').get(created.id);assert.equal(row.owner_id,f.recipient.user.id);assert.equal(row.preview_expires_at,created.previewExpiresAt);assert.equal(f.db.prepare('SELECT role FROM clank_platform_memberships WHERE user_id=? AND organization_id=?').get(f.recipient.user.id,f.org).role,'viewer');
+  await assert.rejects(client.createPreview(f.development.id,{grantId:grant.id,name:'recipient-console',ttlHours:1}),e=>e.status===409);
+  await f.http('/temporary-access/revoke',{grantId:grant.id,expectedVersion:1,operationId:'recipient_client_revoke_01',reason:'Reviewed creation window closed.'});
+  await assert.rejects(client.createPreview(f.development.id,{grantId:grant.id,name:'recipient-after',ttlHours:1}),e=>e.status===403);assert.equal(f.db.prepare('SELECT count(*) AS n FROM clank_platform_projects WHERE parent_project_id=?').get(f.development.id).n,1);
+});
+test('native preview acceptance followed by discarded acknowledgment cannot trigger client replay',async t=>{
+  const f=await setup(t),grant=await f.grant();let requests=0;const client=recipientClient(f,async(url,options)=>{requests++;const response=await fetch(url,options);assert.equal(response.status,201);await response.body.cancel();throw new Error('Owned transport discards the received native acknowledgment.');});
+  await assert.rejects(client.createPreview(f.development.id,{grantId:grant.id,name:'unknown-recipient',ttlHours:1}),/discards/);assert.equal(requests,1);assert.equal(f.db.prepare('SELECT count(*) AS n FROM clank_platform_projects WHERE parent_project_id=? AND preview_name=?').get(f.development.id,'unknown-recipient').n,1);assert.equal(f.db.prepare("SELECT count(*) AS n FROM clank_platform_audit WHERE action='preview.create'").get().n,1);
+  await assert.rejects(recipientClient(f).createPreview(f.development.id,{grantId:grant.id,name:'unknown-recipient',ttlHours:1}),e=>e.status===409);assert.equal(f.db.prepare("SELECT count(*) AS n FROM clank_platform_audit WHERE action='preview.create'").get().n,1);
 });
