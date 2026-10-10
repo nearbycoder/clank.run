@@ -158,6 +158,92 @@
   },
   "pullRequest": "https://github.com/nearbycoder/clank.run/pull/316",
   "fullReleaseGates": {
+    "source": "f21fba4d669cbcc7d579168be3235e376d1a0caa",
+    "tree": "95c21cb455b789151d475c9220e504ad9aff1c4f",
+    "tarSha256": "e1a7237ae508871ffde326947e563981aadb3330103b7b409768d6ab9729ca3a",
+    "inputs": 1132,
+    "ordinaryUid": 1000,
+    "scope": "Complete unmodified scripts/check.mjs on the source-19 snapshot, including native SIGKILL workspace regression tests, all builds, examples, coverage, docs audit, packed conformance, dependency contract and security. Three intentional unsupported-host tests remain skipped; actual recovery browser/device verification remains pending.",
+    "results": {
+      "26": {
+        "log": "remote-pitr-node26-gate-03.log",
+        "sha256": "14f319d31662ea22448c58dda3204be33aa0a6d8aa40022fb8995a81c35552c8",
+        "exit": 0,
+        "counts": {
+          "tests": 2183,
+          "suites": 0,
+          "pass": 2180,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": [
+          91.75,
+          81.07,
+          90.08
+        ]
+      },
+      "22": {
+        "log": "remote-pitr-node22-gate-03.log",
+        "sha256": "b70854cc2dfa32cfa754b76f39614835511e13567eea705f3d4eea3bcf19723f",
+        "exit": 0,
+        "counts": {
+          "tests": 2183,
+          "suites": 0,
+          "pass": 2180,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": [
+          91.74,
+          81.09,
+          90.13
+        ]
+      }
+    }
+  },
+  "hosted": {
+    "head": "3ec5392b08f4f30fe4ad350fb4e640fb1408a724",
+    "checks": 6,
+    "success": 6,
+    "scope": "Previous report head only. Workspace source f21fba4 and its report successor have not yet passed hosted checks."
+  },
+  "documentation": {
+    "guides": 101,
+    "build": "passed",
+    "doctor": "6 passed, 1 optional unlinked directory, 0 failures",
+    "offlineArtifact": "2fd765e549d17c12a1fd134c03457bf3c671d5d1cb483e1b5453a6840bb586c1",
+    "uploaded": false,
+    "httpSurfaces": 8,
+    "httpMcp": "discovery/list/search/read passed",
+    "proofSha256": "1f9a73119dafebc2c9274720634d85a58a4405d895aa2f9e0d5ad9a1db9e9943",
+    "browser": "Desktop home, guide and search observed at 1265 px; phone override and keyboard activation unverified.",
+    "workspaceCanonicalBuild": "101 guides / 178791 words; operational-recovery workspace guidance included; previous HTTP/browser proof is not retagged to this new document."
+  },
+  "evidence": {
+    "index": "/tmp/clank-review-2026-10-08/remote-pitr-evidence-01/index.json",
+    "sha256": "b9ca763d487257f2a46073a82cf70b98061fd55a88c0a39398b92b375db7213f",
+    "files": 217,
+    "mode": "0400",
+    "activeLogsExcluded": true,
+    "originalFailuresPreserved": true
+  },
+  "package": {
+    "files": 415,
+    "unpackedBytes": 6271458,
+    "limit": 6291456,
+    "headroom": 19998,
+    "zeroNpmDependencies": true
+  },
+  "consumerTypes": {
+    "packedFixtures": 35,
+    "sourceDiagnostics": 159,
+    "newDiagnostics": 0,
+    "unchangedBaseline": 163,
+    "logSha256": "2f424ac82f1165e26284d2484d3ad08b018dadd515903e49e77bd6ea41b643f4"
+  },
+  "previousFullReleaseGates": {
     "source": "0a349aa7b8e632fdf86dade81fe3c98ea15ad170",
     "tree": "08315f2fd3bb4ab87cadced5280948f46c1ca3c8",
     "tarSha256": "4397cadc2c3e8cd608c871544c8d258bb3c9e8719b0dda1163a9039ee4a638f4",
@@ -201,45 +287,26 @@
       }
     }
   },
-  "hosted": {
+  "workspaceSafety": {
+    "proposalComment": "https://github.com/nearbycoder/clank.run/issues/315#issuecomment-6098538242",
+    "source": "f21fba4d669cbcc7d579168be3235e376d1a0caa",
+    "before": "Actual UID1000 worker SIGKILL at encrypted archive and materialized replay boundaries; retry created 2 and 4 roots respectively. Correct old test binding preserved separately.",
+    "after": "Stable exclusive per-project and per-destination workspace names; current or unknown roots/symlinks preserved and block retry; no automatic reclamation. Actual SIGKILL archive/replay, unknown symlink, abandoned native controller operation and legacy workspace cases pass.",
+    "focused": "42/42 initial and 29/29 final focused checks; paired complete gates execute final five new cases.",
+    "operatorRecovery": "Stop and verify controller and workers are quiescent; inspect and reconcile preserved workspace before exact retry. Retained archive budget is distinct from bounded verification materialization.",
+    "evidence": {
+      "index": "/tmp/clank-review-2026-10-08/remote-pitr-evidence-02/index.json",
+      "sha256": "b28c90860b683d523a197e8c9c38f28cdaf2ba86aec6feb4f9df5f804b687d02",
+      "files": 21,
+      "mode": "0400"
+    }
+  },
+  "previousHosted": {
     "head": "0a349aa7b8e632fdf86dade81fe3c98ea15ad170",
     "checks": 6,
     "success": 6,
     "codeqlNewAlerts": 0,
     "analysisAnnotation": "Informational runner-image migration notice, read; no failed check.",
     "proofSha256": "e0a92bdb463aeaf81dfc8de7b7430e1b0fe1274207ec86b571a124f6856c32dd"
-  },
-  "documentation": {
-    "guides": 101,
-    "build": "passed",
-    "doctor": "6 passed, 1 optional unlinked directory, 0 failures",
-    "offlineArtifact": "2fd765e549d17c12a1fd134c03457bf3c671d5d1cb483e1b5453a6840bb586c1",
-    "uploaded": false,
-    "httpSurfaces": 8,
-    "httpMcp": "discovery/list/search/read passed",
-    "proofSha256": "1f9a73119dafebc2c9274720634d85a58a4405d895aa2f9e0d5ad9a1db9e9943",
-    "browser": "Desktop home, guide and search observed at 1265 px; phone override and keyboard activation unverified."
-  },
-  "evidence": {
-    "index": "/tmp/clank-review-2026-10-08/remote-pitr-evidence-01/index.json",
-    "sha256": "b9ca763d487257f2a46073a82cf70b98061fd55a88c0a39398b92b375db7213f",
-    "files": 217,
-    "mode": "0400",
-    "activeLogsExcluded": true,
-    "originalFailuresPreserved": true
-  },
-  "package": {
-    "files": 415,
-    "unpackedBytes": 6270529,
-    "limit": 6291456,
-    "headroom": 20927,
-    "zeroNpmDependencies": true
-  },
-  "consumerTypes": {
-    "packedFixtures": 35,
-    "sourceDiagnostics": 159,
-    "newDiagnostics": 0,
-    "unchangedBaseline": 163,
-    "logSha256": "2f424ac82f1165e26284d2484d3ad08b018dadd515903e49e77bd6ea41b643f4"
   }
 }
