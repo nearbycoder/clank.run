@@ -58,6 +58,12 @@ export async function finishReplay(databasePath: string): Promise<void> {
   try {
     database.enableLoadExtension(false); database.exec("PRAGMA trusted_schema=OFF");
     if (String(database.prepare("PRAGMA integrity_check").get()?.integrity_check) !== "ok" || database.prepare("PRAGMA foreign_key_check").all().length) throw new Error("Recovered SQLite database failed integrity checks.");
-    database.exec("DROP TABLE clank_pitr_journal; DROP TABLE clank_pitr_state; PRAGMA wal_checkpoint(TRUNCATE)");
+    database.exec("BEGIN IMMEDIATE");
+    try {
+      // Source export receipts belong to the old epoch. Retaining their table
+      // would make enrolling the restored database fail as a partial protocol.
+      database.exec("DROP TABLE IF EXISTS clank_pitr_remote_exports; DROP TABLE clank_pitr_journal; DROP TABLE clank_pitr_state; COMMIT");
+    } catch (error) { database.exec("ROLLBACK"); throw error; }
+    database.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   } finally { database.close(); }
 }

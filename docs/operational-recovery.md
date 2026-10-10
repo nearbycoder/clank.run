@@ -49,6 +49,8 @@ const recovery = await openPointInTimeRecovery(database, {
   exportIntervalMs: 1_000,
   maxTransactionBytes: 4 * 1024 * 1024,
   maxStateBytes: 32 * 1024 * 1024,
+  maxJournalEntries: 10_000,
+  maxJournalBytes: 128 * 1024 * 1024,
 });
 // Admit application requests only after the awaited call completes.
 // At shutdown: stop application writers, await recovery.close(), database.close().
@@ -60,6 +62,8 @@ All captured tables require a primary key with no null values. Virtual tables, g
 
 The journal remains durable in the live SQLite database until epoch rotation. `flush()` fsyncs immutable encrypted entries and an authenticated export checkpoint. `status().committedThrough` may exceed `exportedThrough` while export is pending. Copy the entire repository, including `epoch.json`, `head.json`, journal entries and `base/`, to independently retained storage; loss of the live database before export loses those unexported transactions. A current independently retained checkpoint is necessary to detect replacement of an entire repository with an older valid copy. Commit timestamps are recorded immediately before commit and strictly ordered; exact sequence selection is the strongest boundary.
 
+The optional journal entry and encrypted byte limits fence the next mutation when capacity is exhausted. The application write, revision, history and recovery sequence roll back together. Reopening does not discard entries or reset the epoch. Rotate a quiesced, independently verified epoch to regain capacity.
+
 Restore only into a stopped destination:
 
 ```ts
@@ -69,10 +73,69 @@ const restored = await restorePointInTime({
   targetPath: "/srv/recovered/data/app.sqlite",
   throughSequence: 125, // alternatively asOf: timestampMilliseconds
   confirmation: "restore point in time",
+  maxDurationMs: 30_000,
+  assertCurrent() { assertReservedDestinationStillOwned(); },
 });
 ```
 
 Restore authenticates the base and every exported entry through the authenticated checkpoint, rejects gaps, conflicting changes, tampering and unavailable requested sequences, and replays inside the bounded SQLite worker namespace. It publishes the stopped destination only after verification. The original destination survives failed verification. `asOf` selects the latest available recorded commit at or before the timestamp; requests before the base snapshot fail. The recovered database starts without the old journal metadata so it can begin a new epoch.
+
+The default overall replay budget is 30 seconds, with `maxDurationMs` bounded from 1 through 60,000. Time is measured monotonically. The trusted `assertCurrent` callback must complete synchronously and return no value; promises and thenables are rejected. Clank calls it between asynchronous verification steps and before the final stopped-database publication, after the native replacement worker closes. An in-flight native worker remains subject to its existing process deadline and is awaited before cleanup. Keep the destination stopped and exclusively owned throughout; this callback does not create a distributed transaction or fence an independently running writer. `restoreSQLiteBackup(source, destination, assertCurrent)` offers the same publication assertion for an already verified backup.
+
+### Encrypted provider checkpoints
+
+`exportPointInTimeRecovery(recovery, bounds)` accepts only the original live native capture handle. A copied status object, JSON descriptor or closed handle cannot export. Its `clank-pitr-archive/1` envelope contains the complete encrypted base and contiguous exported journal, bounded encoded bytes and entry count, checksums, exact epoch/head and a whole-envelope HMAC. Retain the accepted epoch, sequence and digest independently of the archive.
+
+```ts
+const archive = await exportPointInTimeRecovery(recovery, {
+  operationId: "checkpoint_2026_10_10_01",
+  binding: { projectId, nodeId, releaseId, generation },
+  maxArchiveBytes: 32 * 1024 * 1024,
+  maxEntries: 10_000,
+});
+await restorePointInTimeArchive(archive, {
+  encryptionKey: independentlyRecoveredKey,
+  targetPath: reservedStoppedDestination,
+  confirmation: "restore point in time",
+  throughSequence: chosenSequence,
+  expectedEpoch: retainedCheckpoint.epoch,
+  expectedSequence: retainedCheckpoint.sequence,
+  expectedDigest: retainedCheckpoint.digest,
+  expectedBinding: retainedCheckpoint.binding,
+  operationId: retainedCheckpoint.operationId,
+  assertCurrent() { assertReservedDestinationStillOwned(); },
+});
+```
+
+Stable export operation IDs retain the exact accepted encrypted archive in the source's native SQLite receipt store. Exact retry after restart returns that horizon even if newer application writes exist; a changed binding or bound conflicts. Receipt count and bytes are bounded, never silently evicted. Missing enrolled receipt tables, partial capture state and corrupt receipts require verified operator recovery. Restore removes the source's capture and export-receipt metadata so the separate database can enroll a fresh epoch and new operation identities.
+
+Verification has one exclusive private `.verify-<project-SHA256>` workspace per project. Archive extraction and replay use exclusive `.clank-pitr-<destination-SHA256>-archive` and `-replay` directories beside the exact destination. Ordinary completion or failure cleans only directories created by that attempt. SIGKILL can leave these directories behind; the exact retry then refuses existing state with `EEXIST`, rather than allocating another workspace or deleting a possible live worker's files. Abandoning an export does not bypass its project's workspace fence. Older random `.verify-*` directories also block new capture until reconciled. Retained archive byte limits cover encrypted retention, not the separate bounded database materialization footprint.
+
+An interrupted workspace requires operator recovery: stop and verify quiescence of the registered controller and its workers, inspect the exact private workspace and pending operation, preserve any needed evidence, and reconcile that workspace before restarting or retrying the unchanged operation. Do not remove unrelated directories, clear a live workspace or bypass native leases. Unknown workspace contents and symbolic links are never adopted or automatically reclaimed. Successful source receipt replay still preserves its exact retained horizon; interrupted temporary verification is a separate recovery boundary.
+
+`createPointInTimeRecoveryProvider(recovery, { binding, token, assertCurrent })` mounts a private `GET /__clank/pitr/checkpoint` handler around that actual capture. Its server-owned binding and current native assertion must describe the same project, node, release and generation. Use a dedicated private control credential and dispatch this handler only through the registered provider integration. Ordinary provider snapshots and arbitrary application endpoints do not establish journal capture.
+
+The platform's optional `pointInTime` configuration resolves these registered sources and separately resolves retained checkpoint keys with `restoreKey(projectId, checkpoint)`. Key resolution must remain available after the source node disappears. Encrypted archives, receipts and horizons commit together in the control database. Preserve the private `point-in-time/protocol` enrollment marker with that database; missing or partial enrolled tables fail closed. An enrolled installation requires its recovery configuration at startup, including when scheduling is disabled. Omitting the option cannot bypass retained destination fences or artifact pins. Catalogs from an unmarked private foundation format require explicit operator recovery.
+
+`GET /api/projects/:projectId/point-in-time` reads current policy and checkpoint metadata. Current human administrators configure a policy with `PUT`, exact `operationId`, `expectedVersion`, `enabled`, `intervalMs` and confirmation `configure-recovery <slug>`. Configuration requires a freshly verified passkey or MFA in the current browser session. `POST .../point-in-time/checkpoints` requests an exact version-bound operation. Configuration replies separate the operation's historical receipt from the current policy.
+
+`POST .../point-in-time/restores` creates a separate local project in the source workspace. Supply exact `operationId`, `checkpointId`, `expectedVersion`, `throughSequence`, `name`, `slug` and confirmation `restore-recovery <source-slug> <checkpoint-id> <sequence> <destination-slug>`. Current human workspace administration and fresh browser authentication are required. Clank reserves one suspended destination, verifies the encrypted checkpoint through the selected sequence using the independent key resolver, copies the retained checkpoint release artifact, and acknowledges that release and restore receipt in one control-database transaction. Source secrets are not copied. The destination stays suspended after acceptance; review its data and configure secrets before changing its ordinary runtime policy.
+
+Status includes retained restore receipts and pending destinations. Retrying the exact request after interruption resumes its original stopped reservation; changing its checkpoint, sequence, actor or destination conflicts. Pending destinations reject deployment, activation and destructive changes. A live operation lease blocks a second restore, and current authority is checked throughout native verification and before acknowledgment. Accepted checkpoint artifacts and pending source artifacts are pinned against cleanup. Preserve an interrupted destination and its intent for exact retry or operator recovery; do not remove its native receipt or start a writer manually.
+
+Agents can inspect bounded metadata with `clank recovery status --json`. `clank recovery checkpoint --key <stable-operation> --expected-version <current-version>` uses current human administrative authorization and keeps exact retries bound to that version. `clank recovery restore-plan --request <json-file> --json` accepts `operationId`, `checkpointId`, `expectedVersion`, `throughSequence`, `name` and a canonical `slug`; it checks the retained horizon and prints the exact browser request and confirmation. It does not submit the restore or create a browser credential. Machine read grants can read recovery metadata only for their current project; every recovery mutation remains reserved for humans.
+
+The stateless MCP endpoint is `POST /api/projects/:projectId/point-in-time/mcp`. It exposes only `recovery_status` and `recovery_restore_plan`, with the same current project read authority as the metadata API. The plan accepts the six fields above and returns the exact browser request after checking the current policy version and retained sequence. Neither tool reserves a destination, captures a checkpoint, configures a policy or submits a restore. Browser requests require the ordinary origin and CSRF checks; bearer requests require a current project read grant. Authority is checked again after reading the request and before returning its response. Requests are bounded to 16 KiB, responses to 1 MiB, and no persistent MCP session is created. Use the framework's current MCP protocol headers and request metadata described in the MCP guide.
+
+In the project's **Backups** view, the recovery section shows the current policy, retained checkpoint sequences and times, exact release bindings and restore operations. Review a schedule or checkpoint request before applying it. To restore, select a checkpoint and sequence, enter a new project name and slug, review the source and suspended destination, and type the exact confirmation. Verify a passkey in the current browser before submitting a sensitive action; MFA is usable only when the authentication server has a configured delivery method. Verification never automatically submits a recovery request.
+
+An unknown acknowledgment keeps the exact reviewed body and operation identity available for explicit retry. Refresh current status before clearing the review or choosing different input. Navigating to another project, signing out or losing current access clears private forms and fences late responses. Restore history links to an accessible destination's Settings, where runtime activation remains a separate decision. Readers and support sessions can inspect current metadata; their mutation controls stay disabled. Policy configuration and failed-export resolution verify their native policy and receipt acknowledgments before committing, including when SQLite ignores an update.
+
+Disabling scheduling retains accepted archives and exact checkpoint retries. Resolve an unrecoverable pending export through `POST .../point-in-time/resolve` only after disabling its current policy and inspecting the exact pending ID. Supply `operationId`, `pendingOperationId`, `expectedVersion` and confirmation `abandon-recovery <slug> <pending-id>` with fresh current human administration. Resolution refuses a live export lease, preserves the original binding and operation evidence, and releases only that pending byte reservation. It does not resume a source writer or discard accepted checkpoints.
+
+Export admission verifies that its native intent and lease writes were retained before contacting the provider. An ignored write rolls back that reservation. Byte admission checks pending reservations against their configured bounds and accepted reservations against their checkpoint and stored archive lengths; negative, understated or orphaned entries require operator recovery. Corrupt accounting never frees space for another export.
+
+The current platform policy stays bound to its retained epoch. Changing provider generation can preserve that verified epoch; initializing a new epoch requires a separately reviewed operator transition or a new recovery project. Disabling and re-enabling a policy never resets its recorded history.
 
 To rotate for a schema migration: stop all writers; flush and retain the old encrypted epoch; restore its final sequence into a new stopped database; apply migrations to that new database; open it and initialize services; attach a new recovery repository; verify a restore drill; switch to the new database. This also bounds retained journal storage. To roll back the feature, stop writers and restore the latest verified sequence into a database without recovery metadata, then deploy the prior configuration. Do not drop journal metadata from a live writer or delete its archive as part of disabling the feature.
 

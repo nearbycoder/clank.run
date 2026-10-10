@@ -1,0 +1,312 @@
+{
+  "feature": 10,
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/315",
+  "status": "draft-browser-acceptance-pending",
+  "counted": false,
+  "main": "7bdb73efc3bf297c566d63814223306b047b2792",
+  "foundationNative": {
+    "source": "affd9780938a12dda31b72a1ee8cb0886bce8e87",
+    "tree": "bc73831bbbbac84552bd378bbf26251d623cdf63",
+    "tarSha256": "8459b6290fcd97fad20bef90cab2b888662ee766ac6e2ee8e6e38a74f7572081",
+    "inputs": 1106,
+    "ordinaryUid": 1000,
+    "scope": "Focused encrypted provider/controller recovery foundation, not full feature 10 acceptance or complete release gates.",
+    "results": {
+      "22": {
+        "exit": 0,
+        "counts": {
+          "tests": 34,
+          "pass": 34,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 0
+        },
+        "logSha256": "acf1df1820d38936472e9031f3467f8d024978bd09bd6e4bcfee23cb0d17accf"
+      },
+      "26": {
+        "exit": 0,
+        "counts": {
+          "tests": 34,
+          "pass": 34,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 0
+        },
+        "logSha256": "596bd6b573abf4cff4581ecb1ca4ef46cfcdd86fe6ae5d19ef75e70c7e9e54cc"
+      }
+    }
+  },
+  "scope": "Native recovery SDK, provider/controller, authenticated platform restore, CLI, stateless HTTP MCP and private console implementation passed complete ordinary-user release gates. Actual recovery browser, keyboard, phone and device verification remain pending; feature 10 is not accepted.",
+  "pending": [
+    "Actual recovery browser flows, keyboard/focus/mobile and live access loss",
+    "Browser identity verification; signed native fixture assertions are not device verification",
+    "Review and normal protected expected-head merge after acceptance"
+  ],
+  "acceptedFeatures": 27,
+  "remainingFeatures": 13,
+  "foundationTypes": {
+    "sourceDiagnostics": 159,
+    "newDiagnostics": 0,
+    "unchangedBaseline": 163,
+    "packedFixtures": 34,
+    "logSha256": "d91b57b10a52748104cd745b1b4b42005e3524760567eb2f3c1175f5175f73b4"
+  },
+  "platformIntegration": {
+    "source": {
+      "head": "56c77b0cb5adfc0e985e0bb06bab2024511b1dae",
+      "tree": "2ee42dbc13702de51fc93cdefe645f1805ce9661",
+      "tarSha256": "f9deb5e50b9e9041dcee9ff75ada702dcb57e4683496ac4a5b20d617408aecef"
+    },
+    "ordinaryUid": 1000,
+    "scope": "Focused private recovery SDK, controller, public project restore and packed CLI integration. Actual source volume loss, controller SIGKILL, unchanged 120000 ms native lease, same stopped destination, independent keys, native rollback/ignored updates, fresh signed human sessions and current machine read-only HTTP metadata. CLI fixture proves transport/plan contract, not native authorization. Excludes complete release gates, real browser flows, hardware/Docker certification and whole-feature acceptance.",
+    "nodes": {
+      "26": {
+        "log": "remote-pitr-platform-node26-13.log",
+        "sha256": "7ed45612c1197ef13993254af2f1384de5970e2dbb59119a1800f004c3d53b13",
+        "exit": 0,
+        "tests": 62,
+        "pass": 62,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "22": {
+        "log": "remote-pitr-platform-node22-13.log",
+        "sha256": "6e377b2671b3305ea954b35c277986307de0fb7251b74592d0b9176f9ee42196",
+        "exit": 0,
+        "tests": 62,
+        "pass": 62,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      }
+    },
+    "types": {
+      "log": "remote-pitr-types-18.log",
+      "sha256": "2f424ac82f1165e26284d2484d3ad08b018dadd515903e49e77bd6ea41b643f4",
+      "packedFixtures": 35,
+      "sourceDiagnostics": 159,
+      "newDiagnostics": 0,
+      "unchangedBaseline": 163
+    }
+  },
+  "consoleFocusedIntegration": {
+    "source": {
+      "head": "d7eb6c11353a340f3de930b1f73cabefe2e06a98",
+      "tree": "423ebe5c9aeeb19f26344e0786330c9cbb506cf3",
+      "tarSha256": "54c8b5672820a6fc00427d74f6d7ac924dacfe0927c9584580e44940ceb0a7cc"
+    },
+    "ordinaryUid": 1000,
+    "scope": "Focused private recovery SDK/controller/public project restore/packed CLI and six console tests using a simulated DOM. Actual source volume loss, controller SIGKILL, unchanged native 120000 ms lease, same stopped destination, independent keys, native rollback and ignored policy/checkpoint/resolution updates, signed human sessions and current machine HTTP metadata. Does not include the subsequent uncommitted MCP changes, real browser verification, full release gates or hardware/production host certification. Feature 10 remains uncounted.",
+    "nodes": {
+      "26": {
+        "log": "remote-pitr-platform-node26-14.log",
+        "sha256": "6601c84c9f308f3d92e0673eebee3a5ae8b99a18d63e2000ae794cec72e27322",
+        "exit": 0,
+        "tests": 70,
+        "pass": 70,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "22": {
+        "log": "remote-pitr-platform-node22-14.log",
+        "sha256": "729214f22508a62191d96534a3b307b70ce6dc9f90ac1cd809ef163faeeb3feb",
+        "exit": 0,
+        "tests": 70,
+        "pass": 70,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      }
+    }
+  },
+  "mcpFocusedIntegration": {
+    "source": {
+      "head": "c15770e43dfdbaf301d8e2f796f1b6cad678d4d1",
+      "tree": "2e5961b54a4bf100549f13d58426cbb1995d1c75",
+      "tarSha256": "b922efcaa6840fc7d3c455935e9ef4185d5eb2b43da0c2274055f22eda353567"
+    },
+    "ordinaryUid": 1000,
+    "scope": "Focused private recovery SDK/controller/public project restore/packed CLI and six simulated-DOM console tests. Includes actual HTTP stateless read-only MCP discovery/status/planning, current native machine read grants, foreign project denial, browser origin/CSRF denial and late request-body revocation; positive plan after source volume deletion leaves zero restore intents before explicit human REST restore. Includes actual source/controller SIGKILL and unchanged native 120000 ms lease. Excludes subsequent export-reservation changes, full release gates, actual recovery browser flows and production host/hardware certification. Feature 10 remains uncounted.",
+    "nodes": {
+      "26": {
+        "log": "remote-pitr-platform-node26-16.log",
+        "sha256": "3be84cf3845afdf91437d0c340d35a92efd6ef86834aea2489f0bcdaffd9eeee",
+        "exit": 0,
+        "tests": 71,
+        "pass": 71,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "22": {
+        "log": "remote-pitr-platform-node22-16.log",
+        "sha256": "aa90319cc9ecddc8255a7d40a0c98cd133cce74a5214c98a968a47a678b98403",
+        "exit": 0,
+        "tests": 71,
+        "pass": 71,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      }
+    }
+  },
+  "browserVerification": {
+    "status": "pending",
+    "scope": "Two owned disposable native Linux fixtures served the ordinary sign-in form; no successful browser sign-in or recovery submission has been observed. Requested phone dimensions continued to report 1265 px, including the image with mobile in its planned filename. No prepared browser credential or security bypass was used. Native signed assertions do not establish device verification. Form script parsed successfully; this does not establish execution."
+  },
+  "pullRequest": "https://github.com/nearbycoder/clank.run/pull/316",
+  "fullReleaseGates": {
+    "source": "f21fba4d669cbcc7d579168be3235e376d1a0caa",
+    "tree": "95c21cb455b789151d475c9220e504ad9aff1c4f",
+    "tarSha256": "e1a7237ae508871ffde326947e563981aadb3330103b7b409768d6ab9729ca3a",
+    "inputs": 1132,
+    "ordinaryUid": 1000,
+    "scope": "Complete unmodified scripts/check.mjs on the source-19 snapshot, including native SIGKILL workspace regression tests, all builds, examples, coverage, docs audit, packed conformance, dependency contract and security. Three intentional unsupported-host tests remain skipped; actual recovery browser/device verification remains pending.",
+    "results": {
+      "26": {
+        "log": "remote-pitr-node26-gate-03.log",
+        "sha256": "14f319d31662ea22448c58dda3204be33aa0a6d8aa40022fb8995a81c35552c8",
+        "exit": 0,
+        "counts": {
+          "tests": 2183,
+          "suites": 0,
+          "pass": 2180,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": [
+          91.75,
+          81.07,
+          90.08
+        ]
+      },
+      "22": {
+        "log": "remote-pitr-node22-gate-03.log",
+        "sha256": "b70854cc2dfa32cfa754b76f39614835511e13567eea705f3d4eea3bcf19723f",
+        "exit": 0,
+        "counts": {
+          "tests": 2183,
+          "suites": 0,
+          "pass": 2180,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": [
+          91.74,
+          81.09,
+          90.13
+        ]
+      }
+    }
+  },
+  "hosted": {
+    "head": "3ec5392b08f4f30fe4ad350fb4e640fb1408a724",
+    "checks": 6,
+    "success": 6,
+    "scope": "Previous report head only. Workspace source f21fba4 and its report successor have not yet passed hosted checks."
+  },
+  "documentation": {
+    "guides": 101,
+    "build": "passed",
+    "doctor": "6 passed, 1 optional unlinked directory, 0 failures",
+    "offlineArtifact": "2fd765e549d17c12a1fd134c03457bf3c671d5d1cb483e1b5453a6840bb586c1",
+    "uploaded": false,
+    "httpSurfaces": 8,
+    "httpMcp": "discovery/list/search/read passed",
+    "proofSha256": "1f9a73119dafebc2c9274720634d85a58a4405d895aa2f9e0d5ad9a1db9e9943",
+    "browser": "Desktop home, guide and search observed at 1265 px; phone override and keyboard activation unverified.",
+    "workspaceCanonicalBuild": "101 guides / 178791 words; operational-recovery workspace guidance included; previous HTTP/browser proof is not retagged to this new document."
+  },
+  "evidence": {
+    "index": "/tmp/clank-review-2026-10-08/remote-pitr-evidence-01/index.json",
+    "sha256": "b9ca763d487257f2a46073a82cf70b98061fd55a88c0a39398b92b375db7213f",
+    "files": 217,
+    "mode": "0400",
+    "activeLogsExcluded": true,
+    "originalFailuresPreserved": true
+  },
+  "package": {
+    "files": 415,
+    "unpackedBytes": 6271458,
+    "limit": 6291456,
+    "headroom": 19998,
+    "zeroNpmDependencies": true
+  },
+  "consumerTypes": {
+    "packedFixtures": 35,
+    "sourceDiagnostics": 159,
+    "newDiagnostics": 0,
+    "unchangedBaseline": 163,
+    "logSha256": "2f424ac82f1165e26284d2484d3ad08b018dadd515903e49e77bd6ea41b643f4"
+  },
+  "previousFullReleaseGates": {
+    "source": "0a349aa7b8e632fdf86dade81fe3c98ea15ad170",
+    "tree": "08315f2fd3bb4ab87cadced5280948f46c1ca3c8",
+    "tarSha256": "4397cadc2c3e8cd608c871544c8d258bb3c9e8719b0dda1163a9039ee4a638f4",
+    "inputs": 1130,
+    "ordinaryUid": 1000,
+    "scope": "Complete unmodified scripts/check.mjs on the source-18 snapshot, including native tests/coverage, all application builds and runnable docs examples, docs audit, packed-release conformance, dependency contract and security audit. Three intentional unsupported-host tests remain skipped. Does not establish actual browser recovery, device passkeys, phone layout or production host certification. Feature 10 remains uncounted.",
+    "results": {
+      "26": {
+        "log": "remote-pitr-node26-gate-02.log",
+        "sha256": "67adc569edbc36e66bfde89e1018731b84465e16634a9757aae3f43d4d53fc77",
+        "exit": 0,
+        "counts": {
+          "tests": 2178,
+          "pass": 2175,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": [
+          91.75,
+          81.07,
+          90.09
+        ]
+      },
+      "22": {
+        "log": "remote-pitr-node22-gate-02.log",
+        "sha256": "20780c8cd456d2795d72e065d98629e7bd2a681ff6aee61df68cf4b78ea5f2fe",
+        "exit": 0,
+        "counts": {
+          "tests": 2178,
+          "pass": 2175,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": [
+          91.74,
+          81.09,
+          90.12
+        ]
+      }
+    }
+  },
+  "workspaceSafety": {
+    "proposalComment": "https://github.com/nearbycoder/clank.run/issues/315#issuecomment-6098538242",
+    "source": "f21fba4d669cbcc7d579168be3235e376d1a0caa",
+    "before": "Actual UID1000 worker SIGKILL at encrypted archive and materialized replay boundaries; retry created 2 and 4 roots respectively. Correct old test binding preserved separately.",
+    "after": "Stable exclusive per-project and per-destination workspace names; current or unknown roots/symlinks preserved and block retry; no automatic reclamation. Actual SIGKILL archive/replay, unknown symlink, abandoned native controller operation and legacy workspace cases pass.",
+    "focused": "42/42 initial and 29/29 final focused checks; paired complete gates execute final five new cases.",
+    "operatorRecovery": "Stop and verify controller and workers are quiescent; inspect and reconcile preserved workspace before exact retry. Retained archive budget is distinct from bounded verification materialization.",
+    "evidence": {
+      "index": "/tmp/clank-review-2026-10-08/remote-pitr-evidence-02/index.json",
+      "sha256": "b28c90860b683d523a197e8c9c38f28cdaf2ba86aec6feb4f9df5f804b687d02",
+      "files": 21,
+      "mode": "0400"
+    }
+  },
+  "previousHosted": {
+    "head": "0a349aa7b8e632fdf86dade81fe3c98ea15ad170",
+    "checks": 6,
+    "success": 6,
+    "codeqlNewAlerts": 0,
+    "analysisAnnotation": "Informational runner-image migration notice, read; no failed check.",
+    "proofSha256": "e0a92bdb463aeaf81dfc8de7b7430e1b0fe1274207ec86b571a124f6856c32dd"
+  }
+}
