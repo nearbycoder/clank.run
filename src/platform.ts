@@ -834,6 +834,12 @@ interface TokenPrincipal {
   impersonation: PlatformImpersonation | null;
 }
 
+// Request-local authority never becomes a persisted credential or an audit field.
+const admittedTokenAuthority = new WeakMap<TokenPrincipal, string>();
+function tokenAuthorityFingerprint(row: Record<string, unknown>): string {
+  return syncHash(JSON.stringify([row.token_hash, row.organization_id, row.project_id, row.permissions, row.preview_name, row.expires_at]));
+}
+
 interface PlatformImpersonation {
   id: string;
   actorUserId: string;
@@ -11706,7 +11712,7 @@ async function requireToken(internal: SQLiteInternal, request: Request): Promise
   const authorization = request.headers.get("authorization") ?? "";
   const matched = /^Bearer ((?:clnk|prct)_[A-Za-z0-9_-]{40,200})$/.exec(authorization);
   if (!matched) throw new PlatformError(401, "INVALID_TOKEN", "A valid CLI access token is required.");
-  const row = internal.prepare(`SELECT t.id, t.user_id, t.organization_id, t.project_id,
+  const row = internal.prepare(`SELECT t.id, t.user_id, t.token_hash, t.organization_id, t.project_id,
       t.permissions, t.preview_name, t.expires_at, t.revoked_at, u.email, u.disabled
     FROM clank_platform_tokens t
     JOIN clank_auth_users u ON u.id = t.user_id
@@ -11715,7 +11721,7 @@ async function requireToken(internal: SQLiteInternal, request: Request): Promise
     throw new PlatformError(401, "INVALID_TOKEN", "The CLI access token is invalid or expired.");
   }
   internal.prepare("UPDATE clank_platform_tokens SET last_used_at = ? WHERE id = ?").run(Date.now(), row.id);
-  return {
+  const principal: TokenPrincipal = {
     tokenId: String(row.id),
     sessionId: null,
     userId: String(row.user_id),
@@ -11726,15 +11732,21 @@ async function requireToken(internal: SQLiteInternal, request: Request): Promise
     previewName: row.preview_name === null ? null : String(row.preview_name),
     impersonation: null,
   };
+  admittedTokenAuthority.set(principal, tokenAuthorityFingerprint(row));
+  return principal;
 }
 
 function requireCurrentPlatformPrincipal(storage: PlatformDatabase, principal: TokenPrincipal): void {
   if (principal.tokenId !== null) {
-    const active = storage.internal.prepare(`SELECT 1 AS active FROM clank_platform_tokens t
+    const active = storage.internal.prepare(`SELECT t.token_hash, t.organization_id, t.project_id,
+      t.permissions, t.preview_name, t.expires_at FROM clank_platform_tokens t
       JOIN clank_auth_users u ON u.id = t.user_id
       WHERE t.id = ? AND t.user_id = ? AND t.revoked_at IS NULL AND t.expires_at > ? AND u.disabled = 0`)
       .get(principal.tokenId, principal.userId, Date.now());
-    if (!active) throw new PlatformError(401, "INVALID_TOKEN", "The CLI access token is invalid or expired.");
+    const admitted = admittedTokenAuthority.get(principal);
+    if (!active || (admitted !== undefined && tokenAuthorityFingerprint(active) !== admitted)) {
+      throw new PlatformError(401, "INVALID_TOKEN", "The CLI access token is invalid or expired.");
+    }
   } else {
     const current = principal.sessionId ? storage.auth.refreshSession(principal.sessionId) : null;
     if (!current?.user || current.user.id !== principal.userId || principal.impersonation !== null) {
