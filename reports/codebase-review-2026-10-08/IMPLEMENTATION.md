@@ -18,6 +18,12 @@ Protected [PR #336](https://github.com/nearbycoder/clank.run/pull/336) merged re
 
 These prerequisites enforce read-only data, deny-all outbound networking and sanitized candidate reads. They do not enable platform provider canary orchestration or accept feature 08. Current provider-controller work still requires complete process/network recovery evidence and platform stage integration. Counts remain 28 accepted / 12 remaining.
 
+## Provider canary review fixes (feature 08 still pending)
+
+Independent review reproduced a delayed journal-read race at `1cb25ee`: after candidate retirement and ordinary reuse of its project ID, the old request restored ownership and blocked the replacement runtime. Journal reads are now side-effect free; ownership reconstruction happens only in serialized cleanup. The regression fails against the original implementation and passes with the service/data suites on Node 26 and 22 (28/28 each, zero skips).
+
+The full native PostgreSQL release attempt at `1cb25ee` remains failed evidence: 2,160 reported / 2,149 passed / four failures / seven explicit Docker/XFS skips. Three newly added nft fixtures could not find Node under the deliberately restricted command environment; an existing attestation fixture collided on fixed port 55000. Coverage was measured successfully; Node 22 was not started. These fixture repairs and fresh complete gates remain pending, and the earlier policy coverage-artifact failure is not considered resolved. Accepted features remain 28/40.
+
 ## Typed PostgreSQL application backend accepted
 
 [Feature 21 acceptance evidence](postgres-application.json) records the protected expected-head squash of [PR #333](https://github.com/nearbycoder/clank.run/pull/333). Accepted main `fd9a7ab638a814ebe4c3f1260933bfaf1171f3e9` exactly matches reviewed `af33523606ada6b22cb8589303b1984bd2462ae9` tree `f76e1fa1a6a77c4b7e83ab2b44d0a7800e02de5a`. Both main checkouts match it and all 23 pre-existing local files remain unchanged. Feature counts are 28 accepted / 25 batches / 12 remaining. Earlier PostgreSQL source/fixture failures retain their original qualification.

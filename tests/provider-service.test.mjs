@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { fork } from "node:child_process";
 import { once } from "node:events";
 import {
+  access,
   chmod,
   mkdir,
   mkdtemp,
@@ -30,7 +31,7 @@ import {
   openDeploymentProviderService,
   openDockerDeploymentProviderService,
 } from "../dist/provider-service.js";
-import { createDeploymentRuntimeCapsule } from "../dist/runtime-placement.js";
+import { createDeploymentRuntimeCapsule, deploymentRuntimeDigest } from "../dist/runtime-placement.js";
 
 test("provider service orders durable data, deferred jobs, ingress, stop, and restart recovery", async () => {
   const fixture = await serviceFixture("lifecycle");
@@ -887,6 +888,44 @@ test("provider canary reservation excludes ordinary reconciliation while native 
   } finally {releasePreflight();await preparing?.catch(()=>{});await opened?.service.close();await fixture.close();}
 });
 
+test("a delayed canary journal read cannot reclaim a retired project from its ordinary runtime", {timeout:30_000}, async () => {
+  const fixture=await serviceFixture("canary-retired-journal-read");let opened,heldRequest,releaseRead;
+  const originalDigest=crypto.subtle.digest;
+  try {
+    opened=await fixture.open({canaries:{readPaths:["/healthz"]}});
+    const primary=await fixture.runtime({generation:1,releaseId:"release_retired_read_primary",mode:"initialize",snapshot:await sqliteSnapshot(fixture.root,"primary")});
+    await opened.service.reconcile(providerInput(primary,1));
+    const input={primary:await opened.service.canaries.binding("project_service_01"),controllerEpoch:1,operationId:"canary_retired_read_01",
+      runtime:await fixture.runtime({generation:2,releaseId:"release_retired_read_candidate",mode:"preserve"}),signal:new AbortController().signal};
+    const prepared=await opened.service.canaries.prepare(input);
+    const ordinary=await fixture.runtime({projectId:prepared.candidateProjectId,generation:1,releaseId:"release_reused_ordinary",mode:"initialize",snapshot:await sqliteSnapshot(fixture.root,"ordinary")});
+    const identity=[input.primary.projectId,input.primary.incarnation,input.controllerEpoch,input.operationId,input.runtime.sha256].join("\n");
+    let reachedRead,pauseOnce=true;
+    const entered=new Promise(resolve=>{reachedRead=resolve;}),held=new Promise(resolve=>{releaseRead=resolve;});
+    // Hold the request after it read the running native journal, before its
+    // asynchronous identity check returns. Other lifecycle checks still run.
+    crypto.subtle.digest=async function(algorithm,bytes) {
+      if (pauseOnce && new TextDecoder().decode(bytes)===identity) {pauseOnce=false;reachedRead();await held;}
+      return originalDigest.call(this,algorithm,bytes);
+    };
+    const request=()=>new Request(`http://provider.test${prepared.route.path}/healthz`);
+    heldRequest=opened.service.handle(request());
+    await entered;
+    assert.equal((await opened.service.canaries.stop(input)).phase,"stopped");
+    assert.equal(await fixture.data.inspect(prepared.candidateProjectId),null);
+    await opened.service.reconcile(providerInput(ordinary,2));
+    assert.equal((await opened.service.handle(request())).status,200);
+    releaseRead();assert.equal((await heldRequest).status,503);
+    assert.equal((await opened.service.handle(request())).status,200,"A completed retirement cannot be reversed by a stale request read.");
+    await opened.service.reconcile(providerInput(ordinary,3));
+    assert.equal((await opened.service.inspect(prepared.candidateProjectId)).releaseId,ordinary.manifest.releaseId);
+    assert.equal((await opened.service.inspect("project_service_01")).releaseId,primary.manifest.releaseId);
+  } finally {
+    releaseRead?.();await heldRequest?.catch(()=>{});crypto.subtle.digest=originalDigest;
+    await opened?.service.close();await fixture.close();
+  }
+});
+
 test("provider ownership rejects a second live service while checkpoint preparation and close are pending", async () => {
   const fixture=await serviceFixture("canary-held-replacement");let first,second,release;
   const held=new Promise(resolve=>{release=resolve;});let reached;const ready=new Promise(resolve=>{reached=resolve;});
@@ -1047,6 +1086,201 @@ test("provider canary intake captures capsule bytes before asynchronous verifica
     assert.equal((await fixture.data.inspect("project_service_01")).generation,1);
   } finally {await opened?.service.close();await fixture.close();}
 });
+
+test("durable canary retirement fences a held native capsule decode before candidate effects", {timeout:30_000}, async () => {
+  const fixture=await serviceFixture("retire-held-decode");let opened,pending,barrier,snapshots=0,applies=0;
+  try {
+    const data={...fixture.data,snapshot:async(...args)=>{snapshots++;return fixture.data.snapshot(...args);},apply:async(input,...rest)=>{if(input.operation.projectId.startsWith("canary_"))applies++;return fixture.data.apply(input,...rest);}};
+    opened=await fixture.open({data,canaries:{readPaths:["/healthz"]}});
+    const primary=await fixture.runtime({generation:1,releaseId:"release_retire_primary",mode:"initialize",snapshot:await sqliteSnapshot(fixture.root,"primary")});
+    await opened.service.reconcile(providerInput(primary,1));
+    const input={primary:await opened.service.canaries.binding("project_service_01"),controllerEpoch:3,operationId:"retire_held_decode",runtime:await fixture.runtime({generation:2,releaseId:"release_retire_candidate",mode:"preserve"}),signal:new AbortController().signal};
+    barrier=holdNativeDigest(input.runtime.bytes);
+    pending=opened.service.canaries.prepare(input);pending.catch(()=>{});await barrier.entered;
+    const requested={...retirementFor(input,5),primary:{...input.primary}};
+    const retiring=opened.service.canaries.retire(requested);
+    requested.releaseId="changed_after_intake";requested.retirementEpoch=1;requested.primary.fence++;
+    const receipt=await retiring;
+    assert.equal(receipt.phase,"retired");assert.equal(receipt.releaseId,input.runtime.manifest.releaseId);assert.equal(receipt.retirementEpoch,5);
+    assert.deepEqual(receipt.primary,input.primary);
+    const retained=JSON.parse(await readFile(retirementFile(fixture),"utf8"));assert.equal(retained.epochFloor,5);assert.equal(retained.entries[0].phase,"retired");
+    barrier.release();await assert.rejects(pending,/retired/u);
+    await assert.rejects(opened.service.canaries.prepare({...input,controllerEpoch:4,operationId:"other_delayed_prepare"}),/epoch is retired/u);
+    assert.equal(snapshots,0);assert.equal(applies,0);assert.equal(opened.runtimes.inspect().length,1);
+    assert.equal(await opened.service.canaries.inspect("project_service_01"),null);
+    await assert.rejects(access(join(fixture.providerRoot,"projects",receipt.candidateProjectId)),{code:"ENOENT"});
+  } finally {barrier?.release();barrier?.restore();await pending?.catch(()=>{});await opened?.service.close();await fixture.close();}
+});
+
+test("exact old canary retirement cannot lower its floor or disturb a later live candidate", async () => {
+  const fixture=await serviceFixture("retire-takeover"),ingress=createDeploymentRuntimeIngress();let opened;
+  try {
+    opened=await fixture.open({ingress,canaries:{readPaths:["/healthz"]}});
+    const primary=await fixture.runtime({generation:1,releaseId:"release_retire_takeover_primary",mode:"initialize",snapshot:await sqliteSnapshot(fixture.root,"primary")});
+    await opened.service.reconcile(providerInput(primary,1));
+    const input={primary:await opened.service.canaries.binding("project_service_01"),controllerEpoch:3,operationId:"retire_original",runtime:await fixture.runtime({generation:2,releaseId:"release_retire_original",mode:"preserve"}),signal:new AbortController().signal};
+    const original=await opened.service.canaries.prepare(input);
+    const first=await opened.service.canaries.retire(retirementFor(input,5));assert.equal(first.candidateProjectId,original.candidateProjectId);
+    const later={...input,controllerEpoch:6,operationId:"retire_later",runtime:await fixture.runtime({generation:2,releaseId:"release_retire_later",mode:"preserve"})};
+    const current=await opened.service.canaries.prepare(later),routes=ingress.inspect();
+    assert.equal((await opened.service.canaries.retire(retirementFor(input,4))).retirementEpoch,5);
+    assert.equal(JSON.parse(await readFile(retirementFile(fixture),"utf8")).epochFloor,6);
+    assert.deepEqual(ingress.inspect(),routes);assert.deepEqual(await opened.service.canaries.prepare(later),current);
+    for(const changed of [{capsuleSha256:"f".repeat(64)},{releaseId:"release_conflict"},{controllerEpoch:2},{primary:{...input.primary,fence:input.primary.fence+1}}]) {
+      await assert.rejects(opened.service.canaries.retire({...retirementFor(input,6),...changed}),/identity conflicts/u);
+      assert.deepEqual(ingress.inspect(),routes);
+    }
+    await assert.rejects(opened.service.canaries.retire(retirementFor(later,5)),/epoch or release is invalid/u);
+    await opened.service.canaries.stop(later);
+    const newest={...later,controllerEpoch:7,operationId:"retire_newest",runtime:await fixture.runtime({generation:2,releaseId:"release_retire_newest",mode:"preserve"})};
+    await opened.service.canaries.prepare(newest);const newestRoutes=ingress.inspect();
+    await assert.rejects(opened.service.canaries.retire(retirementFor(later,7)),/historical operation identity/u);
+    assert.deepEqual(ingress.inspect(),newestRoutes);
+  } finally {await opened?.service.close();await ingress.close();await fixture.close();}
+});
+
+test("canary retirement resumes torn cleanup with canaries disabled and retries after a changed primary binding", async () => {
+  const fixture=await serviceFixture("retire-restart");let opened,failDelete=true;
+  try {
+    const data={...fixture.data,delete:async input=>{if(failDelete&&input.projectId.startsWith("canary_")){failDelete=false;throw new Error("owned interrupted retirement cleanup");}return fixture.data.delete(input);}};
+    opened=await fixture.open({data,canaries:{readPaths:["/healthz"]}});
+    const primary=await fixture.runtime({generation:1,releaseId:"release_retire_restart_primary",mode:"initialize",snapshot:await sqliteSnapshot(fixture.root,"primary")});
+    await opened.service.reconcile(providerInput(primary,1));
+    const input={primary:await opened.service.canaries.binding("project_service_01"),controllerEpoch:2,operationId:"retire_restart",runtime:await fixture.runtime({generation:2,releaseId:"release_retire_restart_candidate",mode:"preserve"}),signal:new AbortController().signal};
+    await opened.service.canaries.prepare(input);
+    await assert.rejects(opened.service.canaries.retire(retirementFor(input,4)),/interrupted retirement cleanup/u);
+    assert.equal(JSON.parse(await readFile(retirementFile(fixture),"utf8")).entries[0].phase,"retiring");
+    await assert.rejects(opened.service.canaries.prepare({...input,operationId:"retire_unresolved",controllerEpoch:5}),/cleanup is unresolved/u);
+    await opened.service.close();opened=await fixture.open();assert.equal(opened.service.canaries,undefined);
+    const recovered=JSON.parse(await readFile(retirementFile(fixture),"utf8"));assert.equal(recovered.entries[0].phase,"retired");
+    await opened.service.close();opened=await fixture.open({canaries:{readPaths:["/healthz"]}});
+    await opened.service.reconcile(providerInput(primary,2));
+    const binding=await opened.service.canaries.binding("project_service_01");assert.notEqual(binding.incarnation,input.primary.incarnation);
+    const later={...input,primary:binding,controllerEpoch:1,operationId:"retire_new_incarnation"};
+    const live=await opened.service.canaries.prepare(later);
+    const receipt=await opened.service.canaries.retire(retirementFor(input,3));assert.equal(receipt.phase,"retired");assert.equal(receipt.retirementEpoch,4);
+    assert.deepEqual(await opened.service.canaries.prepare(later),live);
+  } finally {await opened?.service.close();await fixture.close();}
+});
+
+test("canary retirement capacity counts prepared and lost operations together", async () => {
+  const fixture=await serviceFixture("retire-capacity");let opened;
+  try {
+    opened=await fixture.open({canaries:{readPaths:["/healthz"],maxOperations:2}});
+    const primary=await fixture.runtime({generation:1,releaseId:"release_retire_capacity_primary",mode:"initialize",snapshot:await sqliteSnapshot(fixture.root,"primary")});
+    await opened.service.reconcile(providerInput(primary,1));
+    const input={primary:await opened.service.canaries.binding("project_service_01"),controllerEpoch:2,operationId:"retire_lost_capacity",runtime:await fixture.runtime({generation:2,releaseId:"release_retire_capacity_candidate",mode:"preserve"}),signal:new AbortController().signal};
+    await opened.service.canaries.retire(retirementFor(input));
+    const second={...input,operationId:"retire_prepared_capacity"};await opened.service.canaries.prepare(second);await opened.service.canaries.stop(second);
+    const third={...input,operationId:"retire_exhausted_capacity"};
+    await assert.rejects(opened.service.canaries.prepare(third),/capacity is exhausted/u);
+    await assert.rejects(opened.service.canaries.retire(retirementFor(third)),/capacity is exhausted/u);
+    assert.equal((await opened.service.canaries.retire(retirementFor(second))).phase,"retired");
+    assert.equal(JSON.parse(await readFile(retirementFile(fixture),"utf8")).entries.length,2);
+  } finally {await opened?.service.close();await fixture.close();}
+});
+
+test("canary retirement refuses ordinary candidate identity collisions without deleting data or routes", async () => {
+  const fixture=await serviceFixture("retire-collision");let opened;
+  try {
+    opened=await fixture.open({canaries:{readPaths:["/healthz"]}});
+    const primary=await fixture.runtime({generation:1,releaseId:"release_retire_collision_primary",mode:"initialize",snapshot:await sqliteSnapshot(fixture.root,"primary")});
+    await opened.service.reconcile(providerInput(primary,1));
+    const input={primary:await opened.service.canaries.binding("project_service_01"),controllerEpoch:2,operationId:"retire_collision",runtime:await fixture.runtime({generation:2,releaseId:"release_retire_collision_candidate",mode:"preserve"}),signal:new AbortController().signal};
+    const id=`canary_${await deploymentRuntimeDigest(new TextEncoder().encode([input.primary.projectId,input.primary.incarnation,input.controllerEpoch,input.operationId,input.runtime.sha256].join("\n")))}`;
+    const ordinary=await fixture.runtime({projectId:id,generation:1,releaseId:"release_ordinary_collision",mode:"initialize",snapshot:await sqliteSnapshot(fixture.root,"ordinary")});
+    await opened.service.reconcile(providerInput(ordinary,1));
+    const state=await opened.service.inspect(id),data=await fixture.data.inspect(id),routes=opened.ingress.inspect();
+    await assert.rejects(opened.service.canaries.retire(retirementFor(input,3)),/collides with ordinary/u);
+    assert.deepEqual(await opened.service.inspect(id),state);assert.deepEqual(await fixture.data.inspect(id),data);assert.deepEqual(opened.ingress.inspect(),routes);
+    await opened.service.close();opened=undefined;
+    await assert.rejects(fixture.open(),/collides with ordinary/u);
+    assert.deepEqual(await fixture.data.inspect(id),data);
+  } finally {await opened?.service.close();await fixture.close();}
+});
+
+test("canary retirement startup preserves ordinary data when retained cleanup collides with a newer owner", async () => {
+  const fixture=await serviceFixture("retire-startup-collision");let opened,deletes=0;
+  try {
+    opened=await fixture.open({canaries:{readPaths:["/healthz"]}});
+    const primary=await fixture.runtime({generation:1,releaseId:"release_retire_replay_primary",mode:"initialize",snapshot:await sqliteSnapshot(fixture.root,"primary")});
+    await opened.service.reconcile(providerInput(primary,1));
+    const input={primary:await opened.service.canaries.binding("project_service_01"),controllerEpoch:2,operationId:"retire_replay",runtime:await fixture.runtime({generation:2,releaseId:"release_retire_replay_candidate",mode:"preserve"}),signal:new AbortController().signal};
+    const prepared=await opened.service.canaries.prepare(input),journalFile=join(fixture.providerRoot,"service","project_service_01.canary.json");
+    const retainedJournal=await readFile(journalFile,"utf8");
+    await opened.service.canaries.retire(retirementFor(input,3));
+    const ordinary=await fixture.runtime({projectId:prepared.candidateProjectId,generation:1,releaseId:"release_retire_replay_ordinary",mode:"initialize",snapshot:await sqliteSnapshot(fixture.root,"ordinary")});
+    await opened.service.reconcile(providerInput(ordinary,1));
+    const stateFile=join(fixture.providerRoot,"service",`${prepared.candidateProjectId}.json`),state=await readFile(stateFile,"utf8"),data=await fixture.data.inspect(prepared.candidateProjectId);
+    await opened.service.close();opened=undefined;
+    // Replay internally valid old cleanup metadata alongside the newer ordinary
+    // owner, as can happen with a partial metadata restore. Never delete it.
+    const retired=JSON.parse(await readFile(retirementFile(fixture),"utf8"));
+    for(const phase of ["retiring","retired"]) {
+      retired.entries[0].phase=phase;
+      await writeFile(retirementFile(fixture),JSON.stringify(retired),{mode:0o600});await writeFile(journalFile,retainedJournal,{mode:0o600});
+      await assert.rejects(async()=>{opened=await fixture.open({data:{...fixture.data,delete:async(...args)=>{deletes++;return fixture.data.delete(...args);}}});},/collides with ordinary|retirement conflicts/u);
+      assert.equal(deletes,0,"Retirement startup must validate ownership before any candidate deletion.");
+      assert.deepEqual(await fixture.data.inspect(prepared.candidateProjectId),data);assert.equal(await readFile(stateFile,"utf8"),state);
+      assert.equal(await readFile(journalFile,"utf8"),retainedJournal);
+      assert.equal(JSON.parse(await readFile(retirementFile(fixture),"utf8")).entries[0].phase,phase);
+    }
+  } finally {await opened?.service.close();await fixture.close();}
+});
+
+test("canary retirement journals reject corrupt retained identities and epoch floors during disabled startup", async () => {
+  const fixture=await serviceFixture("retire-corruption");let opened;
+  try {
+    opened=await fixture.open({canaries:{readPaths:["/healthz"]}});
+    const primary=await fixture.runtime({generation:1,releaseId:"release_retire_corrupt_primary",mode:"initialize",snapshot:await sqliteSnapshot(fixture.root,"primary")});
+    await opened.service.reconcile(providerInput(primary,1));
+    const input={primary:await opened.service.canaries.binding("project_service_01"),controllerEpoch:2,operationId:"retire_corrupt",runtime:await fixture.runtime({generation:2,releaseId:"release_retire_corrupt_candidate",mode:"preserve"}),signal:new AbortController().signal};
+    await opened.service.canaries.retire(retirementFor(input,3));
+    const prepared={...input,operationId:"retire_corrupt_prepared",controllerEpoch:3};
+    await opened.service.canaries.prepare(prepared);await opened.service.canaries.stop(prepared);
+    const original=await readFile(retirementFile(fixture),"utf8");await opened.service.close();opened=undefined;
+    for(const corrupt of [value=>{value.protocol="unknown";},value=>{value.epochFloor=1;},value=>{value.entries.push({...value.entries[0]});},value=>{value.entries[0].candidateProjectId="canary_"+"f".repeat(64);},value=>{value.entries[0].unexpected=true;},value=>{value.primary.projectId="another_project";}]) {
+      const value=JSON.parse(original);corrupt(value);await writeFile(retirementFile(fixture),JSON.stringify(value),{mode:0o600});
+      await assert.rejects(fixture.open(),/retirement/u);
+    }
+    await writeFile(retirementFile(fixture),original,{mode:0o600});
+    const journalFile=join(fixture.providerRoot,"service","project_service_01.canary.json"),journalText=await readFile(journalFile,"utf8"),journal=JSON.parse(journalText);
+    journal.spent=[prepared.operationId,...Array.from({length:63},(_,index)=>`retire_corrupt_history_${index}`)];
+    await writeFile(journalFile,JSON.stringify(journal),{mode:0o600});
+    await assert.rejects(fixture.open(),/combined capacity/u);
+    assert.equal(await readFile(journalFile,"utf8"),JSON.stringify(journal),"Invalid combined history must be refused before startup cleanup mutates it.");
+    await writeFile(journalFile,journalText,{mode:0o600});opened=await fixture.open({canaries:{readPaths:["/healthz"]}});
+    assert.equal((await opened.service.canaries.retire(retirementFor(input,3))).phase,"retired");
+  } finally {await opened?.service.close();await fixture.close();}
+});
+
+test("provider close fences a held retirement before durable absence acknowledgment", {timeout:30_000}, async () => {
+  const fixture=await serviceFixture("retire-close");let opened,pending,closing,barrier;
+  try {
+    opened=await fixture.open({canaries:{readPaths:["/healthz"]}});
+    const primary=await fixture.runtime({generation:1,releaseId:"release_retire_close_primary",mode:"initialize",snapshot:await sqliteSnapshot(fixture.root,"primary")});
+    await opened.service.reconcile(providerInput(primary,1));
+    const input={primary:await opened.service.canaries.binding("project_service_01"),controllerEpoch:2,operationId:"retire_close",runtime:await fixture.runtime({generation:2,releaseId:"release_retire_close_candidate",mode:"preserve"})};
+    barrier=holdNativeDigest(new TextEncoder().encode([input.primary.projectId,input.primary.incarnation,input.controllerEpoch,input.operationId,input.runtime.sha256].join("\n")));
+    pending=opened.service.canaries.retire(retirementFor(input));pending.catch(()=>{});await barrier.entered;
+    let finished=false;closing=opened.service.close().then(()=>{finished=true;});await new Promise(resolve=>setTimeout(resolve,20));assert.equal(finished,false);
+    barrier.release();await assert.rejects(pending,/service is closed/u);await closing;
+    await assert.rejects(access(retirementFile(fixture)),{code:"ENOENT"});
+  } finally {barrier?.release();barrier?.restore();await pending?.catch(()=>{});await closing?.catch(()=>{});await opened?.service.close();await fixture.close();}
+});
+
+function retirementFile(fixture) {return join(fixture.providerRoot,"service","project_service_01.canary-retirements.json");}
+function retirementFor(input,retirementEpoch=input.controllerEpoch) {return {primary:input.primary,operationId:input.operationId,controllerEpoch:input.controllerEpoch,releaseId:input.runtime.manifest.releaseId,capsuleSha256:input.runtime.sha256,retirementEpoch};}
+function holdNativeDigest(expected) {
+  const original=crypto.subtle.digest;let enter,release,held=false;
+  const entered=new Promise(resolve=>{enter=resolve;}),pending=new Promise(resolve=>{release=resolve;});
+  crypto.subtle.digest=async function(algorithm,value) {
+    const bytes=ArrayBuffer.isView(value)?new Uint8Array(value.buffer,value.byteOffset,value.byteLength):new Uint8Array(value);
+    if(!held&&bytes.length===expected.length&&bytes.every((value,index)=>value===expected[index])){held=true;enter();await pending;}
+    return original.call(this,algorithm,value);
+  };
+  return {entered,release,restore(){crypto.subtle.digest=original;}};
+}
 
 async function serviceFixture(name) {
   const root = await mkdtemp(join(tmpdir(), `clank-provider-service-${name}-`));
