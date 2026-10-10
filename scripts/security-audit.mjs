@@ -182,7 +182,8 @@ for (const expected of ["README.md", "SECURITY.md", "LICENSE", "dist/index.js", 
 // Proposal #273 adds only the optional fleet module and its declaration.
 // Four deliberate public/private service-account runtime and declaration files.
 // Proposal #313 adds exactly platform-supervisor.js and its declaration.
-if ((packResult?.entryCount ?? 0) > 413) fail("Published package unexpectedly exceeds 413 files.");
+// Proposal #317 adds exactly offline-attachments.js and its declaration.
+if ((packResult?.entryCount ?? 0) > 415) fail("Published package unexpectedly exceeds 415 files.");
 if ((packResult?.unpackedSize ?? 0) > 6 * 1024 * 1024) fail("Published package unexpectedly exceeds 6 MiB unpacked.");
 pass(`publish allowlist contains ${packResult?.entryCount ?? 0} bounded files`);
 

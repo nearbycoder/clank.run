@@ -393,7 +393,7 @@ export interface LiveQuery<Value> {
 export interface SyncClient {
     query<Reference extends FunctionReference<"query", any, any>>(reference: Reference, ...args: InputTuple<InputOf<Reference>>): Promise<OutputOf<Reference>>;
     mutate<Reference extends FunctionReference<"mutation", any, any>>(reference: Reference, ...args: InputTuple<InputOf<Reference>>): Promise<OutputOf<Reference>>;
-    mutateOnce<Reference extends FunctionReference<"mutation", any, any>>(reference: Reference, args: InputOf<Reference>, receipt: { key: string; userId: string }): Promise<OutputOf<Reference>>;
+    mutateOnce<Reference extends FunctionReference<"mutation", any, any>>(reference: Reference, args: InputOf<Reference>, receipt: { key: string; userId: string; signal?: AbortSignal }): Promise<OutputOf<Reference>>;
     live<Reference extends FunctionReference<"query", any, any>>(reference: Reference, ...args: InputTuple<InputOf<Reference>>): LiveQuery<OutputOf<Reference>>;
     seed<Reference extends FunctionReference<"query", any, any>>(reference: Reference, args: InputOf<Reference>, value: OutputOf<Reference>, version?: number): void;
 }
