@@ -1,0 +1,140 @@
+{
+  "featureId": "14",
+  "feature": "Temporary privileged access",
+  "status": "native-implementation-and-full-linux-gates-passed-acceptance-pending",
+  "accepted": false,
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/322",
+  "dependencies": [
+    {
+      "feature": "13",
+      "pullRequest": "https://github.com/nearbycoder/clank.run/pull/310",
+      "accepted": false
+    }
+  ],
+  "source": {
+    "head": "e1ea6d18bf3d7a7e276a333512ac59af01d082d4",
+    "tree": "0de863acf18cb2138fffa3a1eed5a8f3666f723e",
+    "baseMain": "38ac812becdbfd1bd1ee0c1d3a686b32a4de9e1a",
+    "organizationPolicyDependency": "664b15e6456f43cdad94b38605f1a4b3deae43b3",
+    "tarSha256": "672f748d21186ae2f17f5bd0a2bcdcc2dac3a8825b4f5a52347572d3339fadef"
+  },
+  "evidenceIndex": {
+    "path": "/tmp/clank-review-2026-10-08/temporary-access-evidence-01/index.json",
+    "sha256": "541b000f6fdb2fe6472a8f6231f9c92bc441f7f769c6357dd4f8af80ca5faa5f",
+    "files": 85
+  },
+  "scope": {
+    "action": "preview.create",
+    "boundary": "One current human recipient, one parent project, newly isolated previews only; original role and existing quotas remain authoritative.",
+    "maximumGrantDurationMs": 3600000,
+    "nativeRecentAuthenticationAgeMs": 300000,
+    "grantCapacity": 1000,
+    "receiptCapacity": 10000,
+    "perProjectRetainedGrantCapacity": 100,
+    "restart": "Retire every previously active grant; preserve historical receipts and require new administrator review."
+  },
+  "nativeProof": {
+    "sourceBeforeImportFix": "c621b851fa02e858fa44b4837f696a3eabf213ef",
+    "focusedBeforeImportFix": {
+      "reported": 43,
+      "passed": 43
+    },
+    "focusedAfterImportFix": {
+      "reported": 38,
+      "passed": 38
+    },
+    "browserImportRegression": {
+      "reported": 1,
+      "passed": 1
+    },
+    "isolatedConsoleRegression": {
+      "reported": 95,
+      "passed": 95
+    },
+    "cases": [
+      "Native current session and same-store organization policy",
+      "Mandatory recent issuer and recipient authentication with global freshness disabled",
+      "Expiry and role/policy revocation after a held HTTP body and inside the allocation transaction",
+      "Sticky same-value membership removal/rejoin invalidation",
+      "Verified native grant, audit, receipt and preview allocation writes roll back on ignored or altered writes",
+      "Exact historical retry acknowledges a retained grant without reactivating it",
+      "Actual native controller SIGKILL conservatively retires authority",
+      "Clock rollback after denied expiry and reopening cannot revive a grant",
+      "Current caller scopes, capacities, byte bounds and dependency-free browser client"
+    ]
+  },
+  "completeLinux": {
+    "26": {
+      "reported": 2159,
+      "passed": 2156,
+      "failed": 0,
+      "cancelled": 0,
+      "existingHostSkips": 3,
+      "exit": 0,
+      "coverage": "# all files                              |  91.60 |    81.11 |   90.13 |",
+      "logSha256": "293e2d7cadc426e9e4f9f3907333097113e4876c4b21ed0634b47d2aa76da453",
+      "log": "/tmp/clank-review-2026-10-08/temporary-access-node26-gate-03.log"
+    },
+    "22": {
+      "reported": 2159,
+      "passed": 2156,
+      "failed": 0,
+      "cancelled": 0,
+      "existingHostSkips": 3,
+      "exit": 0,
+      "coverage": "# all files                              |  91.60 |    81.13 |   90.17 |",
+      "logSha256": "0bce3464be8d691bb29e9c712804f2b11b0021a7794c00277ba8292551edd456",
+      "log": "/tmp/clank-review-2026-10-08/temporary-access-node22-gate-03.log"
+    }
+  },
+  "types": {
+    "fixtures": 36,
+    "sourceDiagnostics": 159,
+    "newDiagnostics": 0,
+    "unchangedBaselineDiagnostics": 163,
+    "packedOpenApi": "passed"
+  },
+  "package": {
+    "files": 419,
+    "unpackedBytes": 6077221,
+    "compressedBytes": 1511510,
+    "unpackedCeilingBytes": 6291456,
+    "headroomBytes": 214235,
+    "npmDependencies": 0
+  },
+  "documentation": {
+    "guides": 103,
+    "words": 179897,
+    "markdownFiles": 103,
+    "localLinks": 348,
+    "indexedGuides": 98,
+    "synchronizedDeclarations": 133,
+    "packageExports": 157,
+    "doctorPassed": 6,
+    "doctorOptionalProjectLinkNotice": 1,
+    "offlineArtifactSha256": "66dd35f22825694d32148009606ceb0b9058afb9c771a213c2d1a68bc3216f3a",
+    "uploaded": false,
+    "nativeHttpAndMcp": "passed",
+    "desktopViewport": [
+      1280,
+      720
+    ],
+    "phoneViewport": [
+      390,
+      844
+    ]
+  },
+  "pending": [
+    "Real browser grant/revocation, mutation buttons, keyboard/focus and account-switch acceptance",
+    "Physical authenticator certification",
+    "Recipient preview creation console experience",
+    "Feature-13 dependency acceptance",
+    "Fresh hosted checks, independent review and normal protected merge"
+  ],
+  "featureLedger": {
+    "accepted": 27,
+    "featureBatches": 24,
+    "remaining": 13
+  },
+  "preservedOriginalPaths": 23
+}
