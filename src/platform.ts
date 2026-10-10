@@ -12,6 +12,7 @@ import { captureLogLines, redactLogSecrets } from "./security.ts";
 import { createSQLiteTaskScope, runSQLiteTask } from "./sqlite-task.ts";
 import { openSecretRotations, type SecretRotationOptions, type SecretRevision } from "./secret-rotation.ts";
 import {openPlatformServiceAccounts, assertServiceAccountProtocol, ServiceAccountError, type PlatformServiceAccountOptions, type ServiceAccountAuthority, type AuthenticatedServiceAccount} from "./platform-service-accounts.ts";
+import {openOrganizationSecurityPolicies, assertOrganizationSecurityProtocol, type OrganizationSecurityPolicyController} from "./organization-security-policy.ts";
 import {
   AuthError,
   defineAuth,
@@ -545,6 +546,8 @@ const PLATFORM_QUOTA_DEFINITIONS = Object.freeze({
 }>);
 
 export interface ClankPlatformOptions {
+  /** Opt-in native organization policies. Recovery requires independent current platform operator authority. */
+  organizationSecurity?: {readonly operatorRecovery?: boolean};
   /** Same-host Linux coordinators; each must occupy a dedicated process. Lost leadership terminates that process. */
   supervisor?: PlatformSupervisorOptions;
   /** Opt-in dedicated organization machine identities with project-scoped credentials. */
@@ -851,6 +854,29 @@ interface TokenPrincipal {
 
 // Request-local authority never becomes a persisted credential or an audit field.
 const admittedTokenAuthority = new WeakMap<TokenPrincipal, string>();
+const organizationSecurityStores = new WeakMap<SQLiteInternal, {controller: OrganizationSecurityPolicyController; auth: AuthRuntime<any>}>();
+const admittedOrganizationScopes = new WeakMap<TokenPrincipal, Set<string>>();
+function authorizeOrganizationPolicy(internal: SQLiteInternal, principal: TokenPrincipal, organizationId: string): void {
+  let scopes = admittedOrganizationScopes.get(principal);
+  if (!scopes) admittedOrganizationScopes.set(principal, scopes = new Set());
+  scopes.add(organizationId);
+  const security = organizationSecurityStores.get(internal);
+  assertOrganizationSecurityProtocol(internal);
+  if (principal.machine) return;
+  if (!internal.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_organization_security_policies' AND type='table'").get()) return;
+  if (!internal.prepare('SELECT 1 FROM clank_organization_security_policies WHERE organization_id=?').get(organizationId)) return;
+  if (!security) throw new AuthError('ORGANIZATION_POLICY_UNCONFIGURED','Reopen this controller with organization security enforcement.',503);
+  if (principal.tokenId) security.controller.authorizeDelegation(organizationId, 'cli_'+principal.tokenId, principal.userId);
+  else {
+    const current = principal.sessionId ? security.auth.refreshSession(principal.sessionId) : null;
+    if (principal.impersonation || current?.user?.id !== principal.userId) throw new AuthError('ORGANIZATION_POLICY_SESSION','Sign in with your own current organization session.',401);
+    security.controller.authorizeAuth(organizationId, current);
+  }
+}
+function organizationPolicyAllows(internal: SQLiteInternal, principal: TokenPrincipal, organizationId: string): boolean {
+  try {authorizeOrganizationPolicy(internal, principal, organizationId); return true;}
+  catch (error) {if (error instanceof AuthError && [401,403].includes(error.status)) return false; throw error;}
+}
 function machineProjectPermission(operation: string, method: string): ProjectPermission {
   if(method==='GET' && ['', 'usage', 'releases', 'backups'].includes(operation)) return 'read';
   if(method==='GET' && operation==='logs') return 'logs';
@@ -1452,11 +1478,35 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
   }) : undefined;
   const secretRotations = await openSecretRotations(storage.internal, { encrypt: value => encryptSecret(value, masterKey), decrypt: value => decryptSecret(value, masterKey), validate: options.validateSecret });
   let serviceAccounts: ReturnType<typeof openPlatformServiceAccounts> | undefined;
+  let organizationSecurity: OrganizationSecurityPolicyController | undefined;
   let auditExporter: Awaited<ReturnType<typeof openAuditExporter>> | undefined;
   let retentionController: Awaited<ReturnType<typeof createRetentionController>> | undefined;
   let invitationDeliveries: ReturnType<typeof createPlatformInvitationDeliveryScheduler>;
   const usageOpenedAt = Date.now();
   try {
+    assertOrganizationSecurityProtocol(storage.internal);
+    if (!options.organizationSecurity && storage.internal.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_organization_security_policies'").get()
+      && storage.internal.prepare('SELECT 1 FROM clank_organization_security_policies LIMIT 1').get()) throw new TypeError('Configure organization security before reopening this policy store.');
+    if (options.organizationSecurity) {
+      organizationSecurity = openOrganizationSecurityPolicies(storage.database, storage.auth, {
+        membership(organizationId,userId) {const row=storage.internal.prepare('SELECT role,created_at FROM clank_platform_memberships WHERE organization_id=? AND user_id=?').get(organizationId,userId); return row ? {role:validateOrganizationRole(String(row.role),true),createdAt:Number(row.created_at)} : null;},
+        members(organizationId) {const rows=storage.internal.prepare('SELECT user_id,role,created_at FROM clank_platform_memberships WHERE organization_id=? ORDER BY user_id LIMIT 1001').all(organizationId); return rows.map(row=>({userId:String(row.user_id),membership:{role:validateOrganizationRole(String(row.role),true),createdAt:Number(row.created_at)}}));},
+        exists(organizationId) {return !!storage.internal.prepare('SELECT 1 FROM clank_platform_organizations WHERE id=?').get(organizationId);},
+        audit(actorId,organizationId,action,metadata) {audit(storage.internal,actorId,null,null,action,{organizationId,...metadata});},
+        ...(options.organizationSecurity.operatorRecovery ? {
+          authorizeRecovery(current: AuthRequest<any>,organizationId: string) {
+            const live=storage.auth.refreshSession(current.session!.id);
+            if(live?.user?.id!==current.user?.id || live?.user?.role!==PLATFORM_ADMIN_ROLE) throw new AuthError('ORGANIZATION_POLICY_OPERATOR','Independent current platform operator authority is required.',403);
+            storage.auth.requireFreshAuthentication(live,300000);
+          },
+          recoverOwner(organizationId: string,userId: string) {
+            storage.internal.prepare(`INSERT INTO clank_platform_memberships VALUES(?,?,'owner',?,?) ON CONFLICT(organization_id,user_id) DO UPDATE SET role='owner',updated_at=excluded.updated_at`).run(organizationId,userId,Date.now(),Date.now());
+            markProvisioningManualOverride(storage.internal,organizationId,userId,'owner',provisioningOrganizations.has(organizationId));
+          },
+        } : {}),
+      });
+      organizationSecurityStores.set(storage.internal,{controller:organizationSecurity,auth:storage.auth});
+    }
     serviceAccounts = options.serviceAccounts ? openPlatformServiceAccounts(storage.internal, options.serviceAccounts, {
     hash: syncHash, encrypt: value => encryptSecret(value, masterKey), decrypt: value => decryptSecret(value, masterKey),
     eligibleOwner(organizationId, ownerId, projectId, permissions) {
@@ -1491,6 +1541,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     pruneUsageStorage(storage.internal, usageOpenedAt, limits.usageRetentionMonths);
     reconcileBackupObjectBinding(storage.internal, backupObjects);
   } catch (error) {
+    organizationSecurityStores.delete(storage.internal);
+    organizationSecurity?.close();
     serviceAccounts?.close();
     retentionController?.close();
     await auditExporter?.close();
@@ -7095,6 +7147,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           {
             platformRole,
             billingEnabled: billing !== null,
+            organizationSecurityEnabled: Boolean(organizationSecurity),
             hostingProfile,
             runnerKind: runner.kind,
             signupMode: signupPolicy,
@@ -7173,6 +7226,14 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
             (id, token_hash, user_id, name, created_at, last_used_at, expires_at, revoked_at)
             VALUES (?, ?, ?, ?, ?, NULL, ?, NULL)`)
             .run(tokenId, syncHash(rawToken), row.user_id, row.client_name, Date.now(), expiresAt);
+          if (organizationSecurity) {
+            const proofs=storage.internal.prepare('SELECT organization_id FROM clank_organization_security_delegations WHERE credential_id=? LIMIT 1001').all('device_'+deviceHash);
+            if(proofs.length>1000) throw new PlatformError(409,'ORGANIZATION_POLICY_CAPACITY','Device authorization exceeds its organization bound.');
+            for(const proof of proofs) {
+              try {organizationSecurity.continueDelegation(String(proof.organization_id),'device_'+deviceHash,'cli_'+tokenId,String(row.user_id));}
+              catch(error) {if(!(error instanceof AuthError && [401,403].includes(error.status))) throw error;}
+            }
+          }
           changes.record("__platform", String(row.user_id));
         });
         audit(storage.internal, String(row.user_id), tokenId, null, "token.create", {
@@ -7350,6 +7411,11 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
                 "The GitHub Actions identity is invalid or expired.",
               );
             }
+            assertOrganizationSecurityProtocol(storage.internal);
+            if (storage.internal.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_organization_security_policies' AND type='table'").get()
+              && storage.internal.prepare('SELECT 1 FROM clank_organization_security_policies WHERE organization_id=?').get(String(binding.organization_id))) {
+              throw new PlatformError(403,'ORGANIZATION_POLICY_DELEGATION','This workspace requires a credential authorized from its current human security session.');
+            }
             storage.internal.prepare(
               "DELETE FROM clank_platform_github_oidc_replay WHERE expires_at <= ?",
             ).run(now);
@@ -7437,12 +7503,25 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         exact(input, ["code"]);
         const code = normalizeUserCode(boundedString(input.code, "code", 8, 20));
         const status = url.pathname.endsWith("/approve") ? "approved" : "denied";
+        storage.internal.transaction(() => {
+        const current=storage.auth.refreshSession(auth.session!.id);
+        if(current?.user?.id!==auth.user!.id) throw new PlatformError(401,'UNAUTHENTICATED','Sign in to approve this device.');
+        const device=storage.internal.prepare('SELECT device_hash FROM clank_platform_device_codes WHERE user_code=?').get(code);
         const result = storage.internal.prepare(`UPDATE clank_platform_device_codes
           SET status = ?, user_id = ?
           WHERE user_code = ? AND status = 'pending' AND expires_at > ?`)
           .run(status, auth.user!.id, code, Date.now());
         if (Number(result.changes) !== 1) throw new PlatformError(409, "CODE_UNAVAILABLE", "Device code is expired or already handled.");
+        if(status==='approved' && organizationSecurity) {
+          const rows=storage.internal.prepare('SELECT organization_id FROM clank_platform_memberships WHERE user_id=? ORDER BY organization_id LIMIT 1001').all(current.user!.id);
+          if(rows.length>1000) throw new PlatformError(409,'ORGANIZATION_POLICY_CAPACITY','Device authorization exceeds its organization bound.');
+          for(const row of rows) {
+            try {organizationSecurity.captureDelegation(String(row.organization_id),'device_'+String(device!.device_hash),current);}
+            catch(error) {if(!(error instanceof AuthError && [401,403].includes(error.status))) throw error;}
+          }
+        }
         audit(storage.internal, auth.user!.id, null, null, `device.${status}`, { code });
+        });
         return api({ ok: true, status });
       }
       if (url.pathname === "/api/admin/impersonation" && request.method === "POST") {
@@ -8145,6 +8224,19 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         if (url.pathname==="/api/service-account" && request.method==="GET") return api({ok:true,identity:principal.machine.identity});
         if (!(url.pathname==="/api/projects" && request.method==="GET") && !url.pathname.startsWith('/api/projects/')) throw new PlatformError(403,"SERVICE_ACCOUNT_SCOPE_DENIED","Service credentials are limited to their project operations.");
       }
+      const securityPolicyRoute=/^\/api\/organizations\/([A-Za-z0-9_-]{8,128})\/security-policy(?:\/(preview|recover))?$/u.exec(url.pathname);
+      if (securityPolicyRoute) {
+        if (!organizationSecurity) throw new PlatformError(404,'NOT_FOUND','Organization security is not configured.');
+        if (principal.tokenId || principal.impersonation || !principal.sessionId || url.search) throw new PlatformError(403,'ORGANIZATION_POLICY_BROWSER','Use your current human browser session.');
+        const current=storage.auth.refreshSession(principal.sessionId);
+        if(current?.user?.id!==principal.userId) throw new PlatformError(401,'UNAUTHENTICATED','Sign in to continue.');
+        const organizationId=securityPolicyRoute[1]!,operation=securityPolicyRoute[2];
+        if(request.method==='GET' && !operation) return api({ok:true,policy:organizationSecurity.read(organizationId,current)});
+        if(request.method!=='POST') throw new PlatformError(404,'NOT_FOUND','Organization security endpoint not found.');
+        const input=await readJsonRequest(request,16*1024);
+        if(operation==='preview') {const fields=plainObject(input);exact(fields,['requirements']);return api({ok:true,preview:organizationSecurity.preview(organizationId,current,fields.requirements as any)});}
+        return api({ok:true,policy:operation==='recover' ? organizationSecurity.recover(organizationId,current,input as any) : organizationSecurity.change(organizationId,current,input as any)});
+      }
       const serviceAccountRoute=/^\/api\/organizations\/([A-Za-z0-9_-]{8,128})\/service-accounts(?:\/([A-Za-z0-9_-]{8,128})(?:\/(change|credentials))?)?$/u.exec(url.pathname);
       if(serviceAccountRoute) {
         if(!serviceAccounts) throw new PlatformError(404,"NOT_FOUND","Service accounts are not configured.");
@@ -8154,6 +8246,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         const authority:ServiceAccountAuthority={userId:principal.userId,
           authorize(id,write) {
             requireCurrentPlatformPrincipal(storage,principal);
+            authorizeOrganizationPolicy(storage.internal,principal,id);
             const role=storage.internal.prepare('SELECT role FROM clank_platform_memberships WHERE organization_id=? AND user_id=?').get(id,principal.userId)?.role;
             if(role!=="owner" && role!=="admin") throw new PlatformError(404,"ORGANIZATION_NOT_FOUND","Organization administration is unavailable.");
             if(write) {
@@ -8250,6 +8343,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
             throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "Project tokens cannot select a workspace audit feed.");
           }
           const membership = organizationMembership(storage.internal, organizationId, principal.userId);
+          authorizeOrganizationPolicy(storage.internal, principal, organizationId);
           if (!roleAllows(membership.role, "audit")) {
             throw new PlatformError(403, "ROLE_DENIED", `The ${membership.role} role cannot perform audit operations.`);
           }
@@ -8338,6 +8432,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "This token is scoped to another workspace.");
         }
         organizationMembership(storage.internal, organizationId, principal.userId);
+        authorizeOrganizationPolicy(storage.internal, principal, organizationId);
         const usageAsOf = Date.now();
         const month = usageMonth(
           url.searchParams.get("month"),
@@ -8412,7 +8507,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           FROM clank_platform_organizations o
           JOIN clank_platform_memberships m ON m.organization_id = o.id
           WHERE m.user_id = ? ORDER BY o.created_at`).all(principal.userId);
-        return api({ ok: true, organizations: rows.map((row) => ({
+        return api({ ok: true, organizations: rows.filter(row=>organizationPolicyAllows(storage.internal,principal,String(row.id))).map((row) => ({
           id: String(row.id),
           name: String(row.name),
           slug: String(row.slug),
@@ -8487,6 +8582,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       if (organizationMatch) {
         if (principal.projectId) throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "Project tokens cannot administer organizations.");
         const organizationId = organizationMatch[1]!;
+        authorizeOrganizationPolicy(storage.internal,principal,organizationId);
         const membership = organizationMembership(storage.internal, organizationId, principal.userId);
         const operation = organizationMatch[2] ?? "";
         if (!operation && request.method === "GET") {
@@ -8749,7 +8845,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         if (principal.projectId && !principal.permissions.includes("read")) {
           throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "This token cannot read project metadata.");
         }
-        const rows = visibleProjectRows(storage.internal, principal.userId, principal.projectId);
+        const rows = visibleProjectRows(storage.internal, principal.userId, principal.projectId).filter(row=>!row.organization_id || organizationPolicyAllows(storage.internal,principal,String(row.organization_id)));
         const usageRows = storage.internal.prepare(`SELECT organization_id, count(*) AS count
           FROM clank_platform_projects WHERE organization_id IN (
             SELECT organization_id FROM clank_platform_memberships WHERE user_id = ?
@@ -8762,7 +8858,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
             options.maxArtifactBytes,
             limits.metricRetentionDays,
           ),
-          usage: Object.fromEntries(usageRows.map((row) => [String(row.organization_id), Number(row.count)])),
+          usage: Object.fromEntries(usageRows.filter(row=>organizationPolicyAllows(storage.internal,principal,String(row.organization_id))).map((row) => [String(row.organization_id), Number(row.count)])),
         });
       }
       if (url.pathname === "/api/projects" && request.method === "POST") {
@@ -8781,6 +8877,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
               () => requireCurrentPlatformPrincipal(storage, principal))
           : boundedString(input.organizationId, "organizationId", 8, 128);
         const membership = organizationMembership(storage.internal, organizationId, principal.userId);
+        authorizeOrganizationPolicy(storage.internal, principal, organizationId);
         requireOrganizationAdministration(membership.role);
         const id = await randomId(18);
         let port = 0;
@@ -10253,6 +10350,15 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
               JSON.stringify(permissions),
               principal.previewName,
             );
+          if(project.organizationId && organizationSecurity) {
+            if(principal.sessionId) {
+              const current=storage.auth.refreshSession(principal.sessionId);
+              if(!current) throw new PlatformError(401,'UNAUTHENTICATED','Sign in before issuing this scoped credential.');
+              organizationSecurity.captureDelegation(project.organizationId,'cli_'+tokenId,current);
+            } else if(principal.tokenId && storage.internal.prepare('SELECT 1 FROM clank_organization_security_delegations WHERE organization_id=? AND credential_id=?').get(project.organizationId,'cli_'+principal.tokenId)) {
+              organizationSecurity.continueDelegation(project.organizationId,'cli_'+principal.tokenId,'cli_'+tokenId,principal.userId);
+            } else if(storage.internal.prepare('SELECT 1 FROM clank_organization_security_policies WHERE organization_id=?').get(project.organizationId)) throw new AuthError('ORGANIZATION_POLICY_DELEGATION','Authorize this scoped credential from a current human session.',401);
+          }
         });
         audit(storage.internal, principal.userId, principal.tokenId, project.id, "project-token.create", {
           tokenId,
@@ -10706,6 +10812,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
   return {
     handle,
     authenticateServiceAccount(request) {
+      assertOrganizationSecurityProtocol(storage.internal);
       if(!serviceAccounts) throw new PlatformError(401,"INVALID_TOKEN","Service account credentials are unavailable.");
       const header=request.headers.get('authorization');
       if(!header || !/^Bearer clsa_[A-Za-z0-9_-]{43}$/u.test(header)) throw new PlatformError(401,"INVALID_TOKEN","Supply a current service account credential.");
@@ -10734,6 +10841,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       await previewCleanupFlight?.catch(() => undefined);
       await operationsMonitor?.close();
       serviceAccounts?.close();
+      organizationSecurityStores.delete(storage.internal);
+      organizationSecurity?.close();
       retentionController?.close();
       await auditExporter?.close();
       await invitationDeliveries.close();
@@ -10775,6 +10884,7 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array,
   try{if(leadership){if(!internal.guardWrites)throw new Error("Native supervisor write authority is unavailable.");internal.guardWrites(connection=>leadership.assertCurrent(connection));}}
   catch(error){database.close();throw error;}
   try {assertServiceAccountProtocol(internal);} catch(error) {database.close();throw error;}
+  try {assertOrganizationSecurityProtocol(internal);} catch(error) {database.close();throw error;}
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_rate_limits (
     key_hash TEXT PRIMARY KEY,
     attempts TEXT NOT NULL CHECK (json_valid(attempts) AND json_type(attempts) = 'array'),
@@ -11955,11 +12065,14 @@ async function requireToken(internal: SQLiteInternal, request: Request, allowMac
     impersonation: null,
   };
   admittedTokenAuthority.set(principal, tokenAuthorityFingerprint(row));
+  const organizationId = principal.organizationId ?? (principal.projectId ? projectById(internal,principal.projectId)?.organizationId : null);
+  if (organizationId && !matched[1]!.startsWith('clsa_')) authorizeOrganizationPolicy(internal,principal,organizationId);
   return principal;
 }
 
 function requireCurrentPlatformPrincipal(storage: PlatformDatabase, principal: TokenPrincipal): void {
   principal.machine?.assertCurrent();
+  for (const organizationId of admittedOrganizationScopes.get(principal) ?? []) authorizeOrganizationPolicy(storage.internal,principal,organizationId);
   if (principal.tokenId !== null) {
     const active = storage.internal.prepare(`SELECT t.token_hash, t.organization_id, t.project_id,
       t.permissions, t.preview_name, t.expires_at FROM clank_platform_tokens t
@@ -11970,6 +12083,8 @@ function requireCurrentPlatformPrincipal(storage: PlatformDatabase, principal: T
     if (!active || (admitted !== undefined && tokenAuthorityFingerprint(active) !== admitted)) {
       throw new PlatformError(401, "INVALID_TOKEN", "The CLI access token is invalid or expired.");
     }
+    const organizationId=principal.organizationId ?? (principal.projectId ? projectById(storage.internal,principal.projectId)?.organizationId : null);
+    if(organizationId) authorizeOrganizationPolicy(storage.internal,principal,organizationId);
   } else {
     const current = principal.sessionId ? storage.auth.refreshSession(principal.sessionId) : null;
     if (!current?.user || current.user.id !== principal.userId || principal.impersonation !== null) {
@@ -12116,6 +12231,7 @@ function accessibleProject(
     throw new PlatformError(404, "PROJECT_NOT_FOUND", "Project not found.");
   }
   const project = projectRow(row);
+  if(project.organizationId) authorizeOrganizationPolicy(internal,principal,project.organizationId);
   const role = validateOrganizationRole(String(row.membership_role), true);
   const scopedPreview = Boolean(
     principal.projectId
@@ -14810,7 +14926,7 @@ function dashboardPayload(
       FROM clank_platform_organizations o
       JOIN clank_platform_memberships m ON m.organization_id = o.id
       WHERE m.user_id = ? ORDER BY o.created_at`).all(principal.userId);
-  const organizations = organizationRows.map((row) => {
+  const organizations = organizationRows.filter(row=>organizationPolicyAllows(internal,principal,String(row.id))).map((row) => {
     const effective = workspaceQuotas(internal, String(row.id), defaults, quotaSnapshot);
     return {
       id: String(row.id),
@@ -14822,7 +14938,7 @@ function dashboardPayload(
       usage: { projects: Number(row.project_count), limit: effective.projectsPerOrganization },
     };
   });
-  const projectRows = visibleProjectRows(internal, principal.userId, principal.projectId);
+  const projectRows = visibleProjectRows(internal, principal.userId, principal.projectId).filter(row=>!row.organization_id || organizationPolicyAllows(internal,principal,String(row.organization_id)));
   const projectUsage = dashboardProjectUsage(internal, projectRows.map((row) => String(row.id)));
   const projects = projectRows.map((source) => {
     const project = projectRow(source);
@@ -14891,6 +15007,9 @@ function dashboardPayload(
     },
     limits: publicLimits(accountLimits, maxArtifactBytes, metricRetentionDays),
     organizations,
+    // A noncompliant human administrator may discover only remediation. CLI,
+    // support impersonation and ordinary members receive no bypass metadata.
+    securityRemediation: principal.sessionId && !principal.impersonation ? organizationRows.filter(row=>['owner','admin'].includes(String(row.role)) && !organizations.some(org=>org.id===String(row.id))).map(row=>({id:String(row.id),name:String(row.name),slug:String(row.slug),role:String(row.role)})) : [],
     projects,
     totals: {
       projects: projects.length,
@@ -15089,6 +15208,11 @@ function workspaceAuditEvents(
       ORDER BY a.id DESC LIMIT ?`)
       .all(principal.projectId, before, before, limit);
   } else {
+    const candidateOrganizations = internal.prepare(`SELECT organization_id FROM clank_platform_memberships
+      WHERE user_id=? AND role IN ('owner','admin','developer') AND (? IS NULL OR organization_id=?)
+      AND (? IS NULL OR organization_id=?) LIMIT 1001`).all(principal.userId,organizationId,organizationId,principal.organizationId,principal.organizationId);
+    if(candidateOrganizations.length>1000) throw new PlatformError(409,'ORGANIZATION_POLICY_CAPACITY','The complete audit scope exceeds its supported membership bound.');
+    const admitted = candidateOrganizations.filter(row=>organizationPolicyAllows(internal,principal,String(row.organization_id))).map(row=>String(row.organization_id));
     rows = internal.prepare(`SELECT a.id, a.organization_id, a.project_id, a.action, a.metadata,
       a.created_at, a.actor_user_id, a.actor_token_id, u.email AS actor_email,
         m.role AS reader_role,
@@ -15115,10 +15239,11 @@ function workspaceAuditEvents(
       LEFT JOIN clank_platform_organizations o ON o.id = a.organization_id
       LEFT JOIN clank_platform_projects p ON p.id = a.project_id
       WHERE m.role IN ('owner', 'admin', 'developer')
+        AND a.organization_id IN (SELECT value FROM json_each(?))
         AND (? IS NULL OR a.organization_id = ?)
         AND (? IS NULL OR a.id < ?)
       ORDER BY a.id DESC LIMIT ?`)
-      .all(principal.userId, organizationId, organizationId, before, before, limit);
+      .all(principal.userId, JSON.stringify(admitted), organizationId, organizationId, before, before, limit);
   }
   const events = rows.map((row) => {
     const metadata = JSON.parse(String(row.metadata)) as Record<string, unknown>;

@@ -25,6 +25,8 @@ async function fixture(platformAdmin = false) {
     state, initial,
     api: (path, options) => new Promise((resolve, reject) => requests.push({ path, options, resolve, reject })),
     renderWorkspace: () => renders.push(state.workspaceData),
+    // This isolated fixture has organization policies disabled; policy controls have separate tests.
+    async loadOrganizationSecurity() {},
     el: element,
     labelTableCell(node, label) { node.dataset.label = label; return node; },
     clear: node => { node.children = []; },

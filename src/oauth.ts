@@ -16,8 +16,10 @@ import {
   SQLITE_INTERNAL,
   type SQLiteInternal,
 } from "./sqlite-internal.ts";
+import {assertOrganizationSecurityProtocol, type OrganizationSecurityPolicyController} from "./organization-security-policy.ts";
 
 export interface ProjectOAuthOptions<Profile extends object = DefaultAuthProfile> {
+  organizationSecurity?: {readonly organizationId: string; readonly controller: OrganizationSecurityPolicyController};
   database: SQLiteDatabase<any>;
   auth: AuthRuntime<Profile>;
   mcpPath?: string;
@@ -102,6 +104,12 @@ export function createProjectOAuth<Profile extends object = DefaultAuthProfile>(
 ): ProjectOAuth<Profile> {
   const internal = (options.database as SQLiteDatabase<any> & { [SQLITE_INTERNAL]: SQLiteInternal })[SQLITE_INTERNAL];
   if (!internal) throw new Error("Agent OAuth requires a Clank SQLite database.");
+  const beforePolicyAdmission = () => {
+    assertOrganizationSecurityProtocol(internal);
+    if (!options.organizationSecurity && internal.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_organization_security_policies' AND type='table'").get()
+      && internal.prepare('SELECT 1 FROM clank_organization_security_policies LIMIT 1').get()) throw new AuthError('ORGANIZATION_POLICY_UNCONFIGURED','Reopen this OAuth server with its organization security binding.',503);
+  };
+  beforePolicyAdmission();
   const mcpPath = absolutePath(options.mcpPath ?? "/__clank/mcp", "mcpPath");
   const oauthPrefix = absolutePath(options.oauthPrefix ?? "/__clank/oauth", "oauthPrefix");
   const accessTokenLifetimeMs = positiveDuration(options.accessTokenLifetimeMs ?? 60 * 60 * 1_000, "accessTokenLifetimeMs");
@@ -203,6 +211,8 @@ export function createProjectOAuth<Profile extends object = DefaultAuthProfile>(
           codeLifetimeMs: authorizationCodeLifetimeMs,
           authorizePath: `${oauthPrefix}/authorize`,
           grantManagementPath,
+          organizationSecurity: options.organizationSecurity,
+          beforePolicyAdmission,
         });
       }
       if (url.pathname === `${oauthPrefix}/token`) {
@@ -214,6 +224,8 @@ export function createProjectOAuth<Profile extends object = DefaultAuthProfile>(
           refreshTokenRetryLifetimeMs,
           refreshTokenRotationMode,
           maxUserGrants,
+          organizationSecurity: options.organizationSecurity,
+          beforePolicyAdmission,
         }));
       }
       if (url.pathname === grantManagementPath) {
@@ -237,6 +249,7 @@ export function createProjectOAuth<Profile extends object = DefaultAuthProfile>(
       const matched = /^Bearer ([A-Za-z0-9._~-]{20,2048})$/u.exec(authorization);
       if (!matched) return null;
       const tokenHash = await digest(matched[1]);
+      beforePolicyAdmission();
       const now = Date.now();
       const row = internal.prepare(`SELECT
           t.client_id, t.family_id, t.scope, t.resource, t.expires_at, t.last_used_at,
@@ -256,11 +269,16 @@ export function createProjectOAuth<Profile extends object = DefaultAuthProfile>(
         internal.prepare("UPDATE clank_oauth_tokens SET last_used_at = ? WHERE token_hash = ?")
           .run(now, tokenHash);
       }
+      const context = oauthAuthFromRow(options.auth, row);
+      if (options.organizationSecurity) {
+        try {options.organizationSecurity.controller.bindDelegationAuth(options.organizationSecurity.organizationId, 'mcp_'+String(row.family_id), context);}
+        catch (error) {if (error instanceof AuthError && [401,403].includes(error.status)) return null; throw error;}
+      }
       authenticatedRequests.set(request, tokenHash);
       const restricted = grantConstraintSnapshot(internal, String(row.family_id));
       const exhausted = restricted.constraints?.maxOperations !== undefined && (restricted.operationsUsed ?? 0) >= restricted.constraints.maxOperations;
       return {
-        context: oauthAuthFromRow(options.auth, row),
+        context,
         scopes: new Set(parseScopes(String(row.scope))),
         ...(exhausted || restricted.constraints?.actions ? { allowedActions: new Set(exhausted ? [] : restricted.constraints!.actions) } : {}),
       };
@@ -270,6 +288,7 @@ export function createProjectOAuth<Profile extends object = DefaultAuthProfile>(
         const tokenHash = authenticatedRequests.get(request);
         if (!tokenHash) throw new McpToolError("UNAUTHENTICATED", "Authenticate before invoking an action.");
         const auth = internal.transaction(() => {
+          beforePolicyAdmission();
           const row = internal.prepare(`SELECT t.family_id, t.scope,
             u.id AS user_id, u.email, u.email_verified_at, u.role, u.profile, u.disabled,
             u.created_at AS user_created_at, u.updated_at
@@ -281,6 +300,7 @@ export function createProjectOAuth<Profile extends object = DefaultAuthProfile>(
             throw new McpToolError("FORBIDDEN", "This agent grant no longer permits the action.");
           }
           const current = oauthAuthFromRow(options.auth, row);
+          options.organizationSecurity?.controller.bindDelegationAuth(options.organizationSecurity.organizationId, 'mcp_'+String(row.family_id), current);
           const stored = internal.prepare("SELECT constraints, operations_used FROM clank_oauth_grant_constraints WHERE family_id = ?").get(row.family_id);
           if (stored) {
             const constraints = parseGrantConstraints(JSON.parse(String(stored.constraints)));
@@ -414,6 +434,8 @@ async function authorize<Profile extends object>(
     codeLifetimeMs: number;
     authorizePath: string;
     grantManagementPath: string;
+    organizationSecurity?: ProjectOAuthOptions["organizationSecurity"];
+    beforePolicyAdmission(): void;
   },
 ): Promise<Response> {
   if (request.method !== "GET" && request.method !== "POST") return methodNotAllowed("GET, POST");
@@ -422,6 +444,7 @@ async function authorize<Profile extends object>(
       ? Object.fromEntries(new URL(request.url).searchParams)
       : await readBoundedForm(request, 32 * 1024);
     const parameters = validateAuthorizationRequest(input, internal, options.resource);
+    options.beforePolicyAdmission();
     const auth = await authRuntime.resolve(request);
     if (!auth.user) {
       if (request.method === "POST") throw new OAuthRequestError("access_denied", "Sign in before approving agent access.", 401);
@@ -483,7 +506,9 @@ async function authorize<Profile extends object>(
     const codeHash = await digest(rawCode);
     const now = Date.now();
     internal.transaction(() => {
+      options.beforePolicyAdmission();
       const currentAuth = requireCurrentOAuthSession(authRuntime, auth);
+      if (options.organizationSecurity) options.organizationSecurity.controller.captureDelegation(options.organizationSecurity.organizationId, 'mcp_code_'+codeHash, currentAuth);
       if (authRuntime.definition.emailVerification.required) currentAuth.requireVerified();
       internal.prepare(`INSERT INTO clank_oauth_codes
         (code_hash, client_id, user_id, redirect_uri, code_challenge, scope, resource, expires_at, consumed_at, created_at)
@@ -525,11 +550,14 @@ async function exchangeToken(
     refreshTokenRetryLifetimeMs: number;
     refreshTokenRotationMode: "adaptive" | "strict";
     maxUserGrants: number;
+    organizationSecurity?: ProjectOAuthOptions["organizationSecurity"];
+    beforePolicyAdmission(): void;
   },
 ): Promise<Response> {
   if (request.method !== "POST") return methodNotAllowed("POST");
   try {
     const input = await readBoundedForm(request, 32 * 1024);
+    options.beforePolicyAdmission();
     const grantType = requiredString(input.grant_type, "grant_type", 64);
     if (grantType === "authorization_code") {
       const clientId = requiredString(input.client_id, "client_id", 512);
@@ -559,6 +587,7 @@ async function exchangeToken(
       ) throw new OAuthRequestError("invalid_grant", "The authorization code is invalid or expired.");
       const pair = await prepareTokenPair(String(row.user_id), clientId, String(row.scope), resource, options);
       internal.transaction(() => {
+        options.beforePolicyAdmission();
         if (activeGrantCount(internal, String(row.user_id), Date.now()) >= options.maxUserGrants) {
           throw new OAuthRequestError(
             "temporarily_unavailable",
@@ -571,6 +600,7 @@ async function exchangeToken(
           .run(Date.now(), codeHash, Date.now());
         if (Number(consumed.changes) !== 1) throw new OAuthRequestError("invalid_grant", "The authorization code was already used.");
         insertTokenPair(internal, pair);
+        options.organizationSecurity?.controller.continueDelegation(options.organizationSecurity.organizationId, 'mcp_code_'+codeHash, 'mcp_'+pair.familyId, String(row.user_id));
       });
       return tokenResponse(pair);
     }
@@ -585,6 +615,8 @@ async function exchangeToken(
         FROM clank_oauth_tokens t
         JOIN clank_auth_users u ON u.id = t.user_id
         WHERE t.token_hash = ? AND t.kind = 'refresh'`).get(refreshHash);
+      const authorizeCurrent = () => {options.beforePolicyAdmission();if (row && options.organizationSecurity) options.organizationSecurity.controller.authorizeDelegation(options.organizationSecurity.organizationId, 'mcp_'+String(row.family_id), String(row.user_id));};
+      authorizeCurrent();
       if (row?.consumed_at !== null && row?.consumed_at !== undefined) {
         if (
           Number(row.disabled) === 0
@@ -592,6 +624,7 @@ async function exchangeToken(
           && String(row.resource) === resource
         ) {
           const recovered = await recoverRefreshRetry(internal, rawRefresh, refreshHash, row, options);
+          authorizeCurrent();
           if (recovered) return tokenResponse(recovered);
         }
         if (options.refreshTokenRotationMode === "strict") {
@@ -621,6 +654,7 @@ async function exchangeToken(
         pair,
       );
       const rotated = internal.transaction(() => {
+        authorizeCurrent();
         const consumed = internal.prepare(`UPDATE clank_oauth_tokens SET consumed_at = ?
           WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > ? AND scope = ?`)
           .run(Date.now(), refreshHash, Date.now(), pair.scope);
@@ -638,6 +672,7 @@ async function exchangeToken(
       });
       if (!rotated) {
         const recovered = await recoverRefreshRetry(internal, rawRefresh, refreshHash, row, options);
+        authorizeCurrent();
         if (recovered) return tokenResponse(recovered);
         if (options.refreshTokenRotationMode === "strict") {
           internal.prepare("UPDATE clank_oauth_tokens SET consumed_at = ? WHERE family_id = ? AND consumed_at IS NULL")

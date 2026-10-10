@@ -4,6 +4,7 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Add opt-in organization security policy review, versioned changes, persistent enrollment grace and independent last-administrator recovery. Fence current browser, CLI and MCP authority, including held requests, exact refresh retries and direct reviewed actions.
 - Add opt-in same-host Linux supervisor leadership with native retained epochs, transaction fences, dedicated coordinator guardians and automatic standby recovery after verified tenant cleanup. Expose bounded CLI configuration and readonly local status; reject accidental ordinary-mode startup after enabling the topology.
 
 - Add durable declared media transforms using native jobs, current human authority, exact source/destination generations, bounded progress and atomic publication receipts. Fence immediate image transforms against replaced uploads and verify actual bucket-read bytes.

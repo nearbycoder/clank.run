@@ -2,11 +2,13 @@
 
 Base: `4b990199965204f1200fcd0fb4ca2b7eb0b02bbc`, equal to freshly fetched `origin/main` on 2026-10-08.
 
-Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Twenty-six features are merged across twenty-three feature batches; fourteen remain. [Workflow compensation (20)](workflow-compensation.json) merged in [PR #297](https://github.com/nearbycoder/clank.run/pull/297) after both complete Node 26/22 release checks, all six fresh hosted checks and a protected expected-head squash. Accepted commit `d89d52514b259823b8ac28de04f95da642c905bf` exactly matches reviewed tree `0ead1fc75dc10831b5c271c8e202127c3b97e66c`; both main checkouts match it and all 23 existing local files are preserved. Non-independent author COMMENT `5476778312` is verification, not independent approval. Production Railway remains uncertified; earlier snapshots retain their original scope.
+Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Twenty-seven features are merged across twenty-four feature batches; thirteen remain. [Workflow compensation (20)](workflow-compensation.json) merged in [PR #297](https://github.com/nearbycoder/clank.run/pull/297) after both complete Node 26/22 release checks, all six fresh hosted checks and a protected expected-head squash. Accepted commit `d89d52514b259823b8ac28de04f95da642c905bf` exactly matches reviewed tree `0ead1fc75dc10831b5c271c8e202127c3b97e66c`; both main checkouts match it and all 23 existing local files are preserved. Non-independent author COMMENT `5476778312` is verification, not independent approval. Production Railway remains uncertified; earlier snapshots retain their original scope.
 
 A feature is complete only when its documented acceptance evidence exists. Proposed contracts do not count as implemented features. The review baseline remains historical evidence; this ledger records subsequent work.
 
-## Automatic supervisor leadership verified awaiting protected merge
+## Automatic supervisor leadership accepted
+
+PR #314 completed the normal protected expected-head squash as `7bdb73efc3bf297c566d63814223306b047b2792`. Both main checkouts were synced and all 23 original local files were hash-preserved. The acceptance metadata is reconciled from the committed PR #318 ledger; the historical verification paragraphs below retain their earlier scope. Feature 06 is accepted, giving 27 accepted / 24 batches / 13 remaining.
 
 [Proposal #313](https://github.com/nearbycoder/clank.run/issues/313) adds opt-in dedicated same-host Linux coordinators, a retained native SQLite ownership epoch, transaction guards before work/commit, independent coordinator guardians and automatic standby lifecycle recovery. Ordinary-mode startup refuses an enabled catalog before touching tenant cleanup. Configuration replacement, old capability expiry, malformed/missing state and unresolved cleanup fail closed; caller input changes cannot disable the captured topology during delayed activation.
 
@@ -668,7 +670,7 @@ and supported limits. Feature 01 remains in progress until reviewed PR delivery;
 | 11 | Verified multi-organization identity linking | Implemented and merged | Proposal #283 / merged PR #285; [identity linking acceptance](identity-linking.json). |
 | 12 | SCIM user and group provisioning | Implemented and merged | Proposal #287 / merged PR #289; [SCIM acceptance](scim-provisioning.json). |
 | 13 | Organization security policy console | Draft; not counted | Proposal #309 / draft PR #310; native runtime, packed types, canonical docs, both release gates and six fresh hosted checks pass; actual native policy-panel acceptance remains blocked. |
-| 14 | Temporary privileged access | Planned | Pending |
+| 14 | Temporary privileged access | Proposal; not counted | Proposal #322; current-main organization-policy foundation integration in progress; scoped elevation implementation pending. |
 | 15 | Organization service accounts | Implemented and merged | Proposal #306 / merged PR #308; [accepted native authority, process recovery and protected delivery](service-accounts.json). |
 | 16 | Agent operation budgets | Implemented | Proposal #251; 22 focused tests, actual four-process contention, atomic rollback, restart/exact replay, ownership/revocation/expiry, bounded retention, real MCP calls and 14 packed consumer fixtures. Full release gate passes. |
 | 17 | Approval quorum policies | Planned | Pending |
