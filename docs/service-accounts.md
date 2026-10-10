@@ -83,7 +83,7 @@ const identity = {
 };
 ```
 
-Use this server result as a caller capability for [agent operation budgets](agent-access.md). Your budget `identity(caller)` callback must call `caller.assertCurrent()` on every invocation, including exact retries, then return the organization as `ownerId` and machine account as `principalId`. Keep budget management in an independently authenticated human or server administration capability; never infer management authority from the machine's responsible owner. Receiving `/api/service-account` JSON is insufficient.
+Use this server result as a caller capability for [agent operation budgets](governance.md#agent-operation-budgets). Your budget `identity(caller)` callback must call `caller.assertCurrent()` on every invocation, including exact retries, then return the organization as `ownerId` and machine account as `principalId`. Keep budget management in an independently authenticated human or server administration capability; never infer management authority from the machine's responsible owner. Receiving `/api/service-account` JSON is insufficient.
 
 Accepted budget mutations, debit and receipts remain atomic in the application's budget database. Current credential checks in a separate platform database are not a distributed transaction with that database or a remote provider. Keep actions synchronous and repeat current authorization where effects commit; external effects still require their provider's idempotency and authorization controls.
 
