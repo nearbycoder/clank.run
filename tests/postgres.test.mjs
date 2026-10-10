@@ -6,14 +6,14 @@ import {join} from 'node:path';
 import {randomBytes} from 'node:crypto';
 import {fork,execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-import {defineDatabase,defineTable,defineBackend,openBackend,openSQLite,openPostgres,DatabaseConflictError,s} from '../dist/index.js';
+import {defineDatabase,defineTable,defineBackend,defineAuth,openBackend,openSQLite,openPostgres,DatabaseConflictError,s} from '../dist/index.js';
 const privateSettings=process.env.CLANK_POSTGRES_TEST_SETTINGS;
 const settings=privateSettings?JSON.parse(await readFile(privateSettings,'utf8')):undefined;
 const namespace=()=> 'contract_'+randomBytes(12).toString('hex');
 const schema=()=>defineDatabase({notes:defineTable({title:s.string({min:1}),count:s.number(),done:s.boolean()}),secrets:defineTable({title:s.string()}).owned()});
 
 for(const dialect of ['sqlite','postgres']) {
-  const options={skip:dialect==='postgres'&&!settings?'Run scripts/test-postgres.mjs against an owned native cluster.':false};
+  const options={skip:dialect==='postgres'&&!settings?'Run scripts/verify-postgres.mjs against an owned native cluster.':false};
   async function fixture(t,definition=schema()) {
     const root=await mkdtemp(join(tmpdir(),'clank-portable-contract-')),n=namespace(),instances=[];
     const open=async()=>{const db=dialect==='sqlite'?await openSQLite(definition,{path:join(root,'db.sqlite'),changePollIntervalMs:0}):await openPostgres(definition,{...settings,namespace:n,changePollIntervalMs:0});instances.push(db);return db;};
@@ -104,6 +104,11 @@ test('native PostgreSQL refuses unsupported services and operations before chang
   assert.throws(()=>db.read(tx=>tx.table('notes').query().aggregate({})),error=>error.code==='PG_OPERATION_UNSUPPORTED');
   await assert.rejects(openBackend(defineBackend({schema:definition}).functions(({publicQuery})=>({list:publicQuery({args:{},handler:()=>[]})})),{database:db}),/public-table schema/);
   assert.equal(db.version,0);
+  const publicSchema=defineDatabase({records:defineTable({title:s.string()})}),publicDb=await openPostgres(publicSchema,{...settings,namespace:namespace()});t.after(()=>publicDb.close());
+  const publicDefinition=defineBackend({schema:publicSchema}).functions(({publicQuery})=>({list:publicQuery({args:{},handler:()=>[]})}));
+  await assert.rejects(openBackend(publicDefinition,{database:publicDb,agentActivity:{maxEntries:2}}),/public functions/);
+  const privateDefinition=defineBackend({schema:publicSchema,auth:defineAuth()}).functions(({query})=>({list:query({args:{},handler:()=>[]})}));
+  await assert.rejects(openBackend(privateDefinition,{database:publicDb}),/public functions/);assert.equal(publicDb.version,0);
 });
 
 test('native PostgreSQL verifies TLS certificates and rejects credentials without disclosure',{skip:!settings},async()=>{
@@ -120,6 +125,16 @@ test('native PostgreSQL bounds rows/documents/writes and reconnects without repl
   for(let n=0;n<3;n++)db.transaction(tx=>tx.table('notes').insert({title:'row',count:n,done:false}));
   assert.throws(()=>db.read(tx=>tx.table('notes').collect()),error=>error.code==='PG_ROW_LIMIT');assert.equal(db.read(tx=>tx.table('notes').query().limit(2).collect()).length,2);
   const revision=db.version;await db.reconnect();assert.equal(db.version,revision);assert.equal(db.read(tx=>tx.table('notes').query().orderBy('count').first()).count,0);
+});
+
+test('native PostgreSQL refuses another table operation after a real callback deadline',{skip:!settings},async t=>{
+  const db=await openPostgres(schema(),{...settings,namespace:namespace(),timeoutMs:1000});t.after(()=>db.close());let refused=false;
+  assert.throws(()=>db.transaction(tx=>{
+    const table=tx.table('notes'),until=Date.now()+1100;
+    while(Date.now()<until){ /* Actual caller delay, without replacing the clock. */ }
+    assert.throws(()=>table.insert({title:'expired callback',count:1,done:false}),error=>error.code==='PG_TIMEOUT');refused=true;
+  }),error=>error.code==='PG_TIMEOUT');
+  assert.equal(refused,true);await db.reconnect();assert.equal(db.version,0);assert.deepEqual(db.read(tx=>tx.table('notes').collect()),[]);
 });
 
 async function message(child,kind) {
@@ -150,5 +165,21 @@ test('native PostgreSQL rejects changed schemas and conservatively invalidates m
   const definition=schema(),n=namespace(),first=await openPostgres(definition,{...settings,namespace:n,changeRetentionRevisions:1}),second=await openPostgres(definition,{...settings,namespace:n}),events=[];
   t.after(()=>{first.close();second.close();});second.subscribe(event=>events.push(event));
   for(let count=0;count<3;count++)first.transaction(tx=>tx.table('notes').insert({title:'retained',count,done:false}));assert.equal(second.version,3);assert.equal(events.length,1);assert.equal(events[0].all,true);
+  const reordered=defineDatabase({secrets:defineTable({title:s.string()}).owned(),notes:defineTable({done:s.boolean(),count:s.number(),title:s.string({min:1})})});
+  const equivalent=await openPostgres(reordered,{...settings,namespace:n});t.after(()=>equivalent.close());assert.equal(equivalent.version,3);assert.equal(equivalent.read(tx=>tx.table('notes').collect()).length,3);
   const changed=defineDatabase({notes:defineTable({different:s.string()})});await assert.rejects(openPostgres(changed,{...settings,namespace:n}),error=>error.code==='PG_SCHEMA_MISMATCH');assert.equal(first.version,3);
+});
+
+test('actual native retention pruning cannot hide an observed PostgreSQL revision',{skip:!settings},async t=>{
+  const n=namespace(),definition=defineDatabase({records:defineTable({title:s.string()})});
+  const first=await openPostgres(definition,{...settings,namespace:n,changeRetentionRevisions:1});t.after(()=>first.close());
+  const child=fork(new URL('./fixtures/postgres-retention-race.mjs',import.meta.url),[],{env:{...process.env,CLANK_POSTGRES_PROCESS_NAMESPACE:n},stdio:['ignore','ignore','ignore','ipc']});
+  t.after(async()=>{if(child.exitCode===null&&child.signalCode===null){const exited=new Promise(resolve=>child.once('exit',resolve));child.send({kind:'stop'});await exited;}});
+  const ready=await message(child,'ready');
+  const reader=await openPostgres(definition,{...settings,namespace:n,host:'127.0.0.1',port:ready.port,tls:'loopback'});t.after(()=>reader.close());
+  const events=[];reader.subscribe(event=>events.push(event));const id=first.transaction(tx=>tx.table('records').insert({title:'observed first'}));
+  const armed=message(child,'armed');child.send({kind:'arm'});await armed;const pruning=message(child,'native-retention-pruned');
+  assert.equal(reader.version,1);assert.deepEqual(await pruning,{kind:'native-retention-pruned',before:1,after:3});
+  assert.equal(events.length,1);assert.ok(events[0].all===true||events[0].records.some(record=>record.id===id),'The observed revision must invalidate its actual changed record.');
+  assert.equal(reader.version,3);assert.equal(reader.read(tx=>tx.table('records').collect()).length,3);
 });

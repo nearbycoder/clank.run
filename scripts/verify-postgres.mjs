@@ -10,7 +10,7 @@ import {promisify} from 'node:util';
 import {createServer} from 'node:net';
 const exec=promisify(execFile),repository=fileURLToPath(new URL('..',import.meta.url));
 if(process.getuid?.()===0)throw new Error('Run the owned PostgreSQL verifier as an ordinary user.');
-if(process.argv.slice(2).some(value=>value!=='--full'))throw new Error('Usage: node scripts/test-postgres.mjs [--full]');
+if(process.argv.slice(2).some(value=>value!=='--full'))throw new Error('Usage: node scripts/verify-postgres.mjs [--full]');
 const bindir=process.env.CLANK_TEST_POSTGRES_BINDIR??(await exec('pg_config',['--bindir'])).stdout.trim();
 if(!bindir.startsWith('/')||bindir.includes('\0'))throw new Error('An absolute trusted PostgreSQL binary directory is required.');
 const root=await mkdtemp(join(tmpdir(),'clank-postgres-contract-')),data=join(root,'data');

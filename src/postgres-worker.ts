@@ -1,9 +1,10 @@
 // Private PostgreSQL v3 transport. SQL and credentials never leave this worker
 // through an error. The public adapter sends only its own fixed SQL templates.
-import { parentPort } from "node:worker_threads";
-import { connect as connectTCP, isIP } from "node:net";
-import { connect as connectTLS, checkServerIdentity } from "node:tls";
-import { randomBytes, createHash, createHmac, pbkdf2Sync, timingSafeEqual } from "node:crypto";
+export {};
+const [{ parentPort }, { connect: connectTCP, isIP }, { connect: connectTLS, checkServerIdentity },
+  { randomBytes, createHash, createHmac, pbkdf2Sync, timingSafeEqual }] = await Promise.all([
+  import("node:worker_threads"), import("node:net"), import("node:tls"), import("node:crypto"),
+]);
 
 const utf8 = new TextDecoder("utf-8", { fatal: true });
 const i32 = (n: number) => { const b = Buffer.alloc(4); b.writeInt32BE(n); return b; };

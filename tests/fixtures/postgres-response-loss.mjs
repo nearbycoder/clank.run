@@ -6,7 +6,7 @@ if(!process.send||!Number.isInteger(upstream)||upstream<1||upstream>65535)throw 
 const sockets=new Set();let armed=false;
 const server=createServer(client=>{
   const native=connect({host:'127.0.0.1',port:upstream});sockets.add(client);sockets.add(native);
-  let input=Buffer.alloc(0),output=Buffer.alloc(0),startup=true,commit=false;
+  let input=Buffer.alloc(0),output=Buffer.alloc(0),startup=true,commit=false,documentInsert=false,nativeWrite=false;
   const close=()=>{client.destroy();native.destroy();sockets.delete(client);sockets.delete(native);};
   for(const socket of [client,native]){socket.on('error',close);socket.on('close',close);}
   client.on('data',chunk=>{
@@ -15,7 +15,7 @@ const server=createServer(client=>{
       const size=startup?input.readInt32BE(0):input.readInt32BE(1)+1;
       if(size<5||size>1024*1024)return close();if(input.length<size)return;
       const message=input.subarray(0,size);input=input.subarray(size);
-      if(!startup&&message[0]===80){const zero=message.indexOf(0,5),end=message.indexOf(0,zero+1);if(zero===5&&end>zero&&message.subarray(zero+1,end).toString()==='COMMIT'&&armed)commit=true;}
+      if(!startup&&message[0]===80){const zero=message.indexOf(0,5),end=message.indexOf(0,zero+1);if(zero===5&&end>zero){const sql=message.subarray(zero+1,end).toString();documentInsert=sql.startsWith('INSERT INTO public.clank_pg_documents');if(sql==='COMMIT'&&armed&&nativeWrite)commit=true;}}
       startup=false;native.write(message);
     }
   });
@@ -24,6 +24,7 @@ const server=createServer(client=>{
     while(output.length>=5){
       const size=output.readInt32BE(1)+1;if(size<5||size>1024*1024)return close();if(output.length<size)return;
       const message=output.subarray(0,size);output=output.subarray(size);
+      if(documentInsert&&message[0]===67&&message.subarray(5).toString()==='INSERT 0 1\0'){nativeWrite=true;documentInsert=false;}
       if(commit&&message[0]===67&&message.subarray(5).toString()==='COMMIT\0'){
         armed=false;process.send({kind:'native-commit-acknowledgement-dropped'});return close();
       }

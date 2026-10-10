@@ -84,6 +84,14 @@ function synchronous(value: unknown) {
   }
 }
 
+function canonicalSchema(value: any): any {
+  if (Array.isArray(value)) return value.map(canonicalSchema);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value).map(([key, child]) => [key,
+    key === "required" && Array.isArray(child) && child.every(entry => typeof entry === "string")
+      ? [...child].sort() : canonicalSchema(child)]));
+}
+
 async function connect(options: Required<Pick<PostgresOptions,"host"|"port"|"database"|"user"|"password"|"timeoutMs"|"maxRows"|"maxResponseBytes">> & { tls: NonNullable<PostgresOptions["tls"]> }): Promise<Transport> {
   const { Worker } = await import("node:worker_threads");
   // --input-type belongs to the caller's eval/stdin entry point. A worker has
@@ -150,9 +158,9 @@ export async function openPostgres<Schema extends DatabaseSchema<any>>(schema: S
   const description = Object.keys(schema.tables).sort().map(name => {
     const table = schema.tables[name];
     if (!/^[A-Za-z][A-Za-z0-9_]*$/u.test(name) || !Object.isFrozen(table) || !["public","user"].includes(table.ownership)) throw new TypeError("PostgreSQL requires a finalized defineDatabase schema.");
-    return { name, ownership:table.ownership, fields:table.schema.toJSONSchema(), indexes:table.indexes };
+    return { name, ownership:table.ownership, fields:canonicalSchema(table.schema.toJSONSchema()), indexes:table.indexes };
   });
-  const fingerprint = createHash("sha256").update(JSON.stringify(description)).digest("hex");
+  const fingerprint = createHash("sha256").update(stableStringify(description)).digest("hex");
   let transport = await connect(settings), closed = false, busy = false, version = 0, generation = 0;
   const listeners = new Set<(change: DatabaseChange)=>void>();
   const sql = (statement: string, parameters: Array<string|null> = [], commit = false) => transport.query(statement,parameters,commit);
@@ -190,12 +198,22 @@ export async function openPostgres<Schema extends DatabaseSchema<any>>(schema: S
   const notify = (entry: DatabaseChange) => { for (const listener of [...listeners]) try { listener(entry); } catch(error) { report(error); } };
   const synchronize = () => {
     ensureOpen(); if (busy) throw new PostgresError("PG_NESTED_OPERATION");
-    const next = revision(); if (next === version) return;
-    if (next < version) { transport.close(); throw new PostgresError("PG_REVISION_REGRESSED"); }
-    const retained = sql("SELECT min(revision) AS oldest FROM public.clank_pg_changes WHERE namespace=$1",[namespace]).rows[0]?.oldest;
-    const rows = sql("SELECT revision,table_name,id,owner_id FROM public.clank_pg_changes WHERE namespace=$1 AND revision>$2 AND revision<=$3 ORDER BY revision,sequence LIMIT $4",[namespace,String(version),String(next),String(maxRows + 1)]).rows;
-    const all = retained === null || retained === undefined || nativeInteger(retained) > version + 1 || rows.length > maxRows;
-    version = next; notify(change(next,all ? [] : rows.map(row=>({table:row.table_name!,id:row.id!,...(row.owner_id === null ? {} : {ownerId:row.owner_id!})})),all));
+    busy = true; let next = version, entry: DatabaseChange | undefined;
+    try {
+      // Revision, retention boundary and records must share one native snapshot.
+      // A concurrent pruning transaction cannot hide changes already observed.
+      sql("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"); next = revision();
+      if (next < version) { transport.close(); throw new PostgresError("PG_REVISION_REGRESSED"); }
+      if (next !== version) {
+        const retained = sql("SELECT min(revision) AS oldest FROM public.clank_pg_changes WHERE namespace=$1",[namespace]).rows[0]?.oldest;
+        const rows = sql("SELECT revision,table_name,id,owner_id FROM public.clank_pg_changes WHERE namespace=$1 AND revision>$2 AND revision<=$3 ORDER BY revision,sequence LIMIT $4",[namespace,String(version),String(next),String(maxRows + 1)]).rows;
+        const all = retained === null || retained === undefined || nativeInteger(retained) > version + 1 || rows.length > maxRows;
+        entry = change(next,all ? [] : rows.map(row=>({table:row.table_name!,id:row.id!,...(row.owner_id === null ? {} : {ownerId:row.owner_id!})})),all);
+      }
+      sql("COMMIT");
+    } catch(error) { if (!transport.poisoned) try { sql("ROLLBACK"); } catch { /* Preserve the native failure. */ } throw error; }
+    finally { busy = false; }
+    if (entry) { version = next; notify(entry); }
   };
   const unsupported = () => { throw new PostgresError("PG_OPERATION_UNSUPPORTED"); };
   const run = <Value>(handler: (db: any)=>Value, scope: DatabaseScope | undefined, write: boolean, tracked: boolean): TrackedResult<Value> => {
@@ -207,7 +225,7 @@ export async function openPostgres<Schema extends DatabaseSchema<any>>(schema: S
     const dependencies = new Map<string,{table:string;id?:string;ownerId?:string|null}>(), records = new Map<string,DatabaseChangeRecord>();
     const observed = version, started = Date.now();
     let mutations = 0, began = false, result!: Value, snapshot = version, base = version, committed = false;
-    const alive = () => { ensureOpen(); if (!busy || token !== generation) throw new PostgresError("PG_CONTEXT_EXPIRED"); };
+    const alive = () => { ensureOpen(); if (!busy || token !== generation) throw new PostgresError("PG_CONTEXT_EXPIRED"); if (Date.now() - started > timeoutMs) throw new PostgresError("PG_TIMEOUT"); };
     const track = (name: string, id?: string) => { if (tracked) { const own = schema.tables[name].ownership === "user" ? owner : undefined; dependencies.set(`${name}:${id ?? "*"}`,{table:name,...(id ? {id} : {}),...(own === undefined ? {} : {ownerId:own})}); } };
     const admitWrite = () => { alive(); if (!write) throw new PostgresError("PG_READ_ONLY"); if (++mutations > maxWrites) throw new PostgresError("PG_WRITE_LIMIT"); };
     const table = (name: string): any => {
@@ -280,14 +298,15 @@ export async function openPostgres<Schema extends DatabaseSchema<any>>(schema: S
       if (Date.now() - started > timeoutMs) throw new PostgresError("PG_TIMEOUT");
       if (records.size) {
         snapshot = integer(snapshot+1,1,Number.MAX_SAFE_INTEGER,"global revision");
-        sql("UPDATE public.clank_pg_applications SET revision=$2 WHERE namespace=$1",[namespace,String(snapshot)]);
-        let sequence = 0; for (const record of records.values()) sql("INSERT INTO public.clank_pg_changes(namespace,revision,sequence,table_name,id,owner_id) VALUES($1,$2,$3,$4,$5,$6)",[namespace,String(snapshot),String(sequence++),record.table,record.id,record.ownerId ?? null]);
+        alive(); sql("UPDATE public.clank_pg_applications SET revision=$2 WHERE namespace=$1",[namespace,String(snapshot)]);
+        let sequence = 0; for (const record of records.values()) { alive(); sql("INSERT INTO public.clank_pg_changes(namespace,revision,sequence,table_name,id,owner_id) VALUES($1,$2,$3,$4,$5,$6)",[namespace,String(snapshot),String(sequence++),record.table,record.id,record.ownerId ?? null]); }
+        alive();
         sql("DELETE FROM public.clank_pg_changes WHERE namespace=$1 AND revision<$2",[namespace,String(Math.max(1,snapshot-retention+1))]);
         // Drop entire older revisions at the fixed row ceiling. A reader that
         // misses them receives a conservative invalidation, never a partial one.
-        sql("DELETE FROM public.clank_pg_changes WHERE namespace=$1 AND revision <= (SELECT revision FROM public.clank_pg_changes WHERE namespace=$1 ORDER BY revision DESC,sequence DESC OFFSET 100000 LIMIT 1)",[namespace]);
+        alive(); sql("DELETE FROM public.clank_pg_changes WHERE namespace=$1 AND revision <= (SELECT revision FROM public.clank_pg_changes WHERE namespace=$1 ORDER BY revision DESC,sequence DESC OFFSET 100000 LIMIT 1)",[namespace]);
       }
-      sql("COMMIT",[],true); committed = true;
+      alive(); sql("COMMIT",[],true); committed = true;
     } catch(error) { if (began && !transport.poisoned) try { sql("ROLLBACK"); } catch { /* Preserve the operation's error. */ } throw error; }
     finally { busy = false; ++generation; }
     if (committed && snapshot !== version) { version = snapshot; notify(change(version,[...records.values()],base !== observed)); }

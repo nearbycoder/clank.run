@@ -58,7 +58,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends postgresql openssl
       - name: Exercise both stores against an owned native cluster
-        run: node scripts/test-postgres.mjs
+        run: node scripts/verify-postgres.mjs
 
   runtime:
     name: Node ${{ matrix.node }}

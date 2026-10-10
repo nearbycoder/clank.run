@@ -2,6 +2,7 @@
 
 `openPostgres` provides a supported subset of Clank's generated table and function contract.
 It uses a dedicated Node worker and PostgreSQL's parameterized v3 protocol with no NPM driver.
+
 SQLite remains the default application store and the native store for authentication, queues,
 search, reviewed actions and offline mutation receipts. PostgreSQL does not replace the
 platform control catalog or translate SQLite SQL.
@@ -119,12 +120,15 @@ rows, removing entire older revisions; missed changes cause conservative invalid
 are at most 128 schema tables and 1000 change listeners. Synchronous calls block their caller
 until the bounded worker response, so use an application process sized for this execution model.
 
-For native verification, install PostgreSQL server binaries and OpenSSL on a disposable Linux
+Change polling reads revision, retention and records in one repeatable native snapshot, so concurrent
+pruning cannot silently omit an already observed change.
+
+For native verification from a source checkout, install PostgreSQL server binaries and OpenSSL on a disposable Linux
 host, then run as an ordinary user:
 
 ```sh
-node scripts/test-postgres.mjs
-node scripts/test-postgres.mjs --full
+node scripts/verify-postgres.mjs
+node scripts/verify-postgres.mjs --full
 ```
 
 The verifier creates a fresh private cluster with SCRAM and verified TLS, uses the same table
