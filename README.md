@@ -315,6 +315,7 @@ Markdown, JSON, `llms.txt`, and a complete agent corpus.
 - [Localization](docs/localization.md)
 - [Organization and account security](docs/organization-security.md)
 - [Operational recovery, canaries, and alerts](docs/operational-recovery.md)
+- [Project incident workspace](docs/project-incidents.md)
 - [Signed application releases](docs/release-attestations.md)
 - [Recurring reminders and notification delivery](docs/reminders-and-delivery.md)
 - [Runnable documentation examples](docs/runnable-examples.md)
