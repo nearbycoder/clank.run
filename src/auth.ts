@@ -331,6 +331,12 @@ export function authState<Profile extends object>(auth: AuthRequest<Profile>): A
   };
 }
 
+const authDatabases = new WeakMap<object, SQLiteDatabase<any>>();
+/** @internal Native binding; serialized state is never a runtime capability. */
+export function authRuntimeDatabase(runtime: AuthRuntime<any>): SQLiteDatabase<any> | undefined {
+  return authDatabases.get(runtime);
+}
+
 export interface AuthRuntime<Profile extends object = DefaultAuthProfile> {
   readonly definition: AuthDefinition<Profile>;
   resolve(request: Request): Promise<AuthRequest<Profile>>;
@@ -1237,6 +1243,7 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
       void limiter.close().catch(reportError);
     },
   };
+  authDatabases.set(runtime, database);
   return runtime;
 }
 

@@ -399,6 +399,8 @@ Optional module: `@clank.run/framework/component-harness`; see [component harnes
 
 ## Managed buckets
 
+`openMediaProcessing({ database, auth, buckets, transforms, policyRevision, authorize })` queues declared transforms on the existing native job system. The services must share a persistent native catalog. `enqueue(currentAuth, input)` freezes exact generations and retains an owner-scoped operation ID; `get`, `cancel`, `workOnce`, `startWorker` and `close` cover its lifecycle. Publication and bounded receipts commit together, while external providers must honor the stable operation key. See [durable media processing](media-processing.md) for the complete authorization, capacity and recovery contract.
+
 - `defineBucket(input)`: freezes visibility, ownership, browser access, MIME, image, cache,
   per-object, per-owner, and total quota policy.
 - `openBucketManager(options)`: opens the SQLite catalog over any `ObjectStore`, with project-wide

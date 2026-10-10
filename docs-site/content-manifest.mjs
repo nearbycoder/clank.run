@@ -50,6 +50,7 @@ export const groups = [
       ["server", "docs/server.md"],
       ["durable-objects", "docs/durable-objects.md"],
       ["jobs-and-cron", "docs/jobs-and-cron.md"],
+      ["media-processing", "docs/media-processing.md"],
       ["reminders-and-delivery", "docs/reminders-and-delivery.md"],
       ["services", "docs/services.md"],
       ["object-storage", "docs/object-storage.md"],
