@@ -11,7 +11,7 @@ const org='machine_org_exact_01',owner='machine_owner_exact_01',project='machine
 async function setup(t,options={}) {
   const root=await mkdtemp(join(tmpdir(),'clank-service-accounts-')),schema=defineDatabase({}),database=await openSQLite(schema,{path:join(root,'control.sqlite')}),sql=database[Symbol.for('clank.sqlite.internal')];
   sql.exec(`CREATE TABLE clank_platform_organizations(id TEXT PRIMARY KEY); CREATE TABLE clank_platform_projects(id TEXT PRIMARY KEY);
-    CREATE TABLE clank_platform_tokens(id TEXT PRIMARY KEY,token_hash TEXT UNIQUE,user_id TEXT,name TEXT,created_at INTEGER,expires_at INTEGER,organization_id TEXT,project_id TEXT,permissions TEXT,last_used_at INTEGER,revoked_at INTEGER);`);
+    CREATE TABLE clank_platform_tokens(id TEXT PRIMARY KEY,token_hash TEXT UNIQUE,user_id TEXT,name TEXT,created_at INTEGER,expires_at INTEGER,organization_id TEXT,project_id TEXT,permissions TEXT,last_used_at INTEGER,revoked_at INTEGER,preview_name TEXT);`);
   sql.prepare('INSERT INTO clank_platform_organizations VALUES(?)').run(org);sql.prepare('INSERT INTO clank_platform_projects VALUES(?)').run(project);
   let currentTime=20000000,allowed=true,eligible=true,auditFailure=false;const events=[],key=randomBytes(32);
   const hooks={hash:value=>createHash('sha256').update(value).digest('hex'),now:()=>currentTime,eligibleOwner:(organizationId,ownerId,projectId)=>eligible&&organizationId===org&&ownerId===owner&&(!projectId||projectId===project),
@@ -42,6 +42,8 @@ test('rotation, revocation, owner loss, expiry and closed controllers fence alre
   const second=f.store.issue(org,account.id,f.authority,issue(2,'machine_rotation_exact_01'));assert.equal(second.credential.generation,2);assert.throws(()=>prior.assertCurrent(),error=>error.status===401);
   assert.throws(()=>f.store.resolve(first.accessToken),error=>error.status===401);assert.deepEqual(f.store.issue(org,account.id,f.authority,issue()),first);
   const current=f.store.resolve(second.accessToken);f.eligible(false);assert.throws(()=>current.assertCurrent(),error=>error.code==='SERVICE_ACCOUNT_OWNER_INELIGIBLE');f.eligible(true);
+  f.sql.prepare('UPDATE clank_platform_tokens SET preview_name=? WHERE id=?').run('unexpected-preview',second.credential.id);assert.throws(()=>current.assertCurrent(),error=>error.status===401);
+  f.sql.prepare('UPDATE clank_platform_tokens SET preview_name=NULL WHERE id=?').run(second.credential.id);current.assertCurrent();
   f.time(second.credential.expiresAt);assert.throws(()=>current.assertCurrent(),error=>error.status===401);f.time(20000000);
   f.store.change(org,account.id,f.authority,{...creation,enabled:false,expectedVersion:3,operationId:'machine_disable_exact_01'});assert.throws(()=>current.assertCurrent(),error=>error.status===401);
   f.restart();assert.throws(()=>f.store.resolve(second.accessToken),error=>error.status===401);f.store.close();assert.throws(()=>current.assertCurrent(),error=>error.code==='SERVICE_ACCOUNT_CLOSED');
