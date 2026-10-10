@@ -1,4 +1,6 @@
 import { openNodeEvacuations, type NodeEvacuationPlan, type EvacuationProject, type NodeEvacuationHooks } from "./node-evacuation.ts";
+import { openPlatformPointInTime, type PlatformPointInTimeOptions } from "./platform-point-in-time.ts";
+export type { PlatformPointInTimeOptions, PlatformPointInTimePolicy, PlatformPointInTimeCheckpoint } from "./platform-point-in-time.ts";
 import { createManagedCanary, validateManagedCanary, type ManagedCanaryOptions } from "./managed-canary.ts";
 import { decodeReleaseAttestation, verifyReleaseAttestation, type ReleaseAttestation, type ReleaseAttestationPolicy } from "./release-attestation.ts";
 import { createOperationalMonitor, type OperationalSignal, type PlatformOperationsOptions } from "./operations-monitor.ts";
@@ -545,6 +547,8 @@ const PLATFORM_QUOTA_DEFINITIONS = Object.freeze({
 }>);
 
 export interface ClankPlatformOptions {
+  /** Opt-in bounded encrypted checkpoints from registered, explicitly captured provider applications. */
+  pointInTime?: PlatformPointInTimeOptions;
   /** Same-host Linux coordinators; each must occupy a dedicated process. Lost leadership terminates that process. */
   supervisor?: PlatformSupervisorOptions;
   /** Opt-in dedicated organization machine identities with project-scoped credentials. */
@@ -969,6 +973,10 @@ const MAX_ACTIVE_RUNNER_ENROLLMENTS = 50;
 
 /** Opens Clank's self-hostable deployment control plane and release supervisor. */
 export async function openPlatform(options: ClankPlatformOptions): Promise<PlatformRuntime> {
+  if(options.pointInTime){
+    const configured=options.pointInTime;
+    options={...options,pointInTime:Object.freeze({source:configured.source,maxArchiveBytes:configured.maxArchiveBytes,maxEntries:configured.maxEntries,maxArchivesPerProject:configured.maxArchivesPerProject,maxTotalArchiveBytes:configured.maxTotalArchiveBytes})};
+  }
   // Standby activation can be delayed indefinitely. Capture ordinary operator
   // configuration before the first await; changing the caller's input must not
   // turn off leadership or change the trust policy during later takeover.
@@ -1452,11 +1460,39 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
   }) : undefined;
   const secretRotations = await openSecretRotations(storage.internal, { encrypt: value => encryptSecret(value, masterKey), decrypt: value => decryptSecret(value, masterKey), validate: options.validateSecret });
   let serviceAccounts: ReturnType<typeof openPlatformServiceAccounts> | undefined;
+  let pointInTime: Awaited<ReturnType<typeof openPlatformPointInTime>> | undefined;
   let auditExporter: Awaited<ReturnType<typeof openAuditExporter>> | undefined;
   let retentionController: Awaited<ReturnType<typeof createRetentionController>> | undefined;
   let invitationDeliveries: ReturnType<typeof createPlatformInvitationDeliveryScheduler>;
   const usageOpenedAt = Date.now();
   try {
+    if(options.pointInTime){
+      const registeredSource=options.pointInTime.source;
+      pointInTime=await openPlatformPointInTime({internal:storage.internal,directory:paths.root+"/point-in-time",onError:options.onError,
+        assertOwner(projectId,ownerId){
+          const project=projectById(storage.internal,projectId),user=storage.internal.prepare("SELECT disabled FROM clank_auth_users WHERE id=?").get(ownerId);
+          if(!project||project.parentProjectId||!user||user.disabled!==0)throw new PlatformError(403,"RECOVERY_OWNER_REVOKED","Recovery policy ownership is no longer current.");
+          const role=project.organizationId?organizationMembership(storage.internal,project.organizationId,ownerId).role:project.ownerId===ownerId?"owner":null;
+          if(role!=="owner"&&role!=="admin")throw new PlatformError(403,"RECOVERY_OWNER_REVOKED","Recovery policy ownership is no longer current.");
+        },
+        configuration:{...options.pointInTime,async source(projectId){
+          if(!providerPlacement)throw new PlatformError(409,"PROVIDER_PLACEMENT_DISABLED","Provider recovery is not configured.");
+          const project=projectById(storage.internal,projectId),release=project?.activeReleaseId?releaseById(storage.internal,project.activeReleaseId):null;
+          if(!project||project.placement!=="provider"||!release)throw new PlatformError(409,"RECOVERY_SOURCE_UNAVAILABLE","Recovery requires the exact active provider release.");
+          const expected=Object.freeze({projectId,nodeId:exactProviderRuntime(project,release).nodeId,releaseId:release.id,generation:exactProviderRuntime(project,release).generation}),origin=exactProviderOrigin(project,expected.nodeId);
+          const connection=await registeredSource(projectId),assertion=connection.assertCurrent;
+          const check=()=>{
+            const current=projectById(storage.internal,projectId),active=current?.activeReleaseId?releaseById(storage.internal,current.activeReleaseId):null;
+            if(!current||current.placement!=="provider"||!active||active.id!==expected.releaseId)throw new PlatformError(409,"RECOVERY_SOURCE_CHANGED","The active recovery source changed.");
+            const runtime=exactProviderRuntime(current,active);
+            if(runtime.generation!==expected.generation||runtime.nodeId!==expected.nodeId||exactProviderOrigin(current,runtime.nodeId)!==origin)throw new PlatformError(409,"RECOVERY_SOURCE_CHANGED","The active recovery source changed.");
+          };
+          check();
+          if(typeof assertion!=="function"||connection.binding.projectId!==expected.projectId||connection.binding.nodeId!==expected.nodeId||connection.binding.releaseId!==expected.releaseId||connection.binding.generation!==expected.generation||new URL(connection.origin).origin!==origin)throw new PlatformError(409,"RECOVERY_SOURCE_CHANGED","The registered recovery source does not match current native placement.");
+          return {...connection,binding:expected,assertCurrent(){check();const result=assertion.call(connection);check();return result;}};
+        }},
+      });
+    }
     serviceAccounts = options.serviceAccounts ? openPlatformServiceAccounts(storage.internal, options.serviceAccounts, {
     hash: syncHash, encrypt: value => encryptSecret(value, masterKey), decrypt: value => decryptSecret(value, masterKey),
     eligibleOwner(organizationId, ownerId, projectId, permissions) {
@@ -1491,6 +1527,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     pruneUsageStorage(storage.internal, usageOpenedAt, limits.usageRetentionMonths);
     reconcileBackupObjectBinding(storage.internal, backupObjects);
   } catch (error) {
+    await pointInTime?.close();
     serviceAccounts?.close();
     retentionController?.close();
     await auditExporter?.close();
@@ -8904,6 +8941,48 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         accessibleProject(storage.internal, project.id, principal, requiredPermission);
         if (/^backups\/[^/]+\/restore$/u.test(operation) || (!operation && request.method === "DELETE")) requireFreshPlatformAuthentication(principal);
       };
+      if(operation==="point-in-time"||operation.startsWith("point-in-time/")){
+        if(!pointInTime)throw new PlatformError(404,"RECOVERY_NOT_CONFIGURED","Point-in-time recovery is not configured.");
+        const controller=pointInTime;
+        const authority=(fresh=false)=>{
+          requireCurrentProjectAuthority();
+          if(request.method!=="GET"){
+            if(principal.machine||principal.impersonation)throw new PlatformError(403,"HUMAN_AUTH_REQUIRED","Recovery changes require current human authority.");
+            requireOrganizationAdministration(accessibleProject(storage.internal,project.id,principal,operation==="point-in-time"?"tokens":"rollback").role);
+          }
+          if(fresh){
+            const current=principal.sessionId?storage.auth.refreshSession(principal.sessionId):null;
+            if(!current?.user||current.user.id!==principal.userId)throw new PlatformError(403,"FRESH_AUTH_REQUIRED","Verify a passkey or MFA in the current browser session.");
+            storage.auth.requireFreshAuthentication(current,freshAuthenticationAge);
+          }
+        };
+        const perform=async<T>(work:()=>Promise<T>|T):Promise<T>=>{try{return await work();}catch(error){if(error instanceof PlatformError||error instanceof AuthError)throw error;try{options.onError?.(error);}catch{}throw new PlatformError(409,"RECOVERY_CONFLICT","Recovery state or provider authority changed; refresh its status or recover the retained operation.");}};
+        if(operation==="point-in-time"&&request.method==="GET"){
+          authority();return api({ok:true,policy:controller.policy(project.id),checkpoints:controller.checkpoints(project.id)});
+        }
+        if(operation==="point-in-time"&&request.method==="PUT"){
+          const input=plainObject(await readJsonRequest(request,4096));exact(input,["operationId","expectedVersion","enabled","intervalMs","confirmation"]);authority(true);
+          if(input.confirmation!==`configure-recovery ${project.slug}`)throw new PlatformError(400,"CONFIRMATION_REQUIRED",`Pass confirmation "configure-recovery ${project.slug}".`);
+          const configured={operationId:boundedString(input.operationId,"operationId",1,128),expectedVersion:integerInRange(input.expectedVersion,"expectedVersion",0,Number.MAX_SAFE_INTEGER-1),enabled:input.enabled as boolean,intervalMs:integerInRange(input.intervalMs,"intervalMs",1000,86400000)};
+          if(typeof configured.enabled!=="boolean")throw new PlatformError(422,"INVALID_RECOVERY_POLICY","Recovery enabled must be boolean.");
+          const policyAuthority=()=>{authority(true);if(configured.enabled){
+            const latest=accessibleProject(storage.internal,project.id,principal,"tokens").project,release=latest.activeReleaseId?releaseById(storage.internal,latest.activeReleaseId):null;
+            if(latest.placement!=="provider"||!release)throw new PlatformError(409,"RECOVERY_SOURCE_UNAVAILABLE","Enable recovery only for an exact active provider release.");
+            exactProviderOrigin(latest,exactProviderRuntime(latest,release).nodeId);
+          }};
+          const policy=await perform(()=>storage.internal.transaction(changes=>{
+            policyAuthority();const prior=storage.internal.prepare("SELECT 1 FROM clank_platform_pitr_operations WHERE project=? AND id=? AND kind='configure' AND state='accepted'").get(project.id,configured.operationId);
+            const result=controller.configure(project.id,principal.userId,configured,policyAuthority);
+            if(!prior){audit(storage.internal,principal.userId,principal.tokenId,project.id,"recovery.policy",{operationId:configured.operationId,version:result.version,enabled:result.enabled});changes.record("__platform",project.id);}return result;
+          }));return api({ok:true,receipt:policy,policy:controller.policy(project.id)});
+        }
+        if(operation==="point-in-time/checkpoints"&&request.method==="POST"){
+          const input=plainObject(await readJsonRequest(request,4096));exact(input,["operationId","expectedVersion"]);authority();const operationId=boundedString(input.operationId,"operationId",1,128),version=integerInRange(input.expectedVersion,"expectedVersion",1,Number.MAX_SAFE_INTEGER);
+          const current=()=>{authority();if(controller.policy(project.id)?.version!==version)throw new PlatformError(409,"RECOVERY_POLICY_STALE","Review the current recovery policy version.");};
+          const checkpoint=await perform(()=>withProjectLock(project.id,async()=>{current();const result=await controller.capture(project.id,operationId,current);current();return result;}));return api({ok:true,checkpoint},201);
+        }
+        throw new PlatformError(404,"NOT_FOUND","Recovery endpoint not found.");
+      }
       if (operation === "dependencies" && request.method === "GET") {
         requireCurrentProjectAuthority();
         const configuration = dependencyConfiguration(project.id);
@@ -10698,6 +10777,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
   scheduleRuntimeSweep();
   scheduleReleaseWindows();
   backupScheduler.start();
+  pointInTime?.start();
   invitationDeliveries.start();
   auditExporter?.start();
   if (options.retention?.intervalMs !== undefined && options.retention.intervalMs !== false) retentionController?.start();
@@ -10738,6 +10818,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       await auditExporter?.close();
       await invitationDeliveries.close();
       await backupScheduler.close();
+      await pointInTime?.close();
       for (const state of restartState.values()) {
         state.cancelled = true;
         if (state.timer) clearTimeout(state.timer);

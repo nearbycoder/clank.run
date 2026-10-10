@@ -1,0 +1,56 @@
+{
+  "feature": 10,
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/315",
+  "status": "foundation-verified-platform-integration-in-progress",
+  "counted": false,
+  "main": "7bdb73efc3bf297c566d63814223306b047b2792",
+  "foundationNative": {
+    "source": "affd9780938a12dda31b72a1ee8cb0886bce8e87",
+    "tree": "bc73831bbbbac84552bd378bbf26251d623cdf63",
+    "tarSha256": "8459b6290fcd97fad20bef90cab2b888662ee766ac6e2ee8e6e38a74f7572081",
+    "inputs": 1106,
+    "ordinaryUid": 1000,
+    "scope": "Focused encrypted provider/controller recovery foundation, not full feature 10 acceptance or complete release gates.",
+    "results": {
+      "22": {
+        "exit": 0,
+        "counts": {
+          "tests": 34,
+          "pass": 34,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 0
+        },
+        "logSha256": "acf1df1820d38936472e9031f3467f8d024978bd09bd6e4bcfee23cb0d17accf"
+      },
+      "26": {
+        "exit": 0,
+        "counts": {
+          "tests": 34,
+          "pass": 34,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 0
+        },
+        "logSha256": "596bd6b573abf4cff4581ecb1ca4ef46cfcdd86fe6ae5d19ef75e70c7e9e54cc"
+      }
+    }
+  },
+  "types": {
+    "sourceDiagnostics": 159,
+    "newDiagnostics": 0,
+    "unchangedBaseline": 163,
+    "packedFixtures": 34,
+    "logSha256": "d91b57b10a52748104cd745b1b4b42005e3524760567eb2f3c1175f5175f73b4"
+  },
+  "scope": "Verified encrypted provider/controller archives and receipts, real provider HTTP, native rollback/corruption/migration and process-kill recovery. These do not constitute complete feature 10 acceptance.",
+  "pending": [
+    "Current-main authenticated platform integration and live authority checks",
+    "Bounded durable separate stopped-project restore with exact verified release artifact",
+    "Human console, CLI and MCP workflows and actual UI acceptance",
+    "Canonical documentation, package/security/type checks and complete ordinary-user release gates",
+    "Fresh hosted checks and normal protected expected-head merge"
+  ],
+  "acceptedFeatures": 27,
+  "remainingFeatures": 13
+}

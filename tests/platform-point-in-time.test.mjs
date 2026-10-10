@@ -95,3 +95,14 @@ test('partial retained controller schemas fail closed and preserve the encrypted
   assert.equal(f.internal.prepare('SELECT length(contents) AS n FROM clank_platform_pitr_archives WHERE id=?').get(accepted.id).n,accepted.bytes);
   assert.equal(f.internal.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE name='clank_platform_pitr_operations'").get().n,0);
 }));
+
+test('disabling scheduling retains exact accepted checkpoint retries without resolving the provider again',async()=>fixture(async f=>{
+  f.enable();const accepted=await f.capture();f.enable({operationId:'disable_native_02',expectedVersion:1,enabled:false});
+  assert.deepEqual(await f.capture(),accepted);assert.equal(f.resolutions,1);await assert.rejects(f.capture('disabled_new_capture'),/enabled retained policy/);assert.equal(f.resolutions,1);
+}));
+
+test('closing during a stalled registered-source lookup aborts the manual export before the native catalog closes and retains its pending operation',async()=>fixture(async f=>{
+  f.enable();let entered;const started=new Promise(resolve=>{entered=resolve;});f.sourceOverride=()=>{entered();return new Promise(()=>{});};
+  const pending=f.capture('closing_native_capture'),rejected=assert.rejects(pending,/controller closed/);await started;await f.controller.close();await rejected;
+  assert.equal(f.controller.checkpoints('project_native').length,0);assert.equal(f.controller.policy('project_native').pendingOperationId,'closing_native_capture');assert.equal(f.internal.prepare('SELECT lease,lease_until FROM clank_platform_pitr_policies').get().lease,null);
+}));

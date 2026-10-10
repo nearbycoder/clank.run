@@ -42,6 +42,7 @@ export interface PlatformPointInTimeCheckpoint {
   readonly sha256: string;
 }
 const identifier=(value:string)=>{if(typeof value!=="string"||!/^[A-Za-z0-9_-]{1,128}$/u.test(value))throw new TypeError("Invalid recovery identifier.");return value;};
+const operationIdentifier=(value:string)=>{if(typeof value!=="string"||!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(value))throw new TypeError("Invalid recovery operation identifier.");return value;};
 const number=(value:number,min:number,max:number)=>{if(!Number.isSafeInteger(value)||value<min||value>max)throw new TypeError("Invalid bounded recovery number.");return value;};
 const synchronous=(callback:()=>void)=>{const result:unknown=callback();if(result!==undefined){
   if(result&&(typeof result==="object"||typeof result==="function")&&typeof Reflect.get(result,"then")==="function")void Promise.resolve(result).catch(()=>undefined);
@@ -78,7 +79,7 @@ export async function openPlatformPointInTime(options:{
   if(names.length===0)internal.prepare("INSERT INTO clank_platform_pitr_state VALUES(1,1)").run();
   });
   const protocol=()=>{if(internal.prepare("SELECT protocol FROM clank_platform_pitr_state WHERE id=1").get()?.protocol!==1)throw new Error("Unsupported retained platform recovery protocol.");};
-  const report=(error:unknown)=>{try{onError?.(error);}catch{}};
+  const report=(error:unknown)=>{try{void Promise.resolve(onError?.(error)).catch(()=>undefined);}catch{}};
   const row=(project:string)=>{
     protocol();const r=internal.prepare("SELECT * FROM clank_platform_pitr_policies WHERE project=?").get(identifier(project));
     if(r){
@@ -104,8 +105,9 @@ export async function openPlatformPointInTime(options:{
   };
   const capacity=()=>{if(Number(internal.prepare("SELECT count(*) AS n FROM clank_platform_pitr_operations").get()!.n)>=10000)throw new Error("Retained recovery operation capacity is full.");};
   let closed=false,timer:ReturnType<typeof setTimeout>|undefined,flight:Promise<void>|undefined;
+  const captures=new Set<Promise<PlatformPointInTimeCheckpoint>>(),cancellations=new Set<AbortController>();
   const configure=(project:string,owner:string,input:{operationId:string;expectedVersion:number;enabled:boolean;intervalMs:number},assertCurrent:()=>void)=>internal.transaction(()=>{
-    protocol();synchronous(assertCurrent);if(closed)throw new Error("Recovery controller is closed.");identifier(project);identifier(owner);identifier(input.operationId);number(input.expectedVersion,0,Number.MAX_SAFE_INTEGER);number(input.intervalMs,1000,24*60*60*1000);if(typeof input.enabled!=="boolean")throw new TypeError("Recovery policy enabled must be boolean.");
+    protocol();synchronous(assertCurrent);if(closed)throw new Error("Recovery controller is closed.");identifier(project);identifier(owner);operationIdentifier(input.operationId);number(input.expectedVersion,0,Number.MAX_SAFE_INTEGER);number(input.intervalMs,1000,24*60*60*1000);if(typeof input.enabled!=="boolean")throw new TypeError("Recovery policy enabled must be boolean.");
     assertOwner(project,owner);
     const fingerprint=JSON.stringify({owner,...input}),old=internal.prepare("SELECT kind,state,fingerprint,receipt FROM clank_platform_pitr_operations WHERE project=? AND id=?").get(project,input.operationId);
     if(old){if(old.kind!=="configure"||old.state!=="accepted"||old.fingerprint!==fingerprint)throw new Error("Recovery policy retry conflict.");return JSON.parse(String(old.receipt));}
@@ -116,12 +118,13 @@ export async function openPlatformPointInTime(options:{
       ON CONFLICT(project) DO UPDATE SET version=excluded.version,owner=excluded.owner,enabled=excluded.enabled,interval=excluded.interval,next_at=excluded.next_at,error=NULL`).run(project,version,owner,input.enabled?1:0,input.intervalMs,input.enabled?Date.now()+input.intervalMs:null);
     const receipt=policy(project)!;internal.prepare("INSERT INTO clank_platform_pitr_operations VALUES(?,?, 'configure',?,'accepted',?,0,?)").run(project,input.operationId,fingerprint,JSON.stringify(receipt),Date.now());return receipt;
   });
-  const capture=async(project:string,operationId:string,assertCurrent:()=>void):Promise<PlatformPointInTimeCheckpoint>=>{
-    identifier(project);identifier(operationId);protocol();synchronous(assertCurrent);if(closed)throw new Error("Recovery controller is closed.");
-    const configured=row(project);if(!configured||configured.enabled!==1)throw new Error("Recovery exports require an enabled retained policy.");
+  const performCapture=async(project:string,operationId:string,assertCurrent:()=>void):Promise<PlatformPointInTimeCheckpoint>=>{
+    identifier(project);operationIdentifier(operationId);protocol();synchronous(assertCurrent);if(closed)throw new Error("Recovery controller is closed.");
+    const configured=row(project);if(!configured)throw new Error("Recovery exports require a retained policy.");
     const version=Number(configured.version),owner=String(configured.owner),lease=crypto.randomUUID();assertOwner(project,owner);
     const existing=internal.prepare("SELECT * FROM clank_platform_pitr_checkpoints WHERE project=? AND operation=?").get(project,operationId);
     if(existing){archive(project,String(existing.id),assertCurrent);return checkpoint(existing);}
+    if(configured.enabled!==1)throw new Error("Recovery exports require an enabled retained policy.");
     internal.transaction(()=>{
       protocol();synchronous(assertCurrent);assertOwner(project,owner);const current=row(project);if(current?.enabled!==1||current.version!==version||current.owner!==owner)throw new Error("Recovery policy changed.");
       if(current.pending&&current.pending!==operationId || current.lease_until!==null&&Number(current.lease_until)>Date.now())throw new Error("Recovery export already has an active owner or retained operation.");
@@ -135,10 +138,15 @@ export async function openPlatformPointInTime(options:{
       }
       internal.prepare("UPDATE clank_platform_pitr_policies SET pending=?,lease=?,lease_until=?,error=NULL WHERE project=? AND version=?").run(operationId,lease,Date.now()+120000,project,version);
     });
-    let key:Uint8Array|undefined;
-    const current=()=>{protocol();synchronous(assertCurrent);assertOwner(project,owner);const r=row(project);if(closed||r?.enabled!==1||r.version!==version||r.owner!==owner||r.pending!==operationId||r.lease!==lease||Number(r.lease_until)<=Date.now())throw new Error("Recovery export lost its current policy or ownership.");};
+    let key:Uint8Array|undefined;const cancellation=new AbortController();cancellations.add(cancellation);
+    const deadline=setTimeout(()=>cancellation.abort(new Error("Recovery export deadline exceeded.")),30000);deadline.unref?.();
+    const current=()=>{protocol();synchronous(assertCurrent);assertOwner(project,owner);const r=row(project);if(closed||cancellation.signal.aborted||r?.enabled!==1||r.version!==version||r.owner!==owner||r.pending!==operationId||r.lease!==lease||Number(r.lease_until)<=Date.now())throw new Error("Recovery export lost its current policy or ownership.");};
     try{
-      const connection=await source(project);current();
+      const connection=await new Promise<PlatformPointInTimeSource>((resolve,reject)=>{
+        const aborted=()=>{cleanup();reject(cancellation.signal.reason);},cleanup=()=>cancellation.signal.removeEventListener("abort",aborted);
+        if(cancellation.signal.aborted){aborted();return;}cancellation.signal.addEventListener("abort",aborted,{once:true});
+        void Promise.resolve().then(()=>source(project)).then(value=>{cleanup();resolve(value);},error=>{cleanup();reject(error);});
+      });current();
       const binding=providerBinding(connection.binding),origin=new URL(connection.origin),token=connection.token,sourceAssertion=connection.assertCurrent;
       const sourceCurrent=()=>synchronous(sourceAssertion);
       if(binding.projectId!==project||origin.username||origin.password||origin.pathname!=="/"||origin.search||origin.hash||!(origin.protocol==="https:"||origin.protocol==="http:"&&["127.0.0.1","[::1]","localhost"].includes(origin.hostname))||typeof token!=="string"||!/^[A-Za-z0-9_-]{32,512}$/u.test(token)||typeof sourceAssertion!=="function")throw new Error("Recovery source is not a registered private provider origin.");
@@ -152,7 +160,7 @@ export async function openPlatformPointInTime(options:{
         if(intent.receipt===null)internal.prepare("UPDATE clank_platform_pitr_operations SET receipt=? WHERE project=? AND id=? AND state='pending' AND receipt IS NULL").run(receipt,project,operationId);
         else if(intent.receipt!==receipt)throw new Error("Recovery export retry changed its original provider binding.");
       });
-      const response=await fetch(new URL("/__clank/pitr/checkpoint",origin),{redirect:"error",signal:AbortSignal.timeout(30000),headers:{authorization:"Bearer "+token,"x-clank-project-id":binding.projectId,"x-clank-node-id":binding.nodeId,"x-clank-release-id":binding.releaseId,"x-clank-runtime-generation":String(binding.generation),"x-clank-recovery-operation-id":operationId}});
+      const response=await fetch(new URL("/__clank/pitr/checkpoint",origin),{redirect:"error",signal:cancellation.signal,headers:{authorization:"Bearer "+token,"x-clank-project-id":binding.projectId,"x-clank-node-id":binding.nodeId,"x-clank-release-id":binding.releaseId,"x-clank-runtime-generation":String(binding.generation),"x-clank-recovery-operation-id":operationId}});
       current();sourceCurrent();if(!response.ok||response.headers.get("x-clank-recovery-protocol")!=="clank-pitr-archive/1"||!response.body)throw new Error("Recovery provider did not return an authenticated checkpoint.");
       const reader=response.body.getReader(),chunks:Uint8Array[]=[];let bytes=0;
       try{while(true){const part=await reader.read();current();sourceCurrent();if(part.done)break;bytes+=part.value.byteLength;if(bytes>maxBytes)throw new Error("Recovery provider archive exceeds its byte bound.");chunks.push(part.value);}}finally{await reader.cancel().catch(()=>undefined);reader.releaseLock();}
@@ -168,12 +176,15 @@ export async function openPlatformPointInTime(options:{
         internal.prepare("UPDATE clank_platform_pitr_operations SET state='accepted',receipt=?,reserved_bytes=? WHERE project=? AND id=? AND state='pending'").run(JSON.stringify(receipt),bytes,project,operationId);
         internal.prepare("UPDATE clank_platform_pitr_policies SET next_at=?,pending=NULL,lease=NULL,lease_until=NULL,epoch=?,sequence=?,digest=?,error=NULL WHERE project=? AND version=? AND lease=?").run(Date.now()+Number(configured.interval),archive.epoch,archive.sequence,archive.digest,project,version,lease);return receipt;
       });
-    }catch(error){internal.transaction(()=>{protocol();internal.prepare("UPDATE clank_platform_pitr_policies SET lease=NULL,lease_until=NULL,next_at=?,error=? WHERE project=? AND lease=?").run(Date.now()+30000,"Recovery export failed; exact retry or operator recovery is required.",project,lease);});report(error);throw error;}finally{key?.fill(0);}
+    }catch(error){internal.transaction(()=>{protocol();internal.prepare("UPDATE clank_platform_pitr_policies SET lease=NULL,lease_until=NULL,next_at=?,error=? WHERE project=? AND lease=?").run(Date.now()+30000,"Recovery export failed; exact retry or operator recovery is required.",project,lease);});report(error);throw error;}finally{clearTimeout(deadline);cancellations.delete(cancellation);key?.fill(0);}
+  };
+  const capture=(project:string,operationId:string,assertCurrent:()=>void)=>{
+    const pending=performCapture(project,operationId,assertCurrent);captures.add(pending);void pending.then(()=>captures.delete(pending),()=>captures.delete(pending));return pending;
   };
   const run=async()=>{
     if(closed)return;protocol();const rows=internal.prepare("SELECT project,pending FROM clank_platform_pitr_policies WHERE enabled=1 AND next_at<=? AND (lease_until IS NULL OR lease_until<=?) ORDER BY next_at,project LIMIT 5").all(Date.now(),Date.now());
     for(const r of rows){if(closed)return;const project=String(r.project),operation=r.pending===null?"scheduled_"+crypto.randomUUID().replaceAll("-",""):String(r.pending);try{await capture(project,operation,()=>{if(closed)throw new Error("Recovery scheduler closed.");});}catch(error){report(error);}}
   };
   const schedule=()=>{if(closed||timer)return;timer=setTimeout(()=>{timer=undefined;flight=run().catch(report).finally(()=>{flight=undefined;schedule();});},1000);timer.unref?.();};
-  return Object.freeze({policy,configure,capture,archive,checkpoints(project:string){protocol();return internal.prepare("SELECT * FROM clank_platform_pitr_checkpoints WHERE project=? ORDER BY created_at DESC,id DESC LIMIT ?").all(identifier(project),maxArchives).map(checkpoint);},start(){schedule();},async close(){closed=true;if(timer)clearTimeout(timer);await flight;}});
+  return Object.freeze({policy,configure,capture,archive,checkpoints(project:string){protocol();return internal.prepare("SELECT * FROM clank_platform_pitr_checkpoints WHERE project=? ORDER BY created_at DESC,id DESC LIMIT ?").all(identifier(project),maxArchives).map(checkpoint);},start(){schedule();},async close(){closed=true;if(timer)clearTimeout(timer);for(const cancellation of cancellations)cancellation.abort(new Error("Recovery controller closed."));await Promise.allSettled([...captures]);await flight;}});
 }

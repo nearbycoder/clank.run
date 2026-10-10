@@ -1,8 +1,8 @@
 {
   "feature": 6,
   "proposal": "https://github.com/nearbycoder/clank.run/issues/313",
-  "status": "verified-awaiting-final-head-protected-merge",
-  "counted": false,
+  "status": "accepted",
+  "counted": true,
   "base": "0729abca3ed24743b2af1a25089071e7107a81f7",
   "implemented": [
     "Retained native SQLite leadership epoch and exact private process identity",
@@ -19,11 +19,9 @@
     "Eight actual deployed lifecycle/cleanup/configuration checks including response loss after durable publication",
     "One actual packaged platform CLI takeover and one strict environment contract check"
   ],
-  "pending": [
-    "Fresh final report-only head checks and normal protected expected-head squash"
-  ],
-  "acceptedFeatures": 26,
-  "remainingFeatures": 14,
+  "pending": [],
+  "acceptedFeatures": 27,
+  "remainingFeatures": 13,
   "limits": [
     "Same-host Linux private catalog only; no multi-region consensus or network filesystem guarantee",
     "Dedicated coordinator process is terminated on lost leadership",
@@ -314,5 +312,17 @@
     "files": 31,
     "indexSha256": "783a3916d178a5813e6de593c787c807b839a95c0362e0717ca2ad92d950da82",
     "previous95FileIndexUnchanged": true
+  },
+  "protectedAcceptance": {
+    "pullRequest": "https://github.com/nearbycoder/clank.run/pull/314",
+    "head": "730a464ebeb9ef539efd4d39dd71a63e54d2cc59",
+    "merge": "7bdb73efc3bf297c566d63814223306b047b2792",
+    "tree": "dc38208285eb0c9299facad74249aa9552ec8737",
+    "normalExpectedHeadSquash": true,
+    "allSixFinalChecks": "success",
+    "authorComment": 5478557857,
+    "independentApprovalClaim": false,
+    "originalLocalFilesPreserved": 23,
+    "proofSha256": "1fd3ae7b9e57ac266c7d69c3ce208001c1f5a80200f0524d2287825edf9e4f5d"
   }
 }

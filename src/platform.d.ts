@@ -1,4 +1,6 @@
 import type { LinuxHostCertificationOptions } from "./host-certification.js";
+import type { PlatformPointInTimeOptions } from "./platform-point-in-time.js";
+export type { PlatformPointInTimeOptions, PlatformPointInTimePolicy, PlatformPointInTimeCheckpoint } from "./platform-point-in-time.js";
 import type { PlatformSupervisorOptions, PlatformSupervisorStatus } from "./platform-supervisor.js";
 export type { PlatformSupervisorOptions, PlatformSupervisorStatus } from "./platform-supervisor.js";
 import type {PlatformServiceAccountOptions} from "./platform-service-accounts.js";
@@ -314,6 +316,8 @@ export interface PlatformBillingOptions {
     pastDueGraceMs?: number;
 }
 export interface ClankPlatformOptions {
+  /** Opt-in bounded encrypted checkpoints from registered, explicitly captured provider applications. */
+  pointInTime?: PlatformPointInTimeOptions;
     /** Same-host Linux coordinators; each occupies a dedicated process terminated after leadership loss. */
     supervisor?: PlatformSupervisorOptions;
   serviceAccounts?: PlatformServiceAccountOptions;

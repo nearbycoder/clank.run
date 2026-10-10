@@ -1,4 +1,5 @@
 import { createPointInTimeRecoveryProvider, exportPointInTimeRecovery, restorePointInTimeArchive, type PointInTimeRecovery, type PointInTimeArchive, type PointInTimeProviderBinding } from "@clank.run/framework";
+import { openPlatform, type ClankPlatformOptions } from "@clank.run/framework";
 declare const recovery: PointInTimeRecovery;
 declare const archive: PointInTimeArchive;
 const binding: PointInTimeProviderBinding = { projectId: "project", nodeId: "node", releaseId: "release", generation: 1 };
@@ -17,3 +18,10 @@ restorePointInTimeArchive(archive, { encryptionKey: "secret", targetPath: "/priv
 createPointInTimeRecoveryProvider(recovery, { binding, token: "private-provider-control-token" });
 // @ts-expect-error Archive bounds cannot be arbitrary strings.
 exportPointInTimeRecovery(recovery, { maxEntries: "unbounded" });
+const registeredSource = async () => ({binding, origin:"https://provider.example.test", token:"private_provider_credential_0123456789", encryptionKey:new Uint8Array(32), assertCurrent(){}});
+const platformOptions:ClankPlatformOptions = {dataDirectory:"/private/platform",publicUrl:"https://console.example.test",pointInTime:{source:registeredSource,maxArchiveBytes:1024*1024,maxArchivesPerProject:20}};
+openPlatform(platformOptions);
+// @ts-expect-error Operator checkpoint capacity must remain numeric.
+openPlatform({dataDirectory:"/private/platform",publicUrl:"https://console.example.test",pointInTime:{source:registeredSource,maxArchiveBytes:"unbounded"}});
+// @ts-expect-error Source resolution must provide a current ownership assertion and real key bytes.
+openPlatform({dataDirectory:"/private/platform",publicUrl:"https://console.example.test",pointInTime:{source:async()=>({binding,origin:"https://provider.example.test",token:"private_provider_credential_0123456789"})}});
