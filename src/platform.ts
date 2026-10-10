@@ -1,4 +1,5 @@
 import { openNodeEvacuations, type NodeEvacuationPlan, type EvacuationProject, type NodeEvacuationHooks } from "./node-evacuation.ts";
+import { openProjectIncidents, ProjectIncidentError, type PlatformIncidentOptions, type IncidentAuthority } from "./platform-incidents.ts";
 import { createManagedCanary, validateManagedCanary, type ManagedCanaryOptions } from "./managed-canary.ts";
 import { decodeReleaseAttestation, verifyReleaseAttestation, type ReleaseAttestation, type ReleaseAttestationPolicy } from "./release-attestation.ts";
 import { createOperationalMonitor, type OperationalSignal, type PlatformOperationsOptions } from "./operations-monitor.ts";
@@ -541,6 +542,8 @@ const PLATFORM_QUOTA_DEFINITIONS = Object.freeze({
 }>);
 
 export interface ClankPlatformOptions {
+  /** Bounded project incident workspace and optional scoped readonly diagnostic adapter. */
+  incidents?: PlatformIncidentOptions;
   /**
    * Private operator certificates for co-located, loopback provider nodes.
    * Every provider promotion requires a current report under its exact node ID.
@@ -852,6 +855,7 @@ type ProjectPermission =
   | "deploy"
   | "rollback"
   | "jobs"
+  | "incidents"
   | "secrets"
   | "tokens"
   | "audit"
@@ -1304,11 +1308,24 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     },
   }) : undefined;
   const secretRotations = await openSecretRotations(storage.internal, { encrypt: value => encryptSecret(value, masterKey), decrypt: value => decryptSecret(value, masterKey), validate: options.validateSecret });
+  let projectIncidents: Awaited<ReturnType<typeof openProjectIncidents>>;
   let auditExporter: Awaited<ReturnType<typeof openAuditExporter>> | undefined;
   let retentionController: Awaited<ReturnType<typeof createRetentionController>> | undefined;
   let invitationDeliveries: ReturnType<typeof createPlatformInvitationDeliveryScheduler>;
   const usageOpenedAt = Date.now();
   try {
+    projectIncidents = await openProjectIncidents(storage.internal, options.incidents ?? {}, {
+      release(projectId, releaseId) {
+        const row = storage.internal.prepare("SELECT id,digest,created_at,artifact_available FROM clank_platform_releases WHERE project_id=? AND id=?").get(projectId, releaseId);
+        return row ? {id: String(row.id), digest: String(row.digest), createdAt: Number(row.created_at), available: Number(row.artifact_available ?? 1) === 1} : null;
+      },
+      alert(projectId, id) {
+        if (!storage.internal.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_operational_incidents'").get()) return null;
+        const row = storage.internal.prepare("SELECT signal,active,updated_at FROM clank_operational_incidents WHERE key=?").get(id);
+        if (!row) return null;
+        try { return JSON.parse(String(row.signal)).resourceId === projectId ? {state: Number(row.active) === 1 ? "open" : "resolved", observedAt: Number(row.updated_at)} : null; } catch { return null; }
+      },
+    });
     if (options.auditExport) auditExporter = await openAuditExporter(storage.internal, options.auditExport);
     if (options.retention) retentionController = await createRetentionController({ ...options.retention, native: storage.internal, kinds: ["audit"],
       refresh(userId, sessionId) { const auth = storage.auth.refreshSession(sessionId); return auth?.user?.id === userId ? auth : null; },
@@ -8662,6 +8679,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       const operation = matched[2] ?? "";
       const requiredPermission: ProjectPermission = !operation && request.method === "DELETE"
         ? "tokens"
+        : operation === "incidents" || operation.startsWith("incidents/")
+          ? "incidents"
         : operation === "members" || operation.startsWith("members/")
           ? "tokens"
         : operation === "logs"
@@ -8700,13 +8719,43 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
                 : "read";
       const access = accessibleProject(storage.internal, matched[1]!, principal, requiredPermission);
       const project = access.project;
-      if (request.method !== "GET" && request.method !== "HEAD") requireNoEvacuation(project.id);
+      const incidentOperation = operation === "incidents" || operation.startsWith("incidents/");
+      const incidentCredentialHash = incidentOperation && principal.tokenId !== null
+        ? syncHash((request.headers.get("authorization") ?? "").slice(7)) : null;
+      if (!incidentOperation && request.method !== "GET" && request.method !== "HEAD") requireNoEvacuation(project.id);
       const requireCurrentProjectAuthority = () => {
-        if (request.method !== "GET" && request.method !== "HEAD") requireNoEvacuation(project.id);
+        if (!incidentOperation && request.method !== "GET" && request.method !== "HEAD") requireNoEvacuation(project.id);
         requireCurrentPlatformPrincipal(storage, principal);
+        if (incidentCredentialHash !== null && !storage.internal.prepare("SELECT 1 FROM clank_platform_tokens WHERE id=? AND user_id=? AND token_hash=?").get(principal.tokenId, principal.userId, incidentCredentialHash)) {
+          throw new PlatformError(401, "INVALID_TOKEN", "The CLI access token is invalid or expired.");
+        }
         accessibleProject(storage.internal, project.id, principal, requiredPermission);
         if (/^backups\/[^/]+\/restore$/u.test(operation) || (!operation && request.method === "DELETE")) requireFreshPlatformAuthentication(principal);
       };
+      if (incidentOperation) {
+        const ownerAllowed = (userId: string) => Boolean(storage.internal.prepare("SELECT 1 FROM clank_auth_users WHERE id=? AND disabled=0").get(userId)) && projectMembershipAllows(storage.internal, project, userId, "incidents");
+        const authority: IncidentAuthority = {
+          userId: principal.userId,
+          authorize(permission) { requireCurrentProjectAuthority(); if (permission) accessibleProject(storage.internal, project.id, principal, permission); },
+          mayRead(permission) { requireCurrentProjectAuthority(); try { accessibleProject(storage.internal, project.id, principal, permission); return true; } catch (error) { if (error instanceof PlatformError && error.status === 403) return false; throw error; } },
+          ownerAllowed,
+          owners() {
+            const rows = project.organizationId
+              ? storage.internal.prepare("SELECT u.id,u.email FROM clank_platform_memberships m JOIN clank_auth_users u ON u.id=m.user_id WHERE m.organization_id=? AND u.disabled=0 ORDER BY u.email LIMIT 1001").all(project.organizationId)
+              : storage.internal.prepare("SELECT id,email FROM clank_auth_users WHERE id=? AND disabled=0").all(project.ownerId);
+            if (rows.length > 1000) throw new ProjectIncidentError(409, "INCIDENT_OWNER_CAPACITY", "Project member capacity is unavailable.");
+            return rows.filter(row => ownerAllowed(String(row.id))).map(row => ({userId: String(row.id), label: String(row.email).slice(0, 254)}));
+          },
+          audit(action, metadata) { audit(storage.internal, principal.userId, principal.tokenId, project.id, action, metadata); },
+        };
+        if (operation === "incidents" && request.method === "GET") return api({ok: true, ...projectIncidents.list(project.id, authority, url.searchParams)});
+        if (operation === "incidents" && request.method === "POST") return api({ok: true, incident: projectIncidents.create(project.id, authority, await readJsonRequest(request, 16 * 1024))}, 201);
+        if (operation === "incidents/owners" && request.method === "GET") return api({ok: true, owners: projectIncidents.owners(authority)});
+        const incident = /^incidents\/([A-Za-z0-9_-]{8,128})(?:\/(change))?$/u.exec(operation);
+        if (incident && !incident[2] && request.method === "GET") return api({ok: true, detail: await projectIncidents.read(project.id, incident[1]!, authority, url.searchParams)});
+        if (incident?.[2] === "change" && request.method === "POST") return api({ok: true, incident: await projectIncidents.change(project.id, incident[1]!, authority, await readJsonRequest(request, 16 * 1024))});
+        throw new PlatformError(404, "NOT_FOUND", "Incident endpoint not found.");
+      }
       if (operation === "dependencies" && request.method === "GET") {
         requireCurrentProjectAuthority();
         const configuration = dependencyConfiguration(project.id);
@@ -8994,6 +9043,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           activeRelease: release ? publicRelease(release) : null,
           access: {
             role: access.role,
+            canUseIncidents: projectMembershipAllows(storage.internal, project, principal.userId, "incidents", access.role)
+              && (!principal.projectId || principal.permissions.includes("incidents")),
             canDelete: principal.projectId === null && (access.role === "owner" || access.role === "admin"),
             canOperateJobs: roleAllows(access.role, "jobs")
               && (!principal.projectId || principal.permissions.includes("jobs")),
@@ -10425,6 +10476,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     } catch (error) {
       if (error instanceof BackendActionError) return problem(error.status, error.code, error.message);
       if (error instanceof PlatformError) return problem(error.status, error.code, error.message, error.retryAfter);
+      if (error instanceof ProjectIncidentError) return problem(error.status, error.code, error.message);
       if (error instanceof RequestInputError) return problem(error.status, error.code, error.message);
       if (error instanceof AuthError) return problem(error.status, error.code, error.message, error.retryAfter);
       if (error instanceof BillingWebhookError) {
@@ -10506,6 +10558,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     hostingProfile,
     runnerKind: runner.kind ?? "process",
     async close() {
+      projectIncidents.close();
       if (closed) return;
       closed = true;
       if (releaseWindowTimer) clearTimeout(releaseWindowTimer);
@@ -16941,6 +16994,7 @@ const PLATFORM_PROJECT_SECTIONS = new Set([
   "storage",
   "logs",
   "jobs",
+  "incidents",
   "settings",
 ]);
 
@@ -17276,6 +17330,7 @@ const PROJECT_PERMISSIONS: readonly ProjectPermission[] = [
   "deploy",
   "rollback",
   "jobs",
+  "incidents",
   "secrets",
   "tokens",
   "audit",

@@ -12,7 +12,7 @@ const directory = await mkdtemp(join(tmpdir(), "clank-final-lists-"));
 test.after(() => rm(directory, { recursive: true, force: true }));
 await writeFile(join(directory, "package.json"), '{"type":"module"}\n');
 await Promise.all([
-  "platform-console", "ui-theme", "platform-console-project-sort", "platform-console-project-status",
+  "project-incidents", "platform-console", "ui-theme", "platform-console-project-sort", "platform-console-project-status",
   "platform-console-project-workspace", "platform-console-activity-search", "platform-console-activity-action",
   "platform-console-log-search", "platform-console-usage-export",
 ].map(async name => {
@@ -256,7 +256,7 @@ test("043–049: controls have visible native labels, status counts and mobile l
   for (const id of ["member-count", "invitation-count", "release-count", "preview-count", "backup-count", "usage-project-count"]) assert.match(html, new RegExp(`id="${id}" role="status"`));
   assert.match(html, /Filters affect rows only. Totals and CSV include every project/);
   assert.match(html, /\.operational-id code\{[^}]*overflow-wrap:anywhere/);
-  assert.match(lines.find(line => line.startsWith("async function openProject(")), /if\(state.currentProject!==id\)\{resetReleaseWindowView\(\);resetDependencyState\(\);saveEnvironmentDraft\(\);state.environmentProject=null;state.releaseSearch="";state.releaseStatus="";state.releaseArtifacts="all";state.previewSort="expiry";state.backupSearch="";state.backupSort="newest"/);
+  assert.match(lines.find(line => line.startsWith("async function openProject(")), /if\(state.currentProject!==id\)\{if\(state.incidentScope\)resetIncidentWorkspace\(\);resetReleaseWindowView\(\);resetDependencyState\(\);saveEnvironmentDraft\(\);state.environmentProject=null;state.releaseSearch="";state.releaseStatus="";state.releaseArtifacts="all";state.previewSort="expiry";state.backupSearch="";state.backupSort="newest"/);
 });
 
 

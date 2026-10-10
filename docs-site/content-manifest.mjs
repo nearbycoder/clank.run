@@ -128,7 +128,8 @@ export const groups = [
       ["chaos-testing", "docs/chaos-testing.md"],
       ["conformance", "docs/conformance.md"],
       ["recovery", "docs/recovery.md"],
-      ["operational-recovery", "docs/operational-recovery.md"]
+      ["operational-recovery", "docs/operational-recovery.md"],
+      ["project-incidents", "docs/project-incidents.md"]
     ]
   },
   {

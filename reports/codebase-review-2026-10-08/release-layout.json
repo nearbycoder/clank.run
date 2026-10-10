@@ -2,7 +2,7 @@
   "kind": "release prerequisite, not a roadmap feature",
   "proposal": "https://github.com/nearbycoder/clank.run/issues/298",
   "pullRequest": "https://github.com/nearbycoder/clank.run/pull/299",
-  "status": "verified-awaiting-final-hosted-checks-and-protected-merge",
+  "status": "merged",
   "counts": {
     "merged": 24,
     "featureBatches": 21,
@@ -163,10 +163,18 @@
   "evidenceIndexSha256": "74a07b1628dd272135fb739aa02be95a7cf498b4bfc5abdbe3d2ee631e96176a",
   "review": {
     "independent": false,
-    "freshHostedChecks": "Required at final metadata head",
-    "newCodeQlAlerts": "Must be zero",
-    "unresolvedThreads": "Must be zero",
-    "merge": "Normal protected expected-head squash, exact tree verification and safe checkout synchronization"
+    "freshHostedChecks": "All six passed at 88ce0970b01336cdb5a105485dd27d49f9143e99",
+    "newCodeQlAlerts": 0,
+    "unresolvedThreads": 0,
+    "merge": "Normal protected expected-head squash",
+    "commentReviewId": 5477106484,
+    "acceptedCommit": "93fe4dab5925e6e36edaf858882adb45f8312a12",
+    "reviewedHead": "88ce0970b01336cdb5a105485dd27d49f9143e99",
+    "reviewedTree": "98a999a4baae583d91130a2ada6609c02b808d2d",
+    "acceptedTreeMatches": true,
+    "mainCheckoutsSynchronized": true,
+    "existingLocalFilesPreserved": 23,
+    "finalHostedEvidenceSha256": "2793b08c0373220f65f1937a1eda46757003a594f935f1bd30184e2540735940"
   },
   "limitations": [
     "Normalization and the complete suites establish current module behavior; reflective function formatting intentionally changes",

@@ -310,6 +310,7 @@ export interface PlatformBillingOptions {
     pastDueGraceMs?: number;
 }
 export interface ClankPlatformOptions {
+  incidents?: import("./platform-incidents.js").PlatformIncidentOptions;
   /**
    * Private operator certificates for co-located, loopback provider nodes.
    * Every provider promotion requires a current report under its exact node ID.
