@@ -11,6 +11,7 @@ import { openOrganizationSso, type OrganizationSsoOptions, type OrganizationProv
 import { captureLogLines, redactLogSecrets } from "./security.ts";
 import { createSQLiteTaskScope, runSQLiteTask } from "./sqlite-task.ts";
 import { openSecretRotations, type SecretRotationOptions, type SecretRevision } from "./secret-rotation.ts";
+import {openPlatformServiceAccounts, assertServiceAccountProtocol, ServiceAccountError, type PlatformServiceAccountOptions, type ServiceAccountAuthority, type AuthenticatedServiceAccount} from "./platform-service-accounts.ts";
 import {
   AuthError,
   defineAuth,
@@ -541,6 +542,8 @@ const PLATFORM_QUOTA_DEFINITIONS = Object.freeze({
 }>);
 
 export interface ClankPlatformOptions {
+  /** Opt-in dedicated organization machine identities with project-scoped credentials. */
+  serviceAccounts?: PlatformServiceAccountOptions;
   /**
    * Private operator certificates for co-located, loopback provider nodes.
    * Every provider promotion requires a current report under its exact node ID.
@@ -698,6 +701,8 @@ export type PlatformRuntimePolicy = "always_on" | "on_demand" | "suspended";
 
 export interface PlatformRuntime {
   readonly handle: (request: Request) => Promise<Response>;
+  /** Resolve a current machine credential for trusted server-side budget adapters. */
+  authenticateServiceAccount(request: Request): AuthenticatedServiceAccount;
   readonly publicUrl: string;
   readonly dataDirectory: string;
   readonly hostingProfile: PlatformHostingProfile;
@@ -825,6 +830,7 @@ interface EnvironmentPromotionContext {
 }
 
 interface TokenPrincipal {
+  machine?: AuthenticatedServiceAccount;
   tokenId: string | null;
   sessionId: string | null;
   userId: string;
@@ -838,6 +844,16 @@ interface TokenPrincipal {
 
 // Request-local authority never becomes a persisted credential or an audit field.
 const admittedTokenAuthority = new WeakMap<TokenPrincipal, string>();
+function machineProjectPermission(operation: string, method: string): ProjectPermission {
+  if(method==='GET' && ['', 'usage', 'releases', 'backups'].includes(operation)) return 'read';
+  if(method==='GET' && operation==='logs') return 'logs';
+  if(method==='GET' && operation==='audit') return 'audit';
+  if(operation==='secrets' && ['GET','PUT'].includes(method) || /^secrets\/[^/]+$/u.test(operation) && method==='DELETE') return 'secrets';
+  if(operation==='releases' && method==='POST' || operation==='runtime' && ['GET','PUT'].includes(method)) return 'deploy';
+  if(operation==='rollback' && method==='POST') return 'rollback';
+  if(operation==='jobs' && method==='GET' || /^jobs\/job_[a-f0-9]{32}\/(cancel|retry)$/u.test(operation) && method==='POST') return 'jobs';
+  throw new PlatformError(403,'SERVICE_ACCOUNT_SCOPE_DENIED','This project operation requires a human account or a different credential scope.');
+}
 function tokenAuthorityFingerprint(row: Record<string, unknown>): string {
   return syncHash(JSON.stringify([row.token_hash, row.organization_id, row.project_id, row.permissions, row.preview_name, row.expires_at]));
 }
@@ -1291,11 +1307,13 @@ async function openPlatformScoped(options: ClankPlatformOptions): Promise<Platfo
       ? "disabled"
       : "bootstrap";
   const storage = await openPlatformDatabase(paths.controlDatabase, masterKey, authentication);
+  const machineResponseGuards = new WeakMap<Request, () => void>();
   const evacuations = openNodeEvacuations(storage.internal);
   const requireNoEvacuation = (projectId: string) => { if (evacuations.activeForProject(projectId)) throw new PlatformError(409, "PROJECT_EVACUATING", "Resume or cancel the node evacuation before changing this project."); };
   storage.internal.exec("CREATE TABLE IF NOT EXISTS clank_platform_release_attestations (release_id TEXT PRIMARY KEY REFERENCES clank_platform_releases(id) ON DELETE CASCADE, attestation TEXT NOT NULL, verified_at INTEGER NOT NULL)");
   const freshAuthenticationAge = integerInRange(options.freshAuthentication?.maxAgeMs ?? 300_000, "freshAuthentication.maxAgeMs", 1000, 3_600_000);
   const requireFreshPlatformAuthentication = (principal: TokenPrincipal) => {
+    if (principal.machine) throw new PlatformError(403, "HUMAN_AUTH_REQUIRED", "This operation requires a current human browser session.");
     if (!options.freshAuthentication?.required) return;
     const current = principal.sessionId ? storage.auth.refreshSession(principal.sessionId) : null;
     if (!current || current.user?.id !== principal.userId) throw new PlatformError(403, "FRESH_AUTH_REQUIRED", "A browser passkey or MFA verification is required for this operation.");
@@ -1331,11 +1349,21 @@ async function openPlatformScoped(options: ClankPlatformOptions): Promise<Platfo
     },
   }) : undefined;
   const secretRotations = await openSecretRotations(storage.internal, { encrypt: value => encryptSecret(value, masterKey), decrypt: value => decryptSecret(value, masterKey), validate: options.validateSecret });
+  let serviceAccounts: ReturnType<typeof openPlatformServiceAccounts> | undefined;
   let auditExporter: Awaited<ReturnType<typeof openAuditExporter>> | undefined;
   let retentionController: Awaited<ReturnType<typeof createRetentionController>> | undefined;
   let invitationDeliveries: ReturnType<typeof createPlatformInvitationDeliveryScheduler>;
   const usageOpenedAt = Date.now();
   try {
+    serviceAccounts = options.serviceAccounts ? openPlatformServiceAccounts(storage.internal, options.serviceAccounts, {
+    hash: syncHash, encrypt: value => encryptSecret(value, masterKey), decrypt: value => decryptSecret(value, masterKey),
+    eligibleOwner(organizationId, ownerId, projectId, permissions) {
+      if (!storage.internal.prepare("SELECT 1 FROM clank_auth_users u JOIN clank_platform_memberships m ON m.user_id=u.id WHERE u.id=? AND u.disabled=0 AND m.organization_id=?").get(ownerId,organizationId)) return false;
+      if (!projectId) return true;
+      const project=projectById(storage.internal,projectId);
+      return !!project && !project.parentProjectId && project.organizationId===organizationId && (permissions??[]).every(permission=>projectMembershipAllows(storage.internal,project,ownerId,permission));
+    },
+  }) : undefined;
     if (options.auditExport) auditExporter = await openAuditExporter(storage.internal, options.auditExport);
     if (options.retention) retentionController = await createRetentionController({ ...options.retention, native: storage.internal, kinds: ["audit"],
       refresh(userId, sessionId) { const auth = storage.auth.refreshSession(sessionId); return auth?.user?.id === userId ? auth : null; },
@@ -1361,6 +1389,7 @@ async function openPlatformScoped(options: ClankPlatformOptions): Promise<Platfo
     pruneUsageStorage(storage.internal, usageOpenedAt, limits.usageRetentionMonths);
     reconcileBackupObjectBinding(storage.internal, backupObjects);
   } catch (error) {
+    serviceAccounts?.close();
     retentionController?.close();
     await auditExporter?.close();
     storage.auth.close();
@@ -8005,8 +8034,41 @@ async function openPlatformScoped(options: ClankPlatformOptions): Promise<Platfo
         });
       }
 
-      const principal = await requirePlatformPrincipal(storage, request);
+      const principal = await requirePlatformPrincipal(storage, request, serviceAccounts);
       if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) requireCurrentPlatformPrincipal(storage, principal);
+      if (principal.machine) {
+        requireCurrentPlatformPrincipal(storage,principal);
+        machineResponseGuards.set(request,()=>requireCurrentPlatformPrincipal(storage,principal));
+        if (url.pathname==="/api/service-account" && request.method==="GET") return api({ok:true,identity:principal.machine.identity});
+        if (!(url.pathname==="/api/projects" && request.method==="GET") && !url.pathname.startsWith('/api/projects/')) throw new PlatformError(403,"SERVICE_ACCOUNT_SCOPE_DENIED","Service credentials are limited to their project operations.");
+      }
+      const serviceAccountRoute=/^\/api\/organizations\/([A-Za-z0-9_-]{8,128})\/service-accounts(?:\/([A-Za-z0-9_-]{8,128})(?:\/(change|credentials))?)?$/u.exec(url.pathname);
+      if(serviceAccountRoute) {
+        if(!serviceAccounts) throw new PlatformError(404,"NOT_FOUND","Service accounts are not configured.");
+        if(principal.tokenId || principal.impersonation || !principal.sessionId) throw new PlatformError(403,"SERVICE_ACCOUNT_HUMAN_REQUIRED","Service account administration requires a human browser session.");
+        if(url.searchParams.size) throw new PlatformError(422,"SERVICE_ACCOUNT_INPUT","Service account endpoints do not accept query fields.");
+        const organizationId=serviceAccountRoute[1]!,accountId=serviceAccountRoute[2],operation=serviceAccountRoute[3];
+        const authority:ServiceAccountAuthority={userId:principal.userId,
+          authorize(id,write) {
+            requireCurrentPlatformPrincipal(storage,principal);
+            const role=storage.internal.prepare('SELECT role FROM clank_platform_memberships WHERE organization_id=? AND user_id=?').get(id,principal.userId)?.role;
+            if(role!=="owner" && role!=="admin") throw new PlatformError(404,"ORGANIZATION_NOT_FOUND","Organization administration is unavailable.");
+            if(write) {
+              const current=storage.auth.refreshSession(principal.sessionId!);
+              if(!current?.user || current.user.id!==principal.userId) throw new PlatformError(401,"UNAUTHENTICATED","Sign in to continue.");
+              storage.auth.requireFreshAuthentication(current,freshAuthenticationAge);
+            }
+          },
+          audit(action,metadata) {audit(storage.internal,principal.userId,null,null,action,metadata);},
+        };
+        authority.authorize(organizationId,request.method!=="GET");
+        if(!accountId && request.method==="GET") return api({ok:true,accounts:serviceAccounts.list(organizationId,authority)});
+        if(!accountId && request.method==="POST") return api({ok:true,account:serviceAccounts.create(organizationId,authority,await readJsonRequest(request,16*1024))},201);
+        if(accountId && !operation && request.method==="GET") return api({ok:true,detail:serviceAccounts.read(organizationId,accountId,authority)});
+        if(accountId && operation==="change" && request.method==="POST") return api({ok:true,account:serviceAccounts.change(organizationId,accountId,authority,await readJsonRequest(request,16*1024))});
+        if(accountId && operation==="credentials" && request.method==="POST") return api({ok:true,issued:serviceAccounts.issue(organizationId,accountId,authority,await readJsonRequest(request,16*1024))},201);
+        throw new PlatformError(404,"NOT_FOUND","Service account endpoint not found.");
+      }
       const retentionRoute = /^\/api\/retention\/(query|mutation)\/([A-Za-z]+)$/.exec(url.pathname);
       if (retentionRoute && request.method === "POST") {
         if (!retentionController) throw new PlatformError(404, "NOT_FOUND", "Retention administration is not configured.");
@@ -8727,6 +8789,11 @@ async function openPlatformScoped(options: ClankPlatformOptions): Promise<Platfo
                 : "read";
       const access = accessibleProject(storage.internal, matched[1]!, principal, requiredPermission);
       const project = access.project;
+      if(principal.machine) {
+        const permission=machineProjectPermission(operation,request.method);
+        accessibleProject(storage.internal,project.id,principal,permission);
+        machineResponseGuards.set(request,()=>{requireCurrentPlatformPrincipal(storage,principal);accessibleProject(storage.internal,project.id,principal,permission);});
+      }
       if (request.method !== "GET" && request.method !== "HEAD") requireNoEvacuation(project.id);
       const requireCurrentProjectAuthority = () => {
         if (request.method !== "GET" && request.method !== "HEAD") requireNoEvacuation(project.id);
@@ -10450,6 +10517,7 @@ async function openPlatformScoped(options: ClankPlatformOptions): Promise<Platfo
       }
       throw new PlatformError(404, "NOT_FOUND", "Platform endpoint not found.");
     } catch (error) {
+      if (error instanceof ServiceAccountError) return problem(error.status,error.code,error.message);
       if (error instanceof BackendActionError) return problem(error.status, error.code, error.message);
       if (error instanceof PlatformError) return problem(error.status, error.code, error.message, error.retryAfter);
       if (error instanceof RequestInputError) return problem(error.status, error.code, error.message);
@@ -10464,6 +10532,12 @@ async function openPlatformScoped(options: ClankPlatformOptions): Promise<Platfo
 
   const handle = async (request: Request): Promise<Response> => {
     const response = await handleRequest(request);
+    if(response.status<400) {
+      try {machineResponseGuards.get(request)?.();} catch(error) {
+        if(error instanceof ServiceAccountError || error instanceof PlatformError) return problem(error.status,error.code,error.message);
+        return problem(401,'SERVICE_ACCOUNT_INVALID_CREDENTIAL','Refresh service account authority before continuing.');
+      }
+    }
     const requestUrl = new URL(request.url);
     if (!securePublicUrl || normalizeHostname(requestUrl.hostname) !== publicHostname) return response;
     const headers = new Headers(response.headers);
@@ -10528,6 +10602,12 @@ async function openPlatformScoped(options: ClankPlatformOptions): Promise<Platfo
 
   return {
     handle,
+    authenticateServiceAccount(request) {
+      if(!serviceAccounts) throw new PlatformError(401,"INVALID_TOKEN","Service account credentials are unavailable.");
+      const header=request.headers.get('authorization');
+      if(!header || !/^Bearer clsa_[A-Za-z0-9_-]{43}$/u.test(header)) throw new PlatformError(401,"INVALID_TOKEN","Supply a current service account credential.");
+      return serviceAccounts.resolve(header.slice(7));
+    },
     publicUrl,
     dataDirectory: paths.root,
     hostingProfile,
@@ -10550,6 +10630,7 @@ async function openPlatformScoped(options: ClankPlatformOptions): Promise<Platfo
       previewCleanupTimer = undefined;
       await previewCleanupFlight?.catch(() => undefined);
       await operationsMonitor?.close();
+      serviceAccounts?.close();
       retentionController?.close();
       await auditExporter?.close();
       await invitationDeliveries.close();
@@ -10574,6 +10655,7 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array,
   const schema = defineDatabase({});
   const database = await openSQLite(schema, { path });
   const internal = database[SQLITE_INTERNAL];
+  try {assertServiceAccountProtocol(internal);} catch(error) {database.close();throw error;}
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_rate_limits (
     key_hash TEXT PRIMARY KEY,
     attempts TEXT NOT NULL CHECK (json_valid(attempts) AND json_type(attempts) = 'array'),
@@ -11729,10 +11811,10 @@ function reconcilePlatformAdminRoles(
   }
 }
 
-async function requireToken(internal: SQLiteInternal, request: Request): Promise<TokenPrincipal> {
+async function requireToken(internal: SQLiteInternal, request: Request, allowMachine=false): Promise<TokenPrincipal> {
   const authorization = request.headers.get("authorization") ?? "";
-  const matched = /^Bearer ((?:clnk|prct)_[A-Za-z0-9_-]{40,200})$/.exec(authorization);
-  if (!matched) throw new PlatformError(401, "INVALID_TOKEN", "A valid CLI access token is required.");
+  const matched = /^Bearer ((?:clnk|prct|clsa)_[A-Za-z0-9_-]{40,200})$/.exec(authorization);
+  if (!matched || (matched[1]!.startsWith('clsa_') && !allowMachine)) throw new PlatformError(401, "INVALID_TOKEN", "A valid CLI access token is required.");
   const row = internal.prepare(`SELECT t.id, t.user_id, t.token_hash, t.organization_id, t.project_id,
       t.permissions, t.preview_name, t.expires_at, t.revoked_at, u.email, u.disabled
     FROM clank_platform_tokens t
@@ -11758,6 +11840,7 @@ async function requireToken(internal: SQLiteInternal, request: Request): Promise
 }
 
 function requireCurrentPlatformPrincipal(storage: PlatformDatabase, principal: TokenPrincipal): void {
+  principal.machine?.assertCurrent();
   if (principal.tokenId !== null) {
     const active = storage.internal.prepare(`SELECT t.token_hash, t.organization_id, t.project_id,
       t.permissions, t.preview_name, t.expires_at FROM clank_platform_tokens t
@@ -11776,8 +11859,16 @@ function requireCurrentPlatformPrincipal(storage: PlatformDatabase, principal: T
   }
 }
 
-async function requirePlatformPrincipal(storage: PlatformDatabase, request: Request): Promise<TokenPrincipal> {
-  if (request.headers.has("authorization")) return requireToken(storage.internal, request);
+async function requirePlatformPrincipal(storage: PlatformDatabase, request: Request, machines?:ReturnType<typeof openPlatformServiceAccounts>): Promise<TokenPrincipal> {
+  if (request.headers.has("authorization")) {
+    const header=request.headers.get('authorization')!;
+    if(header.startsWith('Bearer clsa_')) {
+      if(!machines) throw new PlatformError(401,"INVALID_TOKEN","Service account credentials are unavailable.");
+      const machine=machines.resolve(header.slice(7)),principal=await requireToken(storage.internal,request,true);
+      machine.assertCurrent();principal.machine=machine;return principal;
+    }
+    return requireToken(storage.internal,request);
+  }
   const auth = await requireBrowserAuth(storage.auth, request);
   const impersonation = resolvePlatformImpersonation(storage.internal, request, auth);
   if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
@@ -11926,7 +12017,7 @@ function accessibleProject(
   if (
     principal.projectId
     && !principal.permissions.includes(permission)
-    && !(permission === "logs" && principal.permissions.includes("read"))
+    && !(permission === "logs" && principal.permissions.includes("read") && !principal.machine)
     && !(
       scopedPreview
       && principal.permissions.includes("previews")
@@ -14754,6 +14845,10 @@ function audit(
   action: string,
   metadata: Record<string, unknown>,
 ): void {
+  if(tokenId && internal.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_platform_machine_credentials'").get()) {
+    const machine=internal.prepare('SELECT account_id,generation FROM clank_platform_machine_credentials WHERE token_id=?').get(tokenId);
+    if(machine) metadata={...metadata,principalKind:'service-account',serviceAccountId:String(machine.account_id),credentialId:tokenId,credentialGeneration:Number(machine.generation)};
+  }
   const projectOrganization = projectId === null
     ? null
     : internal.prepare("SELECT organization_id FROM clank_platform_projects WHERE id = ?").get(projectId);

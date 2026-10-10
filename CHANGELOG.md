@@ -4,6 +4,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Add opt-in dedicated organization service accounts with scoped expiring credentials, current machine authority, signed human administration, encrypted exact rotation receipts and explicit machine audit/budget attribution.
+
 - Revalidate the exact admitted credential and scope for held platform-token requests at current-authority boundaries.
 
 - Reduce framework release size by removing only leading indentation in known

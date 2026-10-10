@@ -343,6 +343,11 @@ Optional module: `@clank.run/framework/component-harness`; see [component harnes
   encrypted secrets, role-filtered audit, release transaction, logs, rollback, and supervision.
 - `PlatformRuntime`: Fetch `.handle`, `.publicUrl`, `.dataDirectory`, resolved `.hostingProfile`,
   `.runnerKind`, and async `.close()`.
+- `openPlatform({ serviceAccounts })`: opt-in dedicated machine accounts, expiring scoped
+  credentials and recently verified human administration. `PlatformRuntime.authenticateServiceAccount(request)`
+  returns a current server capability with `.identity` and `.assertCurrent()`; display JSON
+  cannot authenticate a caller. `createOrganizationServiceAccountClient()` exposes versioned
+  organization administration and explicit exact retries. See [service accounts](service-accounts.md).
 - Runners: dependency-free process runner or constrained Docker runner.
 - `openPlatform({ sqliteIsolation })`: `namespace` by default; `trusted-process` requires an
   explicit `hostingProfile: "trusted"`, process runner, and non-public signup. The policy is
