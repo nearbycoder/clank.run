@@ -88,6 +88,14 @@ activation still requires a verified provider launcher and an atomic control-pla
 The package-supported [provider runtime ingress](provider-runtime-ingress.md) validates this exact
 contract on the other side of the private provider hop.
 
+### Isolated provider candidate routing
+
+`IngressRoute.canary` can describe a separately isolated provider candidate using its exact `projectId`, generation-bound `runtime`, and an explicit `readPaths` list. The candidate must use the same trusted provider origin as the primary, with a distinct project, release and provider path. Paths are exact, unique ASCII paths with no query, fragment, wildcard, encoded characters or dot segments; admit 1–128 paths of at most 512 characters each.
+
+Only anonymous `GET` and `HEAD` requests for an approved path, without a query or body, participate in the candidate traffic percentage. Any cookie or authorization header, an unapproved path, query, or write method keeps the original primary route and credentials. Candidate requests retain only a bounded `Accept` header and the trusted provider binding; custom request headers, credentials and bodies are not copied. Candidate responses cannot set cookies, clear site data or request authentication, and carry `Cache-Control: no-store`. Metrics keep the primary project's accounting identity and the exact selected candidate release.
+
+This low-level routing contract does not prepare a data checkpoint or prove runtime isolation. Publish a candidate only after independently verifying its separate read-only data mount, outbound denial, unchanged migration set, absence of background writers and current provider/controller authority. An unavailable candidate remains an explicit failed candidate request; it cannot become a primary writer. Remove candidate traffic, drain and verify cleanup before the ordinary authoritative deployment with current primary data. Existing local canary routes keep their existing contract. The platform currently refuses provider-managed canary orchestration; this low-level contract is a prerequisite and adding route metadata alone does not enable it.
+
 ### Admission policy
 
 Embedders can apply durable capacity policy after the request body passes its bound and before any

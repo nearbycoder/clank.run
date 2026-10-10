@@ -100,10 +100,19 @@ export function createOrganizationSecurityClient(options: OrganizationSecurityCl
     const userId=options.auth.user.peek()?.id, sessionId=options.auth.session.peek()?.id;
     if(!userId || !sessionId) throw new AuthError('UNAUTHENTICATED','Sign in to manage organization security.',401);
     const current=()=>options.auth.user.peek()?.id===userId && options.auth.session.peek()?.id===sessionId;
-    try {
-      const response=await transport(`${options.url??''}${prefix}/${organizationId}/security-policy${operation}`,{method:input===undefined?'GET':'POST',credentials:'same-origin',redirect:'error',cache:'no-store',signal:AbortSignal.timeout(timeout),headers:input===undefined?{}:{'content-type':'application/json',...options.auth.csrfHeader()},...(input===undefined?{}:{body:JSON.stringify(input)})});
-      let text='',bytes=0; const reader=response.body?.getReader(),decoder=new TextDecoder();
-      if(reader) {try {for(;;) {const part=await reader.read();if(part.done)break;bytes+=part.value.byteLength;if(bytes>32768){void reader.cancel().catch(()=>{});throw new AuthError('ORGANIZATION_POLICY_RESPONSE','Security response exceeds its supported bound.',502);}text+=decoder.decode(part.value,{stream:true});}text+=decoder.decode();}finally{reader.releaseLock();}}
+    const controller=new AbortController();
+    let pending=true,reader:ReadableStreamDefaultReader<Uint8Array>|undefined,timer:ReturnType<typeof setTimeout>|undefined;
+    const timeoutError=()=>new AuthError('ORGANIZATION_POLICY_TIMEOUT','Security request timed out. Read current policy before retrying the exact request.',504);
+    const assertPending=()=>{if(!pending)throw timeoutError();};
+    const deadline=new Promise<never>((_,reject)=>{timer=setTimeout(()=>{
+      pending=false;reject(timeoutError());controller.abort();
+      if(reader)void reader.cancel().catch(()=>{});
+    },timeout);});
+    const work=async()=>{try {
+      const response=await transport(`${options.url??''}${prefix}/${organizationId}/security-policy${operation}`,{method:input===undefined?'GET':'POST',credentials:'same-origin',redirect:'error',cache:'no-store',signal:controller.signal,headers:input===undefined?{}:{'content-type':'application/json',...options.auth.csrfHeader()},...(input===undefined?{}:{body:JSON.stringify(input)})});
+      if(!pending){void response.body?.cancel().catch(()=>{});throw timeoutError();}
+      let text='',bytes=0;reader=response.body?.getReader();const decoder=new TextDecoder();
+      if(reader) {try {for(;;) {const part=await reader.read();assertPending();if(part.done)break;bytes+=part.value.byteLength;if(bytes>32768){void reader.cancel().catch(()=>{});throw new AuthError('ORGANIZATION_POLICY_RESPONSE','Security response exceeds its supported bound.',502);}text+=decoder.decode(part.value,{stream:true});}text+=decoder.decode();}finally{reader.releaseLock();reader=undefined;}}
       if(!current()) throw new AuthError('AUTH_CHANGED','Account changed before the security operation completed.',409);
       let body:any;try{body=JSON.parse(text);}catch{throw new AuthError('ORGANIZATION_POLICY_RESPONSE','Invalid security response.',502);}
       if(!response.ok || body?.ok!==true) throw new AuthError(typeof body?.error?.code==='string'?body.error.code:'ORGANIZATION_POLICY_FAILED',typeof body?.error?.message==='string'?body.error.message:'The security operation failed.',response.status);
@@ -118,12 +127,14 @@ export function createOrganizationSecurityClient(options: OrganizationSecurityCl
         if(!Number.isInteger(preview.affectedMembers) || preview.affectedMembers<0 || preview.affectedMembers>1000 || !Number.isInteger(preview.capableAdministrators) || preview.capableAdministrators<0 || preview.capableAdministrators>preview.affectedMembers
           || typeof preview.recoveryAvailable!=='boolean' || !decision(preview.current) || !decision(preview.proposed)) throw new AuthError('ORGANIZATION_POLICY_RESPONSE','Invalid effective security preview.',502);
       }
-      await options.auth.reload();if(!current()) throw new AuthError('AUTH_CHANGED','Account changed before the security operation completed.',409);
+      await options.auth.reload();assertPending();if(!current()) throw new AuthError('AUTH_CHANGED','Account changed before the security operation completed.',409);
       return body;
     } catch(error) {
-      if(current()) await options.auth.reload();
+      if(pending&&current())await options.auth.reload();
       throw error;
-    }
+    }};
+    try{return await Promise.race([work(),deadline]);}
+    finally{pending=false;clearTimeout(timer);controller.abort();}
   };
   return {async read(id){return (await request(id,'')).policy;},async preview(id,requirements){return (await request(id,'/preview',{requirements})).preview;},
     async change(id,input){return (await request(id,'',input)).policy;},async recover(id,input){return (await request(id,'/recover',input)).policy;}};

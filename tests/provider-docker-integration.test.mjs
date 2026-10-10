@@ -4,7 +4,9 @@ import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
-import { chown, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { chown, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDockerDeploymentRuntimeLauncher } from '../dist/provider-docker.js';
@@ -111,6 +113,104 @@ test('real Docker runtime enforces filesystem/process restrictions, outbound pol
     await launcher?.close();
     if (host) await new Promise((resolve) => host.close(resolve));
     for (const address of addresses) await command('ip', ['route', 'del', `${address}/32`, 'via', '10.201.0.2'], true);
+    await command('ip', ['link', 'del', hostLink], true); remote.kill('SIGKILL');
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('real isolated read-only Docker candidates deny data writes and all external connections before authoritative deployment', {
+  skip: process.env.CLANK_DOCKER_INTEGRATION !== '1' ? 'requires CLANK_DOCKER_INTEGRATION=1 on a disposable VM' : false,
+  timeout: 120_000,
+}, async () => {
+  assert.equal(process.env.CLANK_DISPOSABLE_TEST_HOST, '1');
+  assert.equal(process.platform, 'linux'); assert.equal(process.getuid(), 0);
+  const image = process.env.CLANK_DOCKER_TEST_IMAGE ?? 'node:24-bookworm-slim';
+  await command('docker', ['image', 'inspect', image]);
+  const root = await mkdtemp(join(tmpdir(), 'clank-real-readonly-'));
+  const owner = `readonly-integration-${process.pid.toString(16)}`;
+  const projectId = 'readonly_candidate', releaseId = 'readonly_release';
+  const providerRoot = join(root, 'provider'), project = join(providerRoot, 'projects', projectId);
+  const releaseDirectory = join(project, 'generations', `g1-${releaseId}`), data = join(project, 'data');
+  const databasePath = join(data, 'app.sqlite');
+  const plan = await createLinuxDockerNetworkPlan(owner, projectId, { allowCidrs: [], hosts: {} });
+  const hostLink = `rth${process.pid.toString(16)}`, peerLink = `rtp${process.pid.toString(16)}`;
+  const remote = spawn('/usr/bin/unshare', ['--net', process.execPath, '--eval', "require('node:http').createServer((q,s)=>s.end('native-positive-control')).listen(40220,'0.0.0.0',()=>console.log('ready'));"], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const inside = args => command('nsenter', ['--target', String(remote.pid), '--net', executable('ip'), ...args]);
+  let launcher, host;
+  try {
+    await new Promise((resolve, reject) => { remote.stdout.once('data', resolve); remote.once('error', reject); remote.once('exit', code => reject(new Error(`read-only positive endpoint exited ${code}`))); });
+    await command('ip', ['link', 'add', hostLink, 'type', 'veth', 'peer', 'name', peerLink]);
+    await command('ip', ['addr', 'add', '10.202.0.1/24', 'dev', hostLink]); await command('ip', ['link', 'set', hostLink, 'up']);
+    await command('ip', ['link', 'set', peerLink, 'netns', String(remote.pid)]);
+    await inside(['addr', 'add', '10.202.0.2/24', 'dev', peerLink]); await inside(['link', 'set', peerLink, 'up']); await inside(['link', 'set', 'lo', 'up']);
+    await inside(['route', 'add', 'default', 'via', '10.202.0.1']); await inside(['addr', 'add', '1.1.1.1/32', 'dev', 'lo']);
+    await command('ip', ['route', 'add', '1.1.1.1/32', 'via', '10.202.0.2']); await command('sysctl', ['-w', 'net.ipv4.ip_forward=1']);
+    await mkdir(join(releaseDirectory, 'dist'), { recursive: true, mode: 0o700 });
+    await mkdir(join(releaseDirectory, 'migrations'), { mode: 0o700 }); await mkdir(data, { mode: 0o700 });
+    const database = new DatabaseSync(databasePath);
+    try { database.exec('CREATE TABLE values_seen(value TEXT NOT NULL); INSERT INTO values_seen VALUES (\'primary-checkpoint\');'); }
+    finally { database.close(); }
+    const checkpointHash = createHash('sha256').update(await readFile(databasePath)).digest('hex');
+    await writeFile(join(releaseDirectory, 'dist', 'server.mjs'), `
+      import {createServer} from 'node:http'; import {writeFile} from 'node:fs/promises'; import {DatabaseSync} from 'node:sqlite';
+      const database=new DatabaseSync('/data/app.sqlite',{readOnly:true});
+      const attempt=async(fn)=>{try{await fn();return 'ok'}catch(error){return {code:error.code,message:error.message}}};
+      createServer(async(request,response)=>{
+        const url=new URL(request.url,'http://localhost');let value={ok:true};
+        if(url.pathname==='/readonly') value={
+          file:await attempt(()=>writeFile('/data/forbidden','must not persist')),
+          sqlite:await attempt(()=>database.exec("INSERT INTO values_seen VALUES ('forbidden')")),
+          values:database.prepare('SELECT value FROM values_seen').all(),
+        };
+        if(url.pathname==='/probe') value=await fetch(url.searchParams.get('url'),{signal:AbortSignal.timeout(700)}).then(async result=>({ok:true,body:await result.text()}),()=>({ok:false}));
+        response.setHeader('content-type','application/json');response.end(JSON.stringify(value));
+      }).listen(Number(process.env.PORT),process.env.HOST);
+    `, { mode: 0o600 });
+    const own = async (directory) => { await chown(directory, 1000, 1000); for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const file = join(directory, entry.name); if (entry.isDirectory()) await own(file); else await chown(file, 1000, 1000);
+    } };
+    await own(releaseDirectory); await own(data);
+    host = createServer((_request, response) => response.end('native-positive-control'));
+    await new Promise((resolve) => host.listen(0, '0.0.0.0', resolve));
+    const bridge = JSON.parse((await command('docker', ['network', 'inspect', 'bridge'])).stdout)[0];
+    const endpoint = `http://${bridge.IPAM.Config[0].Gateway}:${host.address().port}`;
+    const allowedEndpoint = 'http://1.1.1.1:40220';
+    // Both destinations must work in an unrestricted container on this host.
+    const before = await command('docker', ['run', '--rm', '--network', 'bridge', image, 'node', '--input-type=module', '--eval',
+      `for(const url of ${JSON.stringify([endpoint, allowedEndpoint])}){const body=await fetch(url,{signal:AbortSignal.timeout(2000)}).then(result=>result.text());if(body!=='native-positive-control')throw Error(body);console.log(body);}`]);
+    assert.deepEqual(before.stdout.trim().split('\n'), ['native-positive-control', 'native-positive-control']);
+    const config = parseDeploymentConfig({ version: 1, entry: 'dist/server.mjs', include: ['dist', 'migrations'], database: { path: 'app.sqlite', migrations: 'migrations' }, health: { path: '/healthz', timeoutMs: 10_000 }, env: {} });
+    launcher = await openDockerDeploymentRuntimeLauncher({ rootDirectory: providerRoot, owner, image, allowMutableImage: true,
+      user: '1000:1000', portStart: 25320, portEnd: 25325, stopTimeoutMs: 1000,
+      // Even an operator allowance cannot grant candidate egress.
+      outboundNetwork: { allowCidrs: ['1.1.1.1/32'] } });
+    const candidate = await launcher.launch({ isolatedReadOnly: true, signal: new AbortController().signal, prepared: {
+      projectId, releaseId, generation: 1, fence: 1, capsuleSha256: 'b'.repeat(64), releaseDirectory, databasePath, config,
+      environment: {}, ingress: { route: `/v1/clank/apps/${projectId}`, token: 'readonly-runtime-token-long-enough' },
+      migrationCount: 0, previous: null, alreadyCommitted: false,
+    } });
+    assert.equal(candidate.isolatedReadOnly, true);
+    const result = await fetch(`${candidate.upstream}/readonly`).then(response => response.json());
+    assert.equal(result.file.code, 'EROFS'); assert.equal(result.sqlite.code, 'ERR_SQLITE_ERROR'); assert.match(result.sqlite.message, /readonly/iu);
+    assert.deepEqual(result.values, [{ value: 'primary-checkpoint' }]);
+    assert.equal(createHash('sha256').update(await readFile(databasePath)).digest('hex'), checkpointHash);
+    assert.equal(existsSync(join(data, 'forbidden')), false);
+    assert.deepEqual(await fetch(`${candidate.upstream}/probe?url=${encodeURIComponent(endpoint)}`).then(response => response.json()), { ok: false });
+    assert.deepEqual(await fetch(`${candidate.upstream}/probe?url=${encodeURIComponent(allowedEndpoint)}`).then(response => response.json()), { ok: false });
+    await assert.rejects(launcher.activate(candidate, new AbortController().signal), /activation is refused/u);
+    assert.throws(() => launcher.commit(candidate), /cannot be committed/u);
+    const containers = (await command('docker', ['container', 'ls', '--all', '--quiet', '--filter', `label=run.clank.owner=${owner}`])).stdout.trim().split('\n').filter(Boolean);
+    assert.equal(containers.length, 1);
+    const inspected = JSON.parse((await command('docker', ['container', 'inspect', containers[0]])).stdout)[0];
+    assert.equal(inspected.Mounts.find(mount => mount.Destination === '/data').RW, false);
+    assert.equal(inspected.HostConfig.ReadonlyRootfs, true);
+    assert.equal(await launcher.stop(projectId, 1), true);
+    assert.equal((await command('docker', ['container', 'ls', '--all', '--quiet', '--filter', `label=run.clank.owner=${owner}`])).stdout.trim(), '');
+    assert.notEqual((await command('docker', ['network', 'inspect', plan.network], true)).code, 0);
+    assert.notEqual((await command('nft', ['list', 'table', 'inet', plan.table], true)).code, 0);
+  } finally {
+    await launcher?.close(); if (host) await new Promise(resolve => host.close(resolve));
+    await command('ip', ['route', 'del', '1.1.1.1/32', 'via', '10.202.0.2'], true);
     await command('ip', ['link', 'del', hostLink], true); remote.kill('SIGKILL');
     await rm(root, { recursive: true, force: true });
   }
