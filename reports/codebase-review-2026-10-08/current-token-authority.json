@@ -2,7 +2,7 @@
   "maintenance": "held-platform-token-authority",
   "proposal": "https://github.com/nearbycoder/clank.run/issues/304",
   "pullRequest": "https://github.com/nearbycoder/clank.run/pull/305",
-  "status": "verified-awaiting-protected-merge",
+  "status": "merged",
   "roadmapFeatureIncrement": 0,
   "contract": {
     "trigger": "A real HTTP request authenticates headers, then waits for the remaining upload while its token grant changes.",
@@ -118,7 +118,14 @@
   "review": {
     "independent": false,
     "runtimeHosted": "All six checks passed at the integrated source02 runtime head, including no new CodeQL alerts. Fresh final-head checks and current threads remain required.",
-    "remaining": "Fresh final-head checks, author COMMENT, and normal expected-head protected merge."
+    "remaining": null,
+    "finalHead": "c97fd19ecdabcb09c3b9c44e8bbd7b3d5d7306c0",
+    "allFinalChecksPassed": true,
+    "authorComment": 5477668835,
+    "acceptedMain": "8b839a2386ed699b939dec2105e412e2be835838",
+    "reviewedTree": "1c9f1a51ed6ce471f24628ad856592dbe77967b1",
+    "acceptedTree": "1c9f1a51ed6ce471f24628ad856592dbe77967b1",
+    "originalFilesPreserved": 23
   },
   "previousSources": [
     {
