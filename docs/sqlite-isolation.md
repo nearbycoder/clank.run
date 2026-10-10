@@ -6,7 +6,7 @@ or network administration privileges without giving those privileges to SQLite w
 provider's own capability state is unchanged. `setpriv`, `prlimit` and `bwrap` must all be
 installed; inability to clear capabilities or create namespaces fails closed.
 
-On Linux, Clank opens application databases only inside a private Bubblewrap filesystem namespace for migration planning/execution, backup/restore, platform job inspection/mutation, recovery inspection, preview sanitization, bucket usage, and rehearsal inspection. This contains application-controlled database paths and SQLite sidecars even when an application substitutes symbolic links or replaces a directory while a request is starting.
+By default on Linux, Clank opens application databases inside a private Bubblewrap filesystem namespace for migration planning/execution, backup/restore, platform job inspection/mutation, recovery inspection, preview sanitization, bucket usage, and rehearsal inspection. This contains application-controlled database paths and SQLite sidecars even when an application substitutes symbolic links or replaces a directory while a request is starting.
 
 Install `bubblewrap` and `util-linux` at their standard `/usr/bin/bwrap` and `/usr/bin/prlimit` paths. The host must permit unprivileged user namespaces and Bubblewrap mount, PID, IPC, and network namespaces. Namespace setup fails closed; Clank never retries a failed sandbox operation outside the sandbox. Containerized control planes need an operator-configured environment that permits this nested sandbox. Installing the executables alone does not prove that the container's seccomp or AppArmor policy permits namespaces.
 
@@ -20,6 +20,31 @@ The shared scheduler admits at most two active workers, with one active worker f
 
 Other operating systems retain bounded child processes but do not receive this Linux filesystem boundary. Run untrusted tenants on a supported Linux sandbox host; a non-Linux development process is not a substitute for tenant isolation.
 
+## Trusted process hosting
+
+On a host that blocks nested namespaces, such as the documented single-service Railway setup,
+an operator can explicitly set `CLANK_SQLITE_ISOLATION=trusted-process`. This requires
+`CLANK_HOSTING_PROFILE=trusted`, `CLANK_RUNNER=process`, and bootstrap or disabled public signup.
+Every deployer, uploaded database, and application must already be trusted with the control-plane
+Unix user's filesystem and network authority. The setting never enables itself after a namespace
+failure, and cannot be selected by an application manifest or CLI deployment request.
+
+Trusted helpers retain separate child processes, scheduler admission, bounded pipes, stripped
+environment/preload hooks, the SQLite heap limit, and the execution deadline. On Linux they also
+retain `setpriv` capability clearing and all `prlimit` memory/CPU/core limits; `util-linux` must
+remain installed. They do not provide filesystem/network namespaces or the private 64 MiB scratch
+tmpfs. Keep namespace mode for untrusted deployers.
+
+Programmatic control planes select `sqliteIsolation: "trusted-process"` with explicit
+`hostingProfile: "trusted"`, a process runner, and non-public signup. The policy follows that
+instance's startup/recovery, request handlers, and background timers. Other instances and
+standalone migration/provider helpers keep their default namespace policy. Invalid settings fail
+before opening platform storage. Startup logs report the selected service mode.
+
+There is no schema change. To return to namespace isolation, unset the service variable and
+restart on a host that permits Bubblewrap. Updating the CLI alone cannot fix a hosted control
+plane's namespace restriction; deploy the updated server and configure its service variable.
+
 ## Verification
 
 Ubuntu 24.04 also requires explicit AppArmor namespace permission. The repository's CI installs the system packages above plus nftables, iproute2 and procps, then loads `scripts/ci-linux.apparmor` on its disposable runner. That grants namespace creation to `/usr/bin/bwrap` and the test utility `/usr/bin/unshare`; it preserves the global namespace restriction. Production operators must review a profile for their own host and service rather than automatically installing the CI profile.
@@ -27,10 +52,10 @@ Ubuntu 24.04 also requires explicit AppArmor namespace permission. The repositor
 Run the real namespace and scheduling regressions locally after building:
 
 ```sh
-node --test tests/sqlite-sandbox.test.mjs tests/sqlite-isolation.test.mjs
+node --test tests/sqlite-sandbox.test.mjs tests/sqlite-isolation.test.mjs tests/sqlite-trusted-process.test.mjs
 ```
 
-The Linux tests use actual Bubblewrap namespaces and SQLite, without a Docker daemon. They check out-of-directory SQL attachment, database and ancestor symlinks, replacement of a directory after it was pinned, host networking isolation, read-only runtime mounts, backup sidecar handling, native memory/time limits, event-loop responsiveness, queue fairness, admission caps, and expiration. A missing or prohibited Linux sandbox makes these tests fail rather than silently skip. The normal test gate includes both files; no external CI run is needed for development.
+The Linux tests use actual Bubblewrap namespaces and SQLite, without a Docker daemon. They check out-of-directory SQL attachment, database and ancestor symlinks, replacement of a directory after it was pinned, host networking isolation, read-only runtime mounts, backup sidecar handling, native memory/time limits, event-loop responsiveness, queue fairness, admission caps, and expiration. A missing or prohibited Linux sandbox makes the namespace tests fail rather than silently skip. Separate trusted-process tests verify retained resource limits, migration/backup/restore behavior, and concurrent policy separation. The normal test gate includes these files; no external CI run is needed for development.
 
 During coverage collection, each worker receives its own pinned profile directory. The
 host publishes profiles under unique collector-compatible names after the worker closes.
@@ -40,4 +65,4 @@ and the existing single malformed-artifact retry remain unchanged.
 
 ## Migration and rollback
 
-There is no database schema change. Before upgrading a Linux host, install the two system packages and run the verification command under the same user, container, and security profile as the production control plane. Move databases placed directly in broad shared system directories into per-application directories. Existing project layouts already meet this requirement. An upgrade intentionally refuses namespace execution when the host policy does not permit it. Rolling back restores the previous worker behavior and removes this filesystem security boundary; restrict deployers and data-directory writers to trusted operators before doing so.
+There is no database schema change. Before upgrading a namespace-isolated Linux host, install the two system packages and run the verification command under the same user, container, and security profile as the production control plane. Move databases placed directly in broad shared system directories into per-application directories. Existing project layouts already meet this requirement. Namespace mode intentionally refuses execution when host policy prohibits it. Versions before the trusted-process option require working namespaces on Linux, so rolling back to one of those versions on a restricted container also restores the deployment failure.
