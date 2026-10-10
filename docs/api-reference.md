@@ -749,13 +749,16 @@ See [Service drivers](services.md) and [Invitations and email delivery](invitati
 - `defineJobs({ schema }).jobs(builders)`: inference-first nested job tree sharing an application
   database schema.
 - `defineWorkflow({ args, graph, returns?, output?, agent? })`: typed acyclic graph over ordinary
-  jobs. `step(job, { needs?, args })` declares explicit result flow and parallel-ready work.
+  jobs and durable waits. `step(job, { needs?, args })` declares explicit result flow;
+  `wait({ mode, needs?, timeoutMs, returns, request })` declares a typed decision/event result
+  without a runnable job. Wait mappers are synchronous; deadlines are 1 second through 30 days.
 - `defineWorkflows(jobSystem, tree)`: registers stable nested workflow paths on a job system.
 - `job({ args, returns?, queue?, priority?, timeoutMs?, retry?, schedules?, handler })`: validated
   async handler definition with agent/operator metadata.
 - Mutation `context.jobs.enqueue(definition, args, options?)`: transactional, owner-scoped enqueue.
 - `openJobs(definition, { database, ...options })`: low-level durable runtime for an already-open
-  Clank SQLite database.
+  Clank SQLite database. Wait graphs require `workflowWaits: { signingKey, policyRevision }`;
+  use one persistent 32–1024 character secret and increasing revision across all processes.
 - `runJobProcess(runtime, options?)`: provider-neutral worker/scheduler entry with environment role
   selection and graceful signals.
 - `normalizeCron(expression)` / `nextCronOccurrence(expression, after, timezone?)`: strict
@@ -766,8 +769,18 @@ See [Service drivers](services.md) and [Invitations and email delivery](invitati
   paths, dependency edges, descriptions, and agent metadata.
 - `JobRuntime`: `.enqueue`, `.publisher`, `.get`, `.list`, `.events`, `.stats`, `.cancel`, `.retry`,
   `.purge`, `.startWorkflow`, `.getWorkflow`, `.listWorkflows`, `.workflowEvents`,
+  `.getWorkflowWait`, `.resumeWorkflowWait`,
   `.cancelWorkflow`, `.purgeWorkflows`, `.advanceWorkflows`, `.workOnce`, `.scheduleOnce`,
   `.startWorker`, `.startScheduler`, `.close`.
+- `JobRuntime.getWorkflowWait(workflowId, step)`: trusted server ticket containing the persisted
+  request, owner, deadline, state/version and secret resume token. Ordinary inventory/events
+  omit tokens. Independently authorize every adapter exposing a ticket or accepting an event.
+- `JobRuntime.resumeWorkflowWait({ waitId, expectedVersion, resumeToken, idempotencyKey, choice,
+  result? })`: synchronous transactional resume/deny. Human decisions require current accepted
+  reviewed-action execution by the run owner; external adapters authenticate their provider.
+  Schema validation, current policy/token and exact version prevent stale transitions. Exact
+  retained retries return historical receipts; changed retries reject. No anonymous endpoint
+  is installed. See [durable waits](jobs-and-cron.md#durable-decision-and-event-waits).
 - `openPlatform({ jobs: { alertDueAfterMs } })`: sets the hosted overdue-work alert threshold
   without changing application retry or scheduling policy.
 - Hosted job API:

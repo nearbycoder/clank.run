@@ -279,6 +279,117 @@ role checks, validation, MCP scopes, confirmation metadata, and audit behavior r
 Set `agent: false` on a workflow to omit its graph from authenticated MCP contract metadata while
 retaining it for application and operator use.
 
+## Durable decision and event waits
+
+Use `wait` when the graph needs a reviewed human decision or an authenticated external event.
+The wait is a persisted dependency, with no runnable job, lease, sleeping handler or occupied
+worker slot. Other ready jobs continue normally. Its schema-validated result flows into later
+steps just like a completed job result:
+
+```ts
+const reviewedRelease = defineWorkflow({
+  args: { release: s.string() },
+  graph: ({ step, wait }) => {
+    const build = step(jobDefinitions.jobs.build, {
+      args: ({ input }) => ({ release: input.release }),
+    });
+    const decision = wait({
+      mode: "decision",
+      needs: [build],
+      timeoutMs: 24 * 60 * 60_000,
+      returns: s.object({ approved: s.literal(true) }),
+      request: ({ input, result }) => ({
+        title: `Review release ${input.release}`,
+        data: { artifact: result(build).artifact },
+      }),
+    });
+    const publish = step(jobDefinitions.jobs.publish, {
+      needs: [build, decision],
+      args: ({ result }) => ({
+        artifact: result(build).artifact,
+        approved: result(decision).approved,
+      }),
+    });
+    return { build, decision, publish };
+  },
+  output: ({ results }) => results.publish,
+});
+```
+
+Register this graph with `defineWorkflows`. Configure `jobs.workflowWaits` in `openBackend`,
+or `workflowWaits` in `openJobs`, with `{ signingKey, policyRevision }`. The key must be an
+explicit persistent 32–1024 character secret shared by every controller and worker. Do not
+generate a new key at each startup. Change the positive safe-integer policy revision whenever
+rotating the key. An older revision or a different key at the same revision fails initialization;
+publication of a newer revision fences already-open old controllers. Only its hash is stored.
+
+Waits start after all declared dependencies succeed. Their request mapper must synchronously
+return `{ title, data? }`; title is 1–1000 characters and the serialized request is at most
+16 KiB. `timeoutMs` is 1 second through 30 days, measured from the first persisted wait admission.
+Reconciliation and restart retain that absolute deadline. At the deadline a resume is refused;
+normal worker reconciliation records timeout and fails the run. Keep a worker or a bounded
+`advanceWorkflows()` loop running even when no ordinary jobs are due. No per-wait timer is needed.
+
+Ordinary run inventory shows `waiting`, with `awaiting-decision` or `awaiting-event` on the
+corresponding step. Manifests show mode, result schema, deadline duration and dependency edges;
+they do not contain tokens. A trusted server calls `getWorkflowWait(runId, stepName)` to inspect
+the owner, persisted request, deadline, state/version and secret `resumeToken`. Independently
+check current access before exposing any of that inventory. Treat the token as a credential;
+keep it out of logs, URLs, browser state, public events and persisted review input/preview.
+
+For a human decision, compose an existing [reviewed action](governance.md). Its `authorize`
+checks current requester access and its `authorizeApproval` checks current browser approver
+authority. Use `previewDependencies: "records"` only when all application authorization/preview
+reads use `context.db`. Bind the preview to the exact wait ID/version/request and a SHA-256 digest
+of its token. In `execute`, reread the current ticket, require the same ID/version/digest, then
+call `resumeWorkflowWait` with that current ticket. Persist the digest, not the plaintext token.
+These explicit comparisons also reject wait changes and signing-key rotation after preview;
+private wait reads are not application record dependencies. The reviewed-action commit rechecks
+requester and approver sessions, permission, expiry and declared record dependencies before its
+synchronous execution. A raw decision resume outside this accepted execution is refused, including
+after the reviewed action finishes. Owned runs require the reviewed requester to be their owner.
+The native approval inbox wraps long previews and returns HTML form decisions to the inbox with
+their updated status. JSON and non-HTML clients retain their decision response. Approval alone
+does not resume the wait; the authorized requester must commit the reviewed action.
+
+Inside that accepted action, or inside a separately authenticated external-event adapter, submit:
+
+```ts
+const receipt = runtime.jobs.resumeWorkflowWait({
+  waitId: ticket.id,
+  expectedVersion: ticket.version,
+  resumeToken: ticket.resumeToken,
+  idempotencyKey: "unique-operation-key-0001",
+  choice: "resume",
+  result: { approved: true },
+});
+```
+
+Use `choice: "deny"` without a result to fail the wait and cancel remaining graph work. A human
+denial is itself an accepted reviewed action choosing that outcome; declining an ordinary review
+does not execute it or resume the workflow. For `mode: "event"`, authenticate the upstream
+provider's signature or credentials and authorize the exact workflow before submitting. The
+framework installs no anonymous resume endpoint and accepts no client `approved` flag as human
+authority. Tokens do not replace current application or provider authorization.
+
+Resume/deny is synchronous and shares a surrounding application/reviewed-action SQLite write
+transaction. Result validation is capped at 64 KiB or the smaller configured result limit.
+Keys are 16–128 characters using letters, digits, underscore, dot, colon or hyphen. An exact
+current-authorized retry returns the retained historical receipt without enqueuing again; a
+changed version/token/choice/result or decision requester rejects. Cancellation, deadline and
+resume contend on the same write lock and terminal version. A lost response after commit can be
+retried after restart. Downstream jobs retain ordinary at-least-once execution semantics, so
+external effects still require their own idempotency contract.
+
+The database admits at most 10,000 retained waits, at most 100 per graph, and 20,000 retained
+receipts. Capacity fails admission without evicting pending decisions or retry authority. Existing
+terminal-run purge and retention also remove that run's waits/receipts; after purge the old wait
+ID is unknown and cannot be replayed. Disable new definitions deliberately and keep pending
+state for recovery. Private wait/policy/receipt tables use protocol 1; unknown protocols fail
+startup. Existing graphs keep their previous revisions and stored states. Back up before
+enabling waits; rollback requires a verified compatible binary/schema/configuration snapshot.
+An older binary cannot safely coordinate pending new waits.
+
 ## Add cron schedules
 
 Schedules live on a job definition and enqueue the same validated handler:

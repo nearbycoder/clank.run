@@ -2,7 +2,7 @@
   "maintenance": "organization-offboarding-credential-fencing",
   "proposal": "https://github.com/nearbycoder/clank.run/issues/291",
   "pullRequest": "https://github.com/nearbycoder/clank.run/pull/292",
-  "status": "verified-awaiting-final-hosted-checks-and-protected-merge",
+  "status": "merged",
   "roadmapFeatureIncrement": 0,
   "contract": {
     "scope": "Publish complete organization/provider offboarding fingerprint inventory in the existing schema/policy/projection transaction",
@@ -17,7 +17,7 @@
     "archiveSha256": "ce37d7175e9639b610754f7cf6d3000a8c5a64239b8a8d0bf343480634f98549",
     "files": 1039,
     "integratedMain": "1232317b74dd0f384b5416604cd4544b717d2049",
-    "postProofChanges": "Report metadata only; 1,037 non-report source inputs remain hash-equal"
+    "postProofChanges": "Only report metadata changed; 1,037 other tracked inputs remain hash-equal"
   },
   "validation": {
     "completeGates": [
@@ -108,10 +108,47 @@
   "evidenceIndexSha256": "6450620802eb78dfb820273a0d855e6168b7e44f6c1a5794d95207a4e972a1a0",
   "review": {
     "independent": false,
-    "freshHostedChecks": "Required at final metadata head",
-    "newCodeQlAlerts": "Must be zero",
-    "unresolvedThreads": "Must be zero",
-    "merge": "Normal protected expected-head squash, followed by exact tree equality and both-checkout sync"
+    "head": "0b949f8e8eef2aa72d6354960b128ecec1f2bb64",
+    "tree": "6b6bc695c328378e77d05b9944505dfbb567fba9",
+    "freshHostedChecks": [
+      {
+        "id": 114074393624,
+        "name": "CodeQL",
+        "conclusion": "success"
+      },
+      {
+        "id": 114073979989,
+        "name": "Node 24",
+        "conclusion": "success"
+      },
+      {
+        "id": 114073979935,
+        "name": "Node 22.16",
+        "conclusion": "success"
+      },
+      {
+        "id": 114073979920,
+        "name": "Packaged-release conformance",
+        "conclusion": "success"
+      },
+      {
+        "id": 114073979625,
+        "name": "Semantic and packed consumer types",
+        "conclusion": "success"
+      },
+      {
+        "id": 114073979570,
+        "name": "JavaScript and TypeScript analysis",
+        "conclusion": "success"
+      }
+    ],
+    "newCodeQlAlerts": 0,
+    "unresolvedThreads": 0,
+    "authorComment": 5476437405,
+    "merge": "9a76326bd1a8e4f7ffdc97c6d3fdf7629a6eaf2a",
+    "method": "Normal protected expected-head squash; exact reviewed tree equality verified",
+    "finalHostedProofSha256": "a5564da1fea09bd32c4dd5d761d9388d5ccb81e86e9403a198b9659482fede89",
+    "checkoutSync": "Primary checkout and shared local main reference updated; concurrent original fix/control-panel-mobile-navigation branch preserved; all 23 existing files preserved"
   },
   "limitations": [
     "Complete operator-owned provider inventory must be published for the shared store",

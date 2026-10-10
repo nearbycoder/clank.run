@@ -151,7 +151,7 @@ export interface WorkflowAgentOptions {
 }
 export interface WorkflowStepContext<Input> {
     readonly input: Input;
-    result<Step extends AnyWorkflowStepDefinition>(step: Step): JobOutput<Step["job"]>;
+    result<Step extends AnyWorkflowStepDefinition>(step: Step): WorkflowStepOutput<Step>;
 }
 export interface WorkflowStepDefinition<Input, Job extends AnyJobDefinition> {
     readonly kind: "workflow-step";
@@ -160,15 +160,28 @@ export interface WorkflowStepDefinition<Input, Job extends AnyJobDefinition> {
     readonly description?: string;
     readonly args: (context: WorkflowStepContext<Input>) => JobInput<Job>;
 }
-export type AnyWorkflowStepDefinition = WorkflowStepDefinition<any, AnyJobDefinition>;
+export interface WorkflowWaitRequest { readonly title: string; readonly data?: unknown; }
+export interface WorkflowWaitStepDefinition<Input, Output> {
+  readonly kind: "workflow-wait";
+  readonly mode: "decision" | "event";
+  readonly needs: readonly AnyWorkflowStepDefinition[];
+  readonly description?: string;
+  readonly timeoutMs: number;
+  readonly returns: Schema<Output>;
+  readonly request: (context: WorkflowStepContext<Input>) => WorkflowWaitRequest;
+}
+export type AnyWorkflowStepDefinition = WorkflowStepDefinition<any, AnyJobDefinition> | WorkflowWaitStepDefinition<any, any>;
+export type WorkflowStepOutput<Step> = Step extends WorkflowStepDefinition<any, infer Job> ? JobOutput<Job>
+  : Step extends WorkflowWaitStepDefinition<any, infer Output> ? Output : never;
+
 export type WorkflowStepTree = Readonly<Record<string, AnyWorkflowStepDefinition>>;
 export type WorkflowResults<Steps extends WorkflowStepTree> = Readonly<{
-    [Name in keyof Steps]: JobOutput<Steps[Name]["job"]>;
+    [Name in keyof Steps]: WorkflowStepOutput<Steps[Name]>;
 }>;
 export interface WorkflowOutputContext<Input, Steps extends WorkflowStepTree> {
     readonly input: Input;
     readonly results: WorkflowResults<Steps>;
-    result<Step extends Steps[keyof Steps]>(step: Step): JobOutput<Step["job"]>;
+    result<Step extends Steps[keyof Steps]>(step: Step): WorkflowStepOutput<Step>;
 }
 export interface WorkflowDefinition<
     Input,
@@ -199,6 +212,15 @@ export type WorkflowOutput<Workflow> = Workflow extends WorkflowDefinition<any, 
     ? Output
     : never;
 export interface WorkflowGraphBuilder<Input> {
+  wait<Output>(definition: {
+    mode: "decision" | "event";
+    needs?: readonly AnyWorkflowStepDefinition[];
+    description?: string;
+    timeoutMs: number;
+    returns: Schema<Output>;
+    request: (context: WorkflowStepContext<Input>) => WorkflowWaitRequest;
+  }): WorkflowWaitStepDefinition<Input, Output>;
+
     step<Job extends AnyJobDefinition>(job: Job, definition: {
         needs?: readonly AnyWorkflowStepDefinition[];
         description?: string;
@@ -240,8 +262,31 @@ export interface JobHandle {
     readonly deduplicated: boolean;
 }
 
-export type WorkflowState = "running" | "succeeded" | "failed" | "cancelled";
-export type WorkflowStepState = "blocked" | "queued" | "running" | "succeeded" | "failed" | "cancelled";
+export type WorkflowState = "running" | "waiting" | "succeeded" | "failed" | "cancelled";
+export type WorkflowStepState = "blocked" | "queued" | "running" | "awaiting-decision" | "awaiting-event" | "succeeded" | "failed" | "cancelled";
+export type WorkflowWaitState = "pending" | "resumed" | "denied" | "timed-out" | "cancelled";
+export interface WorkflowWaitTicket {
+  readonly id: string; readonly workflowId: string; readonly step: string;
+  readonly mode: "decision" | "event"; readonly state: WorkflowWaitState;
+  readonly request: WorkflowWaitRequest; readonly ownerId: string | null;
+  readonly version: number; readonly createdAt: number; readonly deadline: number;
+  /** Trusted server only. Never expose without independently checking current access. */
+  readonly resumeToken: string;
+}
+export interface WorkflowWaitResume {
+  waitId: string; expectedVersion: number; resumeToken: string;
+  idempotencyKey: string; choice: "resume" | "deny"; result?: unknown;
+}
+export interface WorkflowWaitReceipt {
+  readonly waitId: string; readonly workflowId: string; readonly step: string;
+  readonly state: "resumed" | "denied"; readonly version: number; readonly acceptedAt: number;
+  readonly reviewPlanId: string | null; readonly requester: string | null; readonly approver: string | null;
+}
+export declare class WorkflowWaitError extends Error {
+  readonly code: string;
+  constructor(code: string, message: string);
+}
+
 export interface WorkflowStartOptions {
     idempotencyKey?: string;
 }
@@ -398,6 +443,7 @@ export interface WorkflowManifestEntry {
         readonly job: string;
         readonly needs: readonly string[];
         readonly description?: string;
+        readonly wait?: { readonly mode: "decision" | "event"; readonly timeoutMs: number; readonly returns: Record<string, unknown> };
     }[];
     readonly agent: false | Readonly<WorkflowAgentOptions>;
 }
@@ -431,6 +477,7 @@ export interface RunJobProcessOptions {
 }
 
 export interface OpenJobsOptions {
+    workflowWaits?: { signingKey: string; policyRevision: number };
     tracer?: Tracer;
     now?: () => number;
     random?: () => number;
@@ -452,6 +499,8 @@ export interface JobRuntime<Definition extends JobSystemDefinition<any, any>>
     getWorkflow(id: string): StoredWorkflowRun | null;
     listWorkflows(options?: WorkflowListOptions): StoredWorkflowRun[];
     workflowEvents(id: string, options?: { limit?: number }): WorkflowEvent[];
+    getWorkflowWait(workflowId: string, step: string): WorkflowWaitTicket | null;
+    resumeWorkflowWait(input: WorkflowWaitResume): WorkflowWaitReceipt;
     cancelWorkflow(id: string): boolean;
     purgeWorkflows(options?: WorkflowPurgeOptions): number;
     advanceWorkflows(options?: { limit?: number }): number;

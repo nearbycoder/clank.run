@@ -7,7 +7,7 @@ import {
   type SQLiteDatabase,
   type WriteDatabase,
 } from "./backend.ts";
-import { SQLITE_INTERNAL, type SQLiteInternal } from "./sqlite-internal.ts";
+import { SQLITE_INTERNAL, currentReviewedExecution, type SQLiteInternal } from "./sqlite-internal.ts";
 
 export type JobArgs = Schema<any> | SchemaShape;
 export type InferJobArgs<Args extends JobArgs> = Args extends Schema<any>
@@ -252,7 +252,7 @@ export interface WorkflowAgentOptions {
 export interface WorkflowStepContext<Input> {
   readonly input: Input;
   /** Read the validated result of a declared dependency. */
-  result<Step extends AnyWorkflowStepDefinition>(step: Step): JobOutput<Step["job"]>;
+  result<Step extends AnyWorkflowStepDefinition>(step: Step): WorkflowStepOutput<Step>;
 }
 
 export interface WorkflowStepDefinition<Input, Job extends AnyJobDefinition> {
@@ -263,16 +263,28 @@ export interface WorkflowStepDefinition<Input, Job extends AnyJobDefinition> {
   readonly args: (context: WorkflowStepContext<Input>) => JobInput<Job>;
 }
 
-export type AnyWorkflowStepDefinition = WorkflowStepDefinition<any, AnyJobDefinition>;
+export interface WorkflowWaitRequest { readonly title: string; readonly data?: unknown; }
+export interface WorkflowWaitStepDefinition<Input, Output> {
+  readonly kind: "workflow-wait";
+  readonly mode: "decision" | "event";
+  readonly needs: readonly AnyWorkflowStepDefinition[];
+  readonly description?: string;
+  readonly timeoutMs: number;
+  readonly returns: Schema<Output>;
+  readonly request: (context: WorkflowStepContext<Input>) => WorkflowWaitRequest;
+}
+export type AnyWorkflowStepDefinition = WorkflowStepDefinition<any, AnyJobDefinition> | WorkflowWaitStepDefinition<any, any>;
+export type WorkflowStepOutput<Step> = Step extends WorkflowStepDefinition<any, infer Job> ? JobOutput<Job>
+  : Step extends WorkflowWaitStepDefinition<any, infer Output> ? Output : never;
 export type WorkflowStepTree = Readonly<Record<string, AnyWorkflowStepDefinition>>;
 export type WorkflowResults<Steps extends WorkflowStepTree> = Readonly<{
-  [Name in keyof Steps]: JobOutput<Steps[Name]["job"]>;
+  [Name in keyof Steps]: WorkflowStepOutput<Steps[Name]>;
 }>;
 
 export interface WorkflowOutputContext<Input, Steps extends WorkflowStepTree> {
   readonly input: Input;
   readonly results: WorkflowResults<Steps>;
-  result<Step extends Steps[keyof Steps]>(step: Step): JobOutput<Step["job"]>;
+  result<Step extends Steps[keyof Steps]>(step: Step): WorkflowStepOutput<Step>;
 }
 
 export interface WorkflowDefinition<
@@ -308,6 +320,14 @@ export type WorkflowOutput<Workflow> = Workflow extends WorkflowDefinition<any, 
   : never;
 
 export interface WorkflowGraphBuilder<Input> {
+  wait<Output>(definition: {
+    mode: "decision" | "event";
+    needs?: readonly AnyWorkflowStepDefinition[];
+    description?: string;
+    timeoutMs: number;
+    returns: Schema<Output>;
+    request: (context: WorkflowStepContext<Input>) => WorkflowWaitRequest;
+  }): WorkflowWaitStepDefinition<Input, Output>;
   step<Job extends AnyJobDefinition>(
     job: Job,
     definition: {
@@ -333,6 +353,20 @@ export function defineWorkflow<
   const args = toSchema(definition.args);
   const created = new Set<AnyWorkflowStepDefinition>();
   const builder = Object.freeze<WorkflowGraphBuilder<InferJobArgs<Args>>>({
+    wait(waitDefinition) {
+      if (!waitDefinition || !["decision", "event"].includes(waitDefinition.mode)
+        || typeof waitDefinition.returns?.parse !== "function" || typeof waitDefinition.request !== "function") {
+        throw new TypeError("Workflow waits require a mode, result schema and synchronous request mapper.");
+      }
+      const timeoutMs = integer(waitDefinition.timeoutMs, "workflow wait timeoutMs", 1_000, 30 * 24 * 60 * 60_000);
+      if ((waitDefinition.needs?.length ?? 0) > 100) throw new TypeError("A workflow wait cannot have more than 100 dependencies.");
+      const description = optionalText(waitDefinition.description, "workflow step description", 16 * 1024);
+      const step = Object.freeze({ kind: "workflow-wait" as const, mode: waitDefinition.mode, timeoutMs,
+        needs: Object.freeze([...(waitDefinition.needs ?? [])]), returns: waitDefinition.returns,
+        request: waitDefinition.request, ...(description ? { description } : {}) });
+      created.add(step);
+      return step;
+    },
     step(job, stepDefinition) {
       if (!isJobDefinition(job)) throw new TypeError("Workflow steps require a job from defineJobs().");
       if (typeof stepDefinition?.args !== "function") throw new TypeError("Workflow steps require an args mapper.");
@@ -409,6 +443,7 @@ export function defineWorkflows<
     if (seen.has(workflow)) throw new TypeError(`A workflow definition cannot be reused at more than one path: ${path}`);
     seen.add(workflow);
     for (const [stepName, step] of Object.entries(workflow.steps)) {
+      if (step.kind === "workflow-wait") continue;
       const jobName = jobPath(step.job);
       if (jobs.get(jobName) !== step.job) {
         throw new TypeError(`Workflow step ${path}.${stepName} uses a job outside this job system.`);
@@ -444,8 +479,30 @@ export interface JobHandle {
   readonly deduplicated: boolean;
 }
 
-export type WorkflowState = "running" | "succeeded" | "failed" | "cancelled";
-export type WorkflowStepState = "blocked" | "queued" | "running" | "succeeded" | "failed" | "cancelled";
+export type WorkflowState = "running" | "waiting" | "succeeded" | "failed" | "cancelled";
+export type WorkflowStepState = "blocked" | "queued" | "running" | "awaiting-decision" | "awaiting-event" | "succeeded" | "failed" | "cancelled";
+export type WorkflowWaitState = "pending" | "resumed" | "denied" | "timed-out" | "cancelled";
+export interface WorkflowWaitTicket {
+  readonly id: string; readonly workflowId: string; readonly step: string;
+  readonly mode: "decision" | "event"; readonly state: WorkflowWaitState;
+  readonly request: WorkflowWaitRequest; readonly ownerId: string | null;
+  readonly version: number; readonly createdAt: number; readonly deadline: number;
+  /** Trusted server only. Never expose without independently checking current access. */
+  readonly resumeToken: string;
+}
+export interface WorkflowWaitResume {
+  waitId: string; expectedVersion: number; resumeToken: string;
+  idempotencyKey: string; choice: "resume" | "deny"; result?: unknown;
+}
+export interface WorkflowWaitReceipt {
+  readonly waitId: string; readonly workflowId: string; readonly step: string;
+  readonly state: "resumed" | "denied"; readonly version: number; readonly acceptedAt: number;
+  readonly reviewPlanId: string | null; readonly requester: string | null; readonly approver: string | null;
+}
+export class WorkflowWaitError extends Error {
+  readonly code: string;
+  constructor(code: string, message: string) { super(message); this.name = "WorkflowWaitError"; this.code = code; }
+}
 
 export interface WorkflowStartOptions {
   /** Stable caller key. Repeated starts return the existing retained run. */
@@ -628,6 +685,7 @@ export interface WorkflowManifestEntry {
     readonly job: string;
     readonly needs: readonly string[];
     readonly description?: string;
+    readonly wait?: { readonly mode: "decision" | "event"; readonly timeoutMs: number; readonly returns: Record<string, unknown> };
   }[];
   readonly agent: false | Readonly<WorkflowAgentOptions>;
 }
@@ -674,6 +732,8 @@ export interface RunJobProcessOptions {
 }
 
 export interface OpenJobsOptions {
+  /** Explicit persistent secret and increasing revision shared by all controllers/workers. */
+  workflowWaits?: { signingKey: string; policyRevision: number };
   /** Propagate request traces through durable jobs and across worker processes. */
   tracer?: Tracer;
   now?: () => number;
@@ -696,6 +756,10 @@ export interface JobRuntime<Definition extends JobSystemDefinition<any, any>>
   getWorkflow(id: string): StoredWorkflowRun | null;
   listWorkflows(options?: WorkflowListOptions): StoredWorkflowRun[];
   workflowEvents(id: string, options?: { limit?: number }): WorkflowEvent[];
+  /** Trusted server inventory; tokens are excluded from ordinary workflow manifests/events. */
+  getWorkflowWait(workflowId: string, step: string): WorkflowWaitTicket | null;
+  /** Human decisions require execution inside an accepted current reviewed action. */
+  resumeWorkflowWait(input: WorkflowWaitResume): WorkflowWaitReceipt;
   cancelWorkflow(id: string): boolean;
   purgeWorkflows(options?: WorkflowPurgeOptions): number;
   /** Reconcile bounded durable workflow state; workers call this automatically. */
@@ -791,6 +855,12 @@ interface WorkflowStepRow extends Record<string, unknown> {
   completed_at: number | null;
 }
 
+interface WorkflowWaitRow extends Record<string, unknown> {
+  id: string; workflow_id: string; step_name: string; mode: "decision" | "event";
+  state: WorkflowWaitState; request: string; nonce: string; version: number;
+  created_at: number; deadline: number;
+}
+
 export function openJobs<Definition extends JobSystemDefinition<any, any>>(
   definition: Definition,
   options: OpenJobsOptions & { database: SQLiteDatabase<Definition["schema"]> },
@@ -803,6 +873,43 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
   ensureJobSchema(internal);
   const registry = flattenJobs(definition.jobs);
   const workflowRegistry = flattenWorkflows(definition.workflows ?? {});
+  const waitConfig = options.workflowWaits ? Object.freeze({ ...options.workflowWaits }) : undefined;
+  if (waitConfig && (typeof waitConfig.signingKey !== "string" || waitConfig.signingKey.length < 32
+    || waitConfig.signingKey.length > 1024 || !Number.isSafeInteger(waitConfig.policyRevision) || waitConfig.policyRevision < 1)) {
+    throw new TypeError("workflowWaits requires a 32–1024 character signingKey and positive safe policyRevision.");
+  }
+  if (!waitConfig && [...workflowRegistry.values()].some(workflow => Object.values(workflow.steps).some(step => step.kind === "workflow-wait"))) {
+    throw new TypeError("Workflow wait definitions require workflowWaits configuration.");
+  }
+  const waitsEnabled = Boolean(waitConfig) || Boolean(internal.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_workflow_wait_state'").get());
+  const waitCrypto = waitsEnabled ? (globalThis as any).process.getBuiltinModule("node:crypto") : undefined;
+  const waitFingerprint = waitConfig ? waitCrypto.createHash("sha256").update(waitConfig.signingKey).digest("hex") as string : null;
+  if (waitsEnabled) internal.transaction(() => {
+    internal.exec(`CREATE TABLE IF NOT EXISTS clank_workflow_wait_state (
+      singleton INTEGER PRIMARY KEY CHECK(singleton=1), protocol INTEGER NOT NULL,
+      revision INTEGER NOT NULL, fingerprint TEXT NOT NULL, enabled INTEGER NOT NULL)`);
+    internal.exec(`CREATE TABLE IF NOT EXISTS clank_workflow_waits (
+      id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, step_name TEXT NOT NULL,
+      mode TEXT NOT NULL CHECK(mode IN ('decision','event')),
+      state TEXT NOT NULL CHECK(state IN ('pending','resumed','denied','timed-out','cancelled')),
+      request TEXT NOT NULL CHECK(json_valid(request)), nonce TEXT NOT NULL,
+      version INTEGER NOT NULL CHECK(version BETWEEN 1 AND 9007199254740991),
+      created_at INTEGER NOT NULL, deadline INTEGER NOT NULL,
+      UNIQUE(workflow_id,step_name))`);
+    internal.exec(`CREATE TABLE IF NOT EXISTS clank_workflow_wait_receipts (
+      wait_id TEXT NOT NULL, key TEXT NOT NULL, digest TEXT NOT NULL, requester TEXT,
+      receipt TEXT NOT NULL CHECK(json_valid(receipt)), PRIMARY KEY(wait_id,key)) WITHOUT ROWID`);
+    const previous = internal.prepare("SELECT * FROM clank_workflow_wait_state WHERE singleton=1").get();
+    if (previous && previous.protocol !== 1) throw new Error("Unsupported persisted workflow wait protocol.");
+    if (waitConfig && previous && (Number(previous.revision) > waitConfig.policyRevision
+      || Number(previous.revision) === waitConfig.policyRevision && previous.fingerprint !== waitFingerprint)) {
+      throw new Error("Workflow wait policy must increase when changing the signing key.");
+    }
+    if (waitConfig) internal.prepare(`INSERT INTO clank_workflow_wait_state VALUES(1,1,?,?,1)
+      ON CONFLICT(singleton) DO UPDATE SET revision=excluded.revision,fingerprint=excluded.fingerprint,enabled=1`)
+      .run(waitConfig.policyRevision, waitFingerprint);
+    else internal.prepare("UPDATE clank_workflow_wait_state SET enabled=0 WHERE singleton=1").run();
+  });
   const now = options.now ?? Date.now;
   const random = options.random ?? Math.random;
   const maxPayloadBytes = integer(options.maxPayloadBytes ?? 256 * 1024, "maxPayloadBytes", 1_024, 4 * 1024 * 1024);
@@ -815,6 +922,20 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
 
   const ensureOpen = () => {
     if (closed) throw new Error("Job runtime is closed.");
+  };
+  const requireWaitPolicy = () => {
+    ensureOpen();
+    const policy = waitsEnabled ? internal.prepare("SELECT * FROM clank_workflow_wait_state WHERE singleton=1").get() : undefined;
+    if (!waitConfig || !policy || policy.protocol !== 1 || policy.enabled !== 1
+      || policy.revision !== waitConfig.policyRevision || policy.fingerprint !== waitFingerprint) {
+      throw new WorkflowWaitError("WAIT_POLICY", "Current workflow wait policy is required.");
+    }
+  };
+  const waitToken = (row: WorkflowWaitRow): string => waitCrypto.createHmac("sha256", waitConfig!.signingKey)
+    .update(JSON.stringify(["clank-workflow-wait/1", row.id, row.workflow_id, row.step_name, row.nonce,
+      row.deadline, waitConfig!.policyRevision, waitFingerprint])).digest("base64url");
+  const closePendingWaits = (workflowIdValue: string) => {
+    if (waitsEnabled) internal.prepare("UPDATE clank_workflow_waits SET state='cancelled',version=version+1 WHERE workflow_id=? AND state='pending'").run(workflowIdValue);
   };
 
   const report = (error: unknown, row?: JobRow) => {
@@ -942,7 +1063,7 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
         ) VALUES (?, ?, ?, ?, 'blocked', NULL, NULL, NULL, ?, ?, NULL, NULL)`).run(
           id,
           stepName,
-          jobPath(step.job),
+          workflowStepJobName(step),
           JSON.stringify(step.needs.map((dependency) => names.get(dependency))),
           startedAt,
           startedAt,
@@ -983,6 +1104,7 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
   };
 
   const cancelWorkflowChildren = (workflowIdValue: string, requestedAt: number): void => {
+    closePendingWaits(workflowIdValue);
     const rows = internal.prepare(`SELECT * FROM clank_workflow_steps
       WHERE workflow_id = ?`).all(workflowIdValue) as WorkflowStepRow[];
     for (const step of rows) {
@@ -1029,7 +1151,7 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
       WHERE workflow_id = ? ORDER BY step_name ASC`).all(row.id) as WorkflowStepRow[];
     const byName = new Map(rows.map((step) => [step.step_name, step]));
     if (rows.length !== definitionEntries.length
-      || definitionEntries.some(([name, step]) => byName.get(name)?.job_name !== jobPath(step.job))) {
+      || definitionEntries.some(([name, step]) => byName.get(name)?.job_name !== workflowStepJobName(step))) {
       const message = "Workflow graph does not match the retained run.";
       cancelWorkflowChildren(row.id, current);
       failWorkflowRun(internal, row.id, message, current);
@@ -1037,6 +1159,16 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
     }
     let changed = 0;
     const cancellationRequested = Number(row.cancel_requested) === 1;
+    if (waitsEnabled && !cancellationRequested) {
+      for (const wait of internal.prepare("SELECT * FROM clank_workflow_waits WHERE workflow_id=? AND state='pending' AND deadline<=?").all(row.id, current) as WorkflowWaitRow[]) {
+        const stepRow = byName.get(wait.step_name);
+        if (!stepRow || stepRow.state !== "blocked") throw new Error("Workflow wait state does not match its step.");
+        internal.prepare("UPDATE clank_workflow_waits SET state='timed-out',version=version+1 WHERE id=? AND state='pending'").run(wait.id);
+        updateWorkflowStep(internal, stepRow, "failed", current, { error: "Workflow wait deadline expired." });
+        workflowEvent(internal, row.id, "wait_timed_out", wait.step_name, current, { waitId: wait.id });
+        changed++;
+      }
+    }
 
     for (const [stepName] of definitionEntries) {
       const stepRow = byName.get(stepName)!;
@@ -1090,6 +1222,7 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
     const currentByName = () => new Map(currentRows.map((step) => [step.step_name, step]));
 
     if (cancellationRequested) {
+      closePendingWaits(row.id);
       for (const stepRow of currentRows) {
         if (stepRow.state === "blocked") {
           updateWorkflowStep(internal, stepRow, "cancelled", current);
@@ -1108,6 +1241,7 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
 
     const failed = currentRows.find((step) => step.state === "failed" || step.state === "cancelled");
     if (failed) {
+      closePendingWaits(row.id);
       for (const stepRow of currentRows) {
         if (stepRow.state === "queued" || stepRow.state === "running") {
           if (stepRow.job_id && requestJobCancellation(stepRow.job_id, current)) changed++;
@@ -1128,6 +1262,29 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
       const dependencyNames = step.needs.map((dependency) => names.get(dependency)!);
       if (!dependencyNames.every((name) => currentByName().get(name)?.state === "succeeded")) continue;
       try {
+        if (step.kind === "workflow-wait") {
+          if (internal.prepare("SELECT 1 FROM clank_workflow_waits WHERE workflow_id=? AND step_name=?").get(row.id, stepName)) continue;
+          requireWaitPolicy();
+          if (Number(internal.prepare("SELECT count(*) AS count FROM clank_workflow_waits").get()?.count) >= 10_000) {
+            throw new WorkflowWaitError("WAIT_CAPACITY", "Retained workflow wait capacity is full.");
+          }
+          const request = step.request(workflowStepContext(parsedInput, workflow, step, currentByName()));
+          if (request && typeof (request as any).then === "function") {
+            void Promise.resolve(request).catch(() => undefined);
+            throw new TypeError("Workflow wait request mappers must be synchronous.");
+          }
+          if (!request || typeof request !== "object" || Array.isArray(request) || Object.keys(request).some(key => !["title", "data"].includes(key))
+            || typeof request.title !== "string" || !request.title.trim() || request.title.length > 1000) throw new TypeError("Workflow wait requests require a bounded title and optional data.");
+          const payload = boundedJson(request, 16 * 1024, "Workflow wait request");
+          const deadline = current + step.timeoutMs;
+          if (!Number.isSafeInteger(deadline)) throw new RangeError("Workflow wait deadline exceeds the timestamp range.");
+          const id = `wait_${waitCrypto.randomUUID()}`;
+          internal.prepare(`INSERT INTO clank_workflow_waits VALUES(?,?,?,?,'pending',?,?,1,?,?)`)
+            .run(id, row.id, stepName, step.mode, payload, waitCrypto.randomBytes(32).toString("base64url"), current, deadline);
+          workflowEvent(internal, row.id, "wait_started", stepName, current, { waitId: id, mode: step.mode, deadline });
+          changed++;
+          continue;
+        }
         const rawArgs = step.args(workflowStepContext(
           parsedInput,
           workflow,
@@ -1152,6 +1309,7 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
         workflowEvent(internal, row.id, "step_queued", stepName, current, { jobId: handle.id });
         changed++;
       } catch (error) {
+        closePendingWaits(row.id);
         const message = safeError(error, maxErrorBytes);
         updateWorkflowStep(internal, stepRow, "failed", current, { error: message });
         workflowEvent(internal, row.id, "step_failed", stepName, current, { error: message });
@@ -1205,6 +1363,86 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
     return changed;
   };
 
+  const getWorkflowWait = (workflowIdValue: string, stepName: string): WorkflowWaitTicket | null => {
+    requireWaitPolicy();
+    identifier(workflowIdValue, "workflow id", 128, true);
+    identifier(stepName, "workflow step name", 128);
+    const wait = internal.prepare("SELECT * FROM clank_workflow_waits WHERE workflow_id=? AND step_name=?").get(workflowIdValue, stepName) as WorkflowWaitRow | undefined;
+    if (!wait) return null;
+    const run = internal.prepare("SELECT owner_id FROM clank_workflow_runs WHERE id=?").get(workflowIdValue);
+    if (!run) throw new Error("Workflow wait has no retained run.");
+    return Object.freeze({ id: wait.id, workflowId: wait.workflow_id, step: wait.step_name,
+      mode: wait.mode, state: wait.state, request: Object.freeze(JSON.parse(wait.request)),
+      ownerId: run.owner_id === null ? null : String(run.owner_id), version: wait.version,
+      createdAt: wait.created_at, deadline: wait.deadline, resumeToken: waitToken(wait) });
+  };
+
+  const resumeWorkflowWait = (input: WorkflowWaitResume): WorkflowWaitReceipt => {
+    requireWaitPolicy();
+    if (!input || typeof input !== "object" || Array.isArray(input)
+      || Object.keys(input).some(key => !["waitId", "expectedVersion", "resumeToken", "idempotencyKey", "choice", "result"].includes(key))
+      || typeof input.waitId !== "string" || !/^wait_[a-f0-9-]{36}$/.test(input.waitId)
+      || !Number.isSafeInteger(input.expectedVersion) || input.expectedVersion < 1
+      || typeof input.resumeToken !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(input.resumeToken)
+      || typeof input.idempotencyKey !== "string" || !/^[A-Za-z0-9_.:-]{16,128}$/.test(input.idempotencyKey)
+      || !["resume", "deny"].includes(input.choice) || input.choice === "deny" && input.result !== undefined) {
+      throw new WorkflowWaitError("WAIT_INPUT", "An exact wait token, version, choice and bounded idempotency key are required.");
+    }
+    const accept = (): WorkflowWaitReceipt => {
+      requireWaitPolicy();
+      const wait = internal.prepare("SELECT * FROM clank_workflow_waits WHERE id=?").get(input.waitId) as WorkflowWaitRow | undefined;
+      if (!wait) throw new WorkflowWaitError("WAIT_UNKNOWN", "Workflow wait is not retained.");
+      const run = internal.prepare("SELECT * FROM clank_workflow_runs WHERE id=?").get(wait.workflow_id) as WorkflowRow | undefined;
+      const workflow = run ? workflowRegistry.get(run.name) : undefined;
+      const step = workflow?.steps[wait.step_name];
+      if (!run || !workflow || step?.kind !== "workflow-wait" || run.definition_hash !== workflowDefinitionRevision(workflow)
+        || step.mode !== wait.mode) throw new WorkflowWaitError("WAIT_DEFINITION", "Current workflow definition is required.");
+      const expected = waitToken(wait);
+      if (!waitCrypto.timingSafeEqual(new TextEncoder().encode(expected), new TextEncoder().encode(input.resumeToken))) {
+        throw new WorkflowWaitError("WAIT_TOKEN", "Workflow wait token is invalid.");
+      }
+      const review = currentReviewedExecution(internal);
+      if (wait.mode === "decision" && (!review || run.owner_id !== null && review.requester !== run.owner_id)) {
+        throw new WorkflowWaitError("WAIT_REVIEW_REQUIRED", "A current accepted reviewed action by the workflow owner is required.");
+      }
+      const result = input.choice === "resume" ? step.returns.parse(input.result) : null;
+      const payload = boundedJson(result ?? null, Math.min(maxResultBytes, 64 * 1024), "Workflow wait result");
+      const digest = waitCrypto.createHash("sha256").update(workflowWaitCanonical({
+        waitId: input.waitId, expectedVersion: input.expectedVersion,
+        token: waitCrypto.createHash("sha256").update(input.resumeToken).digest("hex"),
+        choice: input.choice, result: JSON.parse(payload),
+      })).digest("hex");
+      const old = internal.prepare("SELECT * FROM clank_workflow_wait_receipts WHERE wait_id=? AND key=?").get(wait.id, input.idempotencyKey);
+      const requester = wait.mode === "decision" ? review!.requester : null;
+      if (old) {
+        if (old.digest !== digest || old.requester !== requester) throw new WorkflowWaitError("WAIT_RETRY_CHANGED", "Workflow wait retry differs from the accepted request.");
+        return Object.freeze(JSON.parse(String(old.receipt))) as WorkflowWaitReceipt;
+      }
+      if (wait.state !== "pending" || wait.version !== input.expectedVersion || run.state !== "running" || run.cancel_requested !== 0) {
+        throw new WorkflowWaitError("WAIT_CLOSED", "Workflow wait is no longer pending at that version.");
+      }
+      const acceptedAt = now();
+      if (acceptedAt >= wait.deadline) throw new WorkflowWaitError("WAIT_EXPIRED", "Workflow wait deadline expired.");
+      if (Number(internal.prepare("SELECT count(*) AS count FROM clank_workflow_wait_receipts").get()?.count) >= 20_000) {
+        throw new WorkflowWaitError("WAIT_CAPACITY", "Retained workflow wait receipt capacity is full.");
+      }
+      const stepRow = internal.prepare("SELECT * FROM clank_workflow_steps WHERE workflow_id=? AND step_name=?").get(run.id, wait.step_name) as WorkflowStepRow | undefined;
+      if (!stepRow || stepRow.state !== "blocked" || stepRow.job_id !== null) throw new Error("Workflow wait step is not blocked.");
+      const state = input.choice === "resume" ? "resumed" : "denied";
+      internal.prepare("UPDATE clank_workflow_waits SET state=?,version=version+1 WHERE id=? AND state='pending' AND version=?").run(state, wait.id, wait.version);
+      updateWorkflowStep(internal, stepRow, state === "resumed" ? "succeeded" : "failed", acceptedAt,
+        state === "resumed" ? { result: JSON.parse(payload), startedAt: wait.created_at } : { error: "Workflow wait was denied.", startedAt: wait.created_at });
+      const receipt: WorkflowWaitReceipt = Object.freeze({ waitId: wait.id, workflowId: run.id, step: wait.step_name,
+        state, version: wait.version + 1, acceptedAt, reviewPlanId: wait.mode === "decision" ? review!.planId : null,
+        requester, approver: wait.mode === "decision" ? review!.approver : null });
+      internal.prepare("INSERT INTO clank_workflow_wait_receipts VALUES(?,?,?,?,?)").run(wait.id, input.idempotencyKey, digest, requester, JSON.stringify(receipt));
+      workflowEvent(internal, run.id, state === "resumed" ? "wait_resumed" : "wait_denied", wait.step_name, acceptedAt, { waitId: wait.id, version: receipt.version, reviewPlanId: receipt.reviewPlanId });
+      reconcileWorkflowCore(run.id);
+      return receipt;
+    };
+    return internal.inTransaction ? accept() : internal.transaction(accept);
+  };
+
   const purgeWorkflows = (purgeOptions: WorkflowPurgeOptions = {}): number => {
     ensureOpen();
     const states = purgeOptions.states ?? ["succeeded", "cancelled"];
@@ -1225,6 +1463,10 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
       if (rows.length === 0) return 0;
       const ids = rows.map((row) => String(row.id));
       const placeholders = ids.map(() => "?").join(", ");
+      if (waitsEnabled) {
+        internal.prepare(`DELETE FROM clank_workflow_wait_receipts WHERE wait_id IN (SELECT id FROM clank_workflow_waits WHERE workflow_id IN (${placeholders}))`).run(...ids);
+        internal.prepare(`DELETE FROM clank_workflow_waits WHERE workflow_id IN (${placeholders})`).run(...ids);
+      }
       internal.prepare(`DELETE FROM clank_workflow_events
         WHERE workflow_id IN (${placeholders})`).run(...ids);
       internal.prepare(`DELETE FROM clank_workflow_steps
@@ -1623,6 +1865,8 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
           createdAt: Number(row.created_at),
         }));
     },
+    getWorkflowWait,
+    resumeWorkflowWait,
     getWorkflow(id) {
       ensureOpen();
       const workflowIdValue = identifier(id, "workflow id", 128, true);
@@ -1639,8 +1883,12 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
         if (!WORKFLOW_STATES.has(listOptions.state)) {
           throw new TypeError(`Invalid workflow state: ${listOptions.state}`);
         }
-        clauses.push("state = ?");
-        values.push(listOptions.state);
+        if (listOptions.state === "waiting") {
+          clauses.push(waitsEnabled ? "state='running' AND EXISTS(SELECT 1 FROM clank_workflow_waits w WHERE w.workflow_id=clank_workflow_runs.id AND w.state='pending')" : "0");
+        } else {
+          clauses.push("state = ?"); values.push(listOptions.state);
+          if (listOptions.state === "running" && waitsEnabled) clauses.push("NOT EXISTS(SELECT 1 FROM clank_workflow_waits w WHERE w.workflow_id=clank_workflow_runs.id AND w.state='pending')");
+        }
       }
       if (listOptions.name !== undefined) {
         clauses.push("name = ?");
@@ -1824,7 +2072,7 @@ export async function runJobProcess(
 }
 
 const JOB_STATES = new Set<JobState>(["queued", "running", "retry", "succeeded", "dead", "cancelled"]);
-const WORKFLOW_STATES = new Set<WorkflowState>(["running", "succeeded", "failed", "cancelled"]);
+const WORKFLOW_STATES = new Set<WorkflowState>(["running", "waiting", "succeeded", "failed", "cancelled"]);
 
 function ensureJobSchema(internal: SQLiteInternal): void {
   migrateLegacyServiceJobs(internal);
@@ -2324,10 +2572,13 @@ function storedJob(row: JobRow): StoredJob {
 function storedWorkflow(internal: SQLiteInternal, row: WorkflowRow): StoredWorkflowRun {
   const steps = internal.prepare(`SELECT * FROM clank_workflow_steps
     WHERE workflow_id = ? ORDER BY step_name ASC`).all(row.id) as WorkflowStepRow[];
+  const waits = internal.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_workflow_waits'").get()
+    ? internal.prepare("SELECT step_name,mode FROM clank_workflow_waits WHERE workflow_id=? AND state='pending'").all(row.id) : [];
+  const pending = new Map(waits.map(wait => [String(wait.step_name), String(wait.mode)]));
   return Object.freeze({
     id: String(row.id),
     name: String(row.name),
-    state: String(row.state) as WorkflowState,
+    state: row.state === "running" && pending.size ? "waiting" : String(row.state) as WorkflowState,
     input: JSON.parse(String(row.input)),
     ...(row.output === null || row.output === undefined ? {} : { output: JSON.parse(String(row.output)) }),
     ...(row.error === null || row.error === undefined ? {} : { error: String(row.error) }),
@@ -2340,7 +2591,7 @@ function storedWorkflow(internal: SQLiteInternal, row: WorkflowRow): StoredWorkf
       name: String(step.step_name),
       job: String(step.job_name),
       needs: Object.freeze(JSON.parse(String(step.needs)) as string[]),
-      state: String(step.state) as WorkflowStepState,
+      state: step.state === "blocked" && pending.has(step.step_name) ? pending.get(step.step_name) === "decision" ? "awaiting-decision" : "awaiting-event" : String(step.state) as WorkflowStepState,
       jobId: step.job_id === null || step.job_id === undefined ? null : String(step.job_id),
       ...(step.result === null || step.result === undefined ? {} : { result: JSON.parse(String(step.result)) }),
       ...(step.error === null || step.error === undefined ? {} : { error: String(step.error) }),
@@ -2690,13 +2941,25 @@ function workflowStepNames(workflow: RuntimeWorkflowDefinition): Map<AnyWorkflow
   return new Map(Object.entries(workflow.steps).map(([name, step]) => [step, name]));
 }
 
+function workflowStepJobName(step: AnyWorkflowStepDefinition): string {
+  return step.kind === "workflow-wait" ? `@wait:${step.mode}` : jobPath(step.job);
+}
+function workflowWaitCanonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(workflowWaitCanonical).join(",")}]`;
+  if (value !== null && typeof value === "object") return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${workflowWaitCanonical((value as Record<string, unknown>)[key])}`).join(",")}}`;
+  return JSON.stringify(value);
+}
+
 function workflowDefinitionRevision(workflow: RuntimeWorkflowDefinition): string {
   const names = workflowStepNames(workflow);
   const source = JSON.stringify({
     args: workflow.args.toJSONSchema(),
     returns: workflow.returns?.toJSONSchema() ?? null,
     output: Function.prototype.toString.call(workflow.output),
-    steps: Object.entries(workflow.steps).sort(([left], [right]) => left.localeCompare(right)).map(([name, step]) => ({
+    steps: Object.entries(workflow.steps).sort(([left], [right]) => left.localeCompare(right)).map(([name, step]) => step.kind === "workflow-wait" ? ({
+      name, wait: step.mode, timeoutMs: step.timeoutMs, returns: step.returns.toJSONSchema(),
+      needs: step.needs.map(dependency => names.get(dependency)).sort(), mapper: Function.prototype.toString.call(step.request),
+    }) : ({
       name,
       job: jobPath(step.job),
       args: step.job.args.toJSONSchema(),
@@ -2830,7 +3093,8 @@ export function workflowManifest(
       steps: Object.freeze(Object.entries(workflow.steps)
         .sort(([left], [right]) => left.localeCompare(right)).map(([stepName, step]) => Object.freeze({
         name: stepName,
-        job: jobPath(step.job),
+        job: workflowStepJobName(step),
+        ...(step.kind === "workflow-wait" ? { wait: Object.freeze({ mode: step.mode, timeoutMs: step.timeoutMs, returns: step.returns.toJSONSchema() }) } : {}),
         needs: Object.freeze(step.needs.map((dependency) => names.get(dependency)!).sort()),
         ...(step.description ? { description: step.description } : {}),
       }))),

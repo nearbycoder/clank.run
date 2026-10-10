@@ -3,7 +3,7 @@ import { AuthError, type AuthRequest, type AuthRuntime } from "./auth.ts";
 import type { SQLiteDatabase, ReadDatabase, WriteDatabase, Id, DatabaseSchema } from "./backend.ts";
 import { McpToolError, type McpTool } from "./mcp.ts";
 import { readJsonRequest, readRequestBytes, requestOriginAllowed, RequestInputError } from "./security.ts";
-import { SQLITE_INTERNAL } from "./sqlite-internal.ts";
+import { SQLITE_INTERNAL, withReviewedExecution } from "./sqlite-internal.ts";
 
 export interface ReviewedActionContext<DB extends DatabaseSchema<any> = any> { readonly db: ReadDatabase<DB>; readonly auth: AuthRequest<any>; }
 export interface ReviewedActionWriteContext<DB extends DatabaseSchema<any> = any> { readonly db: WriteDatabase<DB>; readonly auth: AuthRequest<any>; }
@@ -255,7 +255,8 @@ export function openReviewedActions(database: SQLiteDatabase<any>, authRuntime: 
         if (!approvedSession?.user || approvedSession.user.id !== row.approved_by
           || !sql.readScoped(approvedSession.user.id, reviewerDb => canReview(row, reviewerDb, approvedSession))) throw new AuthError("APPROVAL_REQUIRED", "The approver must review this action again.", 409);
         const changes = new Map<string, ReviewedRecordChange>();
-        const output = JSON.parse(encode(sync(action.execute({ db: recordingWriter(db, changes), auth }, args, JSON.parse(String(row.preview))))));
+        const output = withReviewedExecution(sql, { requester: auth.user!.id, approver: approvedSession.user.id, planId: id },
+          () => JSON.parse(encode(sync(action.execute({ db: recordingWriter(db, changes), auth }, args, JSON.parse(String(row.preview)))))));
         const receipt: ReviewedActionReceipt = { protocol: "clank-action-receipt/1", id: `receipt_${crypto.randomUUID()}`, planId: id,
           action: String(row.action), owner: auth.user!.id, committedAt: Date.now(), committedRevision: revision() + (changes.size ? 1 : 0),
           changes: [...changes.values()], output, compensationAvailable: Boolean(action.compensate), compensatedBy: null };
@@ -339,6 +340,9 @@ export function openReviewedActions(database: SQLiteDatabase<any>, authRuntime: 
           await authRuntime.verifyCsrf(proof, auth);
         } else { await authRuntime.verifyCsrf(request, auth); input = await readJsonRequest(request, 8192); }
         const plan = runtime.decide(input.id, input.decision, auth);
+        if (type.startsWith("application/x-www-form-urlencoded") && request.headers.get("accept")?.includes("text/html")) {
+          return new Response(null, { status: 303, headers: { ...headers, location: prefix } });
+        }
         return Response.json({ plan }, { headers });
       } catch (error) {
         const known = error instanceof AuthError || error instanceof RequestInputError;
@@ -382,5 +386,5 @@ function sync<T>(value: T): T { if (value && typeof (value as any).then === "fun
 function encode(value: unknown): string { const text = JSON.stringify(value); if (text === undefined || new TextEncoder().encode(text).byteLength > 65536) throw new TypeError("Reviewed values must be JSON up to 64 KiB."); return text; }
 export function renderApprovalInbox(plans: readonly ReviewedActionPlan[], prefix = "/__clank/approvals", csrf = ""): string {
   const escape = (value: unknown) => String(value).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
-  return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Approval inbox</title><main><h1>Approval inbox</h1>${plans.length ? plans.map(plan => `<article><h2>${escape(plan.action)}</h2><p>${escape(plan.status)} · expires ${escape(new Date(plan.expiresAt).toISOString())}</p><pre>${escape(JSON.stringify(plan.preview, null, 2))}</pre>${plan.status === "pending" ? `<form method="post" action="${escape(prefix)}/decide"><input type="hidden" name="id" value="${escape(plan.id)}"><input type="hidden" name="csrf" value="${escape(csrf)}"><button name="decision" value="approve">Approve</button><button name="decision" value="deny">Deny</button></form>` : ""}</article>`).join("") : "<p>No approval requests.</p>"}</main></html>`;
+  return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Approval inbox</title><style>pre{white-space:pre-wrap;overflow-wrap:anywhere}</style><main><h1>Approval inbox</h1>${plans.length ? plans.map(plan => `<article><h2>${escape(plan.action)}</h2><p>${escape(plan.status)} · expires ${escape(new Date(plan.expiresAt).toISOString())}</p><pre>${escape(JSON.stringify(plan.preview, null, 2))}</pre>${plan.status === "pending" ? `<form method="post" action="${escape(prefix)}/decide"><input type="hidden" name="id" value="${escape(plan.id)}"><input type="hidden" name="csrf" value="${escape(csrf)}"><button name="decision" value="approve">Approve</button><button name="decision" value="deny">Deny</button></form>` : ""}</article>`).join("") : "<p>No approval requests.</p>"}</main></html>`;
 }

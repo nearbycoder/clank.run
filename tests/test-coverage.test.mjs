@@ -46,6 +46,31 @@ const measuredCoverage = {
   ].join("\n"),
 };
 
+test("malformed property-name coverage artifacts get one retry only after every test passes", async () => {
+  const diagnostic = "Expected property name or '}' in JSON at position 483328 (line 1 column 483329)";
+  for (const prefix of ["SyntaxError: ", "Error [ERR_OPERATION_FAILED]: Operation failed: failed to parse coverage file /tmp/node-coverage-fixture/coverage-2-0.json: "]) {
+    const artifact = { ...truncatedCoverage, outputTail: truncatedCoverage.outputTail
+      .replace("SyntaxError: ", prefix).replace("Unexpected end of JSON input", diagnostic) };
+    assert.equal(isRetryableCoverageArtifactFailure(artifact), true);
+    for (const outputTail of [
+      artifact.outputTail + "not ok 12 - actual test failure\n",
+      artifact.outputTail + "ERROR: Coverage for lines (79%) does not meet global threshold (80%)\n",
+      artifact.outputTail.replace("# fail 0", "# fail 1"),
+      artifact.outputTail.replace("# cancelled 0", "# cancelled 1"),
+      artifact.outputTail.replace("# tests 372", "# tests 373"),
+      artifact.outputTail.replace(diagnostic, "Expected property name"),
+      artifact.outputTail.replace(diagnostic, "Permission denied"),
+    ]) assert.equal(isRetryableCoverageArtifactFailure({ ...artifact, outputTail }), false);
+    for (const code of [0, 2]) assert.equal(isRetryableCoverageArtifactFailure({ ...artifact, code }), false);
+    let calls = 0;
+    await runCoverageGate({ execute: async () => ++calls === 1 ? artifact : measuredCoverage, writeDiagnostic: () => {} });
+    assert.equal(calls, 2);
+    calls = 0;
+    await assert.rejects(runCoverageGate({ execute: async () => { calls++; return artifact; }, writeDiagnostic: () => {} }), /single coverage-artifact retry/u);
+    assert.equal(calls, 2);
+  }
+});
+
 test("Node 26 wrapped JSON coverage failures allow only the existing bounded artifact retry", async () => {
   const errors = [
     "Expected ',' or '}' after property value in JSON at position 8192 (line 1 column 8193)",

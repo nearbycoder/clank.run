@@ -1,4 +1,7 @@
 export declare const SQLITE_INTERNAL: unique symbol;
+/** Available only during an accepted reviewed action's synchronous transaction. */
+export declare function currentReviewedExecution(connection: SQLiteInternal): { requester: string; approver: string; planId: string } | undefined;
+export declare function withReviewedExecution<Value>(connection: SQLiteInternal, identity: { requester: string; approver: string; planId: string }, handler: () => Value): Value;
 /** Fixed history predicate for every upgraded writer's automatic cleanup. */
 export declare function retentionHistoryProtection(connection: Pick<SQLiteInternal, "prepare">): string;
 /** Count held source history without materializing payloads; shared admission bound. */
