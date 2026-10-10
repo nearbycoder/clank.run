@@ -15,35 +15,36 @@
     "dependencies": 0,
     "publishedFilesAdded": 0,
     "compatibility": "Rebuilt columns/digests and Function.toString formatting can change; use identical compatible definitions across worker fleets; stored artifacts remain immutable",
-    "rollback": "Prior immutable compatible distribution and data snapshot; no data reformat"
+    "rollback": "Prior immutable compatible distribution and data snapshot; no data reformat",
+    "recursiveWatch": "Persistent recursive watch error handling and serialized 1-second filename reconciliation; ENOENT during directory moves cannot crash the CLI or leave stale output. No content polling or dependency."
   },
   "source": {
-    "head": "96d05592661599a9f9177949cd82ae0570500bb7",
-    "tree": "5bab13b866196386baf71397b25991bd5108f6e3",
-    "archiveSha256": "981f995d953ade623961a40395148f9bcd56eaa4363605f5cd83be8e107ac3aa",
-    "inputScope": "All 1070 tracked source inputs, including 19 stored baseline example JavaScript files",
-    "trackedInputs": 1070
+    "head": "ea54bd5be1f33caf68c96331fa4cebe9d3ce25a5",
+    "tree": "c6f5ff57f08f946aeae65b964d2137c08ebdb121",
+    "archiveSha256": "fe9728859807d00ff5de0a5b77e0dc4992fa3edf6153d62da5d17827d95664dd",
+    "trackedInputs": 1071,
+    "inputScope": "All 1071 tracked inputs, including 19 stored baseline example JavaScript files"
   },
   "validation": {
     "fullRelease": {
       "26": {
         "complete": true,
-        "tests": 2020,
-        "pass": 2017,
+        "tests": 2021,
+        "pass": 2018,
         "fail": 0,
         "cancelled": 0,
         "skipped": 3,
         "coverage": [
           91.68,
-          80.9,
-          90.03
+          80.91,
+          90.04
         ],
-        "rawSha256": "5a7d7f0e685a300b9bf8d5a68abf56886aded554d5a914a702fdccc30c3fd47a"
+        "rawSha256": "1c3d570c69e25963fe1a09279862f093e9c316607a59bd25380467488989d679"
       },
       "22": {
         "complete": true,
-        "tests": 2020,
-        "pass": 2017,
+        "tests": 2021,
+        "pass": 2018,
         "fail": 0,
         "cancelled": 0,
         "skipped": 3,
@@ -52,7 +53,7 @@
           80.93,
           90.08
         ],
-        "rawSha256": "03917982110528a2eaf1c8deaeedd4684958f93fcead99728a1a1a326b3e885c"
+        "rawSha256": "0662bd6cd1faee3e051df32109b446fd16451796e695a2a00a458aaefb4b2840"
       }
     },
     "focused": {
@@ -61,7 +62,14 @@
       "finalBoundedLocal": 4,
       "finalMinimumNode22": 4,
       "finalAllRepeatedInCompleteGates": true,
-      "moduleFixtures": 23
+      "moduleFixtures": 23,
+      "watchFinalLocal": 15,
+      "watchFinalMinimumNode22": 15,
+      "watchRenameDeleteAndDroppedNotificationRepetitions": 30,
+      "watchErrorInjection": "Final regression drops native change events and emits real FSWatcher ENOENT; passed both final complete gates",
+      "watchLocalRawSha256": "e0cac7386adfc60a03254967d5b542f50f23b0d84ce0301c1fabc93bc5a030a2",
+      "watchMinimumRawSha256": "232d8c59329333b2af4e23d461293a49d12c32a11ebac388f2dc784e82dbda0f",
+      "watchRepeatedRawSha256": "9a699f4caf8f231e532b6a71461d7f396595bf94948a79c774c8d3da4929272c"
     },
     "nativeNormalization": {
       "runtime": "22.16.0",
@@ -70,7 +78,7 @@
       "different": 0,
       "rawSha256": "349a187ac62b528e5bde07591d42c9c3b531cfcb3b54352131374e1e72923147",
       "reportSha256": "b042c362c6baf0c2c428ba13322a89e8ec7eb80902b6834209723839e971861e",
-      "finalSource03BuiltBytesEqualToProofInputs": true
+      "finalSource04SdkBytesEqualToProofInputs": true
     },
     "types": {
       "positiveNegativeFixtures": 31,
@@ -78,42 +86,45 @@
       "newDiagnostics": 0,
       "baseline": 163,
       "openApiExamples": "passed",
-      "rawSha256": "f2ed5ad51e04dd7a6a06ec385ce55cbe91594c43a5d8ca8ad28aa92cbb9c834a",
-      "typeInputsAndAllPublishedBytesRemainExactAfterBoundTightening": true
+      "rawSha256": "f2ed5ad51e04dd7a6a06ec385ce55cbe91594c43a5d8ca8ad28aa92cbb9c834a"
     },
     "package": {
       "files": 405,
-      "unpackedBytes": 6036861,
+      "unpackedBytes": 6038746,
       "unchangedCeiling": 6291456,
-      "headroom": 254595,
-      "netSavingsFromAcceptedFeature20": 206225,
+      "headroom": 252710,
+      "netSavingsFromAcceptedFeature20": 204340,
       "jsIndentationBytesRemoved": 206558,
       "modulesChanged": 124,
       "syntaxChecked": 150,
-      "rawSha256": "a3c52532238f650dc04fd2a7e21b5e9aacf1b422590189290825c489ddbf72ac"
+      "rawSha256": "ecf574f0e726fb744db3f6b2ba56fd21e190830105e94eaf1d16881b9ac8df78"
     },
     "actualPublishedHistorySecurity": {
       "passed": true,
-      "rawSha256": "e5aa7592e49e66e49bb280f66986f00b6deb9a521b5392cc329086a43d4287a1"
+      "includedInBothCompleteGates": true,
+      "rawSha256": [
+        "1c3d570c69e25963fe1a09279862f093e9c316607a59bd25380467488989d679",
+        "0662bd6cd1faee3e051df32109b446fd16451796e695a2a00a458aaefb4b2840"
+      ]
     },
     "documentation": {
       "guides": 98,
-      "words": 172803,
+      "words": 172888,
       "doctor": "6 passed, one optional unlinked-project notice, zero failures",
-      "offlineArtifact": "4b45b04d3ccfb48bb5f46d19bb2ce052ac5062fa228569013e9314d5cbbb47f1",
+      "offlineArtifact": "f097bdfd8100eed5b629c5c425e0efa9826d7ce4592122e3fcafeeef3b01eae9",
       "uploaded": false,
       "httpMcp": "Eight HTTP surfaces, discovery/tools/list, readonly docs_search and docs_read passed",
-      "httpMcpSha256": "9e31ab7fb838d976f32b8b0f196207660679389e6ab99fc8b07d3f5ca6e009a9",
+      "httpMcpSha256": "ed7731f6ade225425d103003a44db93008d462f8ed4704460432a47d773c9cfe",
       "desktop": {
         "viewport": 1280,
         "document": 1265,
-        "guide": "release-layout-docs-desktop-02.png"
+        "guide": "release-layout-watch-docs-desktop-04.png"
       },
       "phone": {
         "viewport": 390,
         "document": 375,
-        "guide": "release-layout-docs-phone-02.png",
-        "search": "release-layout-docs-phone-search-02.png"
+        "guide": "release-layout-watch-docs-phone-04.png",
+        "search": "release-layout-watch-docs-phone-search-04.png"
       },
       "keyboard": "Home, full-text search and current guide navigation passed",
       "browserWarningsAndErrors": 0,
@@ -139,9 +150,17 @@
     {
       "setup": "The initial SSH channel ended with 255 while its known remote gate driver continued; retained exit files and full output establish Node26 pass and Node22 failure. A broad full-text query did not rank the guide in its first five results.",
       "resolution": "Do not overlap full gates or infer success from transport. Wait for actual remote completion; use a distinctive word from the current guide for actual search and retain the unsuccessful setup log."
+    },
+    {
+      "proof": "Final source03 hosted conformance failed existing directory-deletion watch test. Minimum Node22 repeated reproduction failed at attempt six; instrumented stderr identified native recursive watcher ENOENT and unhandled error killing the process. Filename polling alone also failed because the watcher still crashed.",
+      "hostedRawSha256": "3f1655b601436065a90920cd93f0458f888457c38dd80f16abda9b9026a54d3f",
+      "reproductionRawSha256": "a712d10593cc8496a325cc3291fc82a7b25300e776da459e846ab7413ae969b4",
+      "rootCauseRawSha256": "0fa371fa38334e2780e6c006d1b60ac8010e94145e7dcc36196d7f79291fccf0",
+      "pollOnlyFailureRawSha256": "cf94dfbc8d1eb5343c7f0f475b507a82811d84f0df0c95854e75bba1fe10aa5a",
+      "resolution": "Use persistent callback watcher error handling plus bounded filename reconciliation through the existing serialized build queue. Final real ENOENT/dropped-event regression and both complete Node26/22 gates pass; no skip or CI rerun substituted for repair."
     }
   ],
-  "evidenceIndexSha256": "df0c102645ffc064e6d9c1348353e53a06def324e7d9b4b5a48419f768d9e8ae",
+  "evidenceIndexSha256": "74a07b1628dd272135fb739aa02be95a7cf498b4bfc5abdbe3d2ee631e96176a",
   "review": {
     "independent": false,
     "freshHostedChecks": "Required at final metadata head",
@@ -152,5 +171,6 @@
   "limitations": [
     "Normalization and the complete suites establish current module behavior; reflective function formatting intentionally changes",
     "No new production-provider or host certification is claimed"
-  ]
+  ],
+  "previousEvidenceIndexSha256": "df0c102645ffc064e6d9c1348353e53a06def324e7d9b4b5a48419f768d9e8ae"
 }
