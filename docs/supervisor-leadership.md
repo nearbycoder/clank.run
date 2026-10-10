@@ -63,6 +63,8 @@ Native catalog writes check current ownership inside the SQLite write transactio
 
 Each owner arms an independent guardian through private IPC before active bootstrap. The guardian checks the actual coordinator's birth identity and current lease. It can terminate its own coordinator after lease loss, `SIGSTOP`, lost IPC or guardian failure. A standby waits for actual prior coordinator death and the existing tenant guardian cleanup before admitting replacement writers. A failed or malformed cleanup record keeps admission closed and remains available for operator investigation.
 
+The guardian compares the observed native lease against the clock after its database read. A valid renewal that commits while that read is delayed stays valid; an already expired lease, changed identity/configuration or clock regression still fences the coordinator immediately. Readiness failures retain bounded process and non-secret lease diagnostics without retrying a failed request.
+
 Recovery time includes the ownership lease, cleanup budget, retained project/task lease and application health check. Blocking startup recovers desired local applications before the coordinator becomes ready; `startupRecovery: "background"` keeps the existing asynchronous recovery behavior. A suspended project stays suspended. Existing scheduled work resumes when its current durable claims permit it.
 
 External mail, object storage and provider effects retain their documented idempotency and generation contracts. The SQLite fence does not turn an external request into a distributed transaction. Preserve the original operation key after a lost response and verify the retained receipt before submitting different input.
