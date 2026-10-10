@@ -1,7 +1,7 @@
 {
   "feature": 29,
   "proposal": "https://github.com/nearbycoder/clank.run/issues/311",
-  "status": "in-progress",
+  "status": "verified-awaiting-protected-merge",
   "counted": false,
   "base": "e81ef931baff736eeb675daee3427b185644933a",
   "nativeEvidence": {
@@ -34,8 +34,7 @@
     "nativePointerKeyboardNavigation": false
   },
   "pending": [
-    "Full ordinary-user Linux Node26/minimum Node22 release checks",
-    "Fresh hosted checks and current review",
+    "Fresh hosted acceptance after report-only update",
     "Normal protected expected-head merge"
   ],
   "limitations": [
@@ -61,5 +60,72 @@
     "node22AndConformance": "Truncated diagnostics exclude the assertion; failure retained without an inferred location",
     "fixtureFix": "Read-only observer uses bounded 5000ms SQLite busy timeout; original publication/crash assertions unchanged",
     "ciRuntimeReporter": "spec keeps failure assertions at the end of bounded CI logs"
+  },
+  "fullReleaseGates": {
+    "source": "7971e7f83806b4703f211b8982250e317314becf",
+    "tree": "2fa44b93aac15cfccf0f7df634386536669990e2",
+    "tarSha256": "c41471f5696d68e2eafaf87da26ae27f55ff7b026833f906fc0ab669ab963f4c",
+    "inputs": 1095,
+    "ordinaryUid": 1000,
+    "runtime": {
+      "26": {
+        "exit": 0,
+        "counts": {
+          "tests": 2076,
+          "pass": 2073,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": [
+          91.56,
+          80.99,
+          90.07
+        ],
+        "logSha256": "d743a5bd179ada4e04aa309b5706ea217e643746c7562d7a7a8a5fcb23b51871"
+      },
+      "22": {
+        "exit": 0,
+        "counts": {
+          "tests": 2076,
+          "pass": 2073,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": [
+          91.55,
+          81.02,
+          90.11
+        ],
+        "logSha256": "cf90362043376c28d28d56e211e2d9467db908aae6886149c77b577fec0d373d"
+      }
+    }
+  },
+  "package": {
+    "baseFiles": 409,
+    "files": 411,
+    "added": [
+      "dist/media-processing.d.ts",
+      "dist/media-processing.js"
+    ],
+    "baseBytes": 6076604,
+    "unpackedBytes": 6104927,
+    "growthBytes": 28323,
+    "ceiling": 6291456,
+    "remainingBytes": 186529,
+    "dependencies": 0,
+    "source": "7971e7f83806b4703f211b8982250e317314becf"
+  },
+  "immutableEvidence": {
+    "files": 42,
+    "indexSha256": "dd08c96769b8afad1607ba5aee1d159910ba3b1efbe824099daa9adac67ccc40"
+  },
+  "hosted": {
+    "source": "7971e7f83806b4703f211b8982250e317314becf",
+    "sixChecksPassed": true,
+    "codeQlNewAlerts": 0,
+    "unresolvedThreads": 0,
+    "annotation": "Ubuntu-latest migrates to Ubuntu26 beginning October19,2026; runner-images issue14748; actual notice read."
   }
 }
