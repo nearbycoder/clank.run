@@ -6,6 +6,7 @@ import {fixture} from './fixtures/platform-environment-fixture.mjs';
 import {defineDatabase,defineJobs,defineWorkflow,defineWorkflows,openSQLite,openJobs,s} from '../dist/index.js';
 import {openErrorInbox} from '../dist/error-inbox.js';
 import {createTraceTimeline} from '../dist/trace-timeline.js';
+import {createHash} from 'node:crypto';
 
 const path = f => `/api/projects/${f.development.id}/incidents`;
 const create = f => ({title:'Release recovery',severity:'critical',ownerId:f.owner.user.id,operationId:'incident_create_exact_01'});
@@ -161,5 +162,20 @@ test('role, session, protocol and version changes during held diagnostics cannot
     finish();await pending;
     assert.equal(control.prepare('SELECT count(*) AS n FROM clank_platform_incident_links').get().n,0);assert.equal(control.prepare('SELECT count(*) AS n FROM clank_platform_incident_receipts WHERE operation_id=?').get(input.operationId).n,0);
     control.prepare('UPDATE clank_platform_incident_state SET protocol=1').run();
+  }
+});
+
+test('scoped incident tokens require explicit permissions and the exact current credential after body intake',async t=>{
+  const f=await fixture(t),control=new DatabaseSync(join(f.options.dataDirectory,'control.sqlite'));t.after(()=>control.close());
+  const issue=async permissions=>(await f.call(`/api/projects/${f.development.id}/tokens`,{name:'Incident fixture credential',permissions,expiresIn:300},201)).token;
+  const denied=await issue(['read']);assert.equal((await f.handle(new Request(f.options.publicUrl+path(f),{headers:{authorization:'Bearer '+denied.accessToken}}))).status,403);
+  for(const boundary of ['revoked','rotated']){
+    const token=await issue(['read','incidents']);let controller,enter;const entered=new Promise(resolve=>enter=resolve);
+    const body=new ReadableStream({start(value){controller=value;},pull(){enter();}},{highWaterMark:0});
+    const pending=f.handle(new Request(f.options.publicUrl+path(f),{method:'POST',headers:{authorization:'Bearer '+token.accessToken,'content-type':'application/json'},body,duplex:'half'}));await entered;
+    if(boundary==='revoked')control.prepare('UPDATE clank_platform_tokens SET revoked_at=? WHERE id=?').run(Date.now(),token.id);
+    else control.prepare('UPDATE clank_platform_tokens SET token_hash=? WHERE id=?').run(createHash('sha256').update('clnk_'+'r'.repeat(43)).digest('hex'),token.id);
+    controller.enqueue(new TextEncoder().encode(JSON.stringify({...create(f),operationId:'incident_token_held_'+boundary})));controller.close();
+    assert.equal((await pending).status,401,boundary);assert.equal(control.prepare('SELECT count(*) AS n FROM clank_platform_incidents').get().n,0);
   }
 });

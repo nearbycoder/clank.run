@@ -8720,10 +8720,15 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       const access = accessibleProject(storage.internal, matched[1]!, principal, requiredPermission);
       const project = access.project;
       const incidentOperation = operation === "incidents" || operation.startsWith("incidents/");
+      const incidentCredentialHash = incidentOperation && principal.tokenId !== null
+        ? syncHash((request.headers.get("authorization") ?? "").slice(7)) : null;
       if (!incidentOperation && request.method !== "GET" && request.method !== "HEAD") requireNoEvacuation(project.id);
       const requireCurrentProjectAuthority = () => {
         if (!incidentOperation && request.method !== "GET" && request.method !== "HEAD") requireNoEvacuation(project.id);
         requireCurrentPlatformPrincipal(storage, principal);
+        if (incidentCredentialHash !== null && !storage.internal.prepare("SELECT 1 FROM clank_platform_tokens WHERE id=? AND user_id=? AND token_hash=?").get(principal.tokenId, principal.userId, incidentCredentialHash)) {
+          throw new PlatformError(401, "INVALID_TOKEN", "The CLI access token is invalid or expired.");
+        }
         accessibleProject(storage.internal, project.id, principal, requiredPermission);
         if (/^backups\/[^/]+\/restore$/u.test(operation) || (!operation && request.method === "DELETE")) requireFreshPlatformAuthentication(principal);
       };
