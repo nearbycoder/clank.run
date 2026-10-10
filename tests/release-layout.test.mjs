@@ -33,7 +33,10 @@ const fixtures = {
   defaultRegex: 'export default /`/.source;\nconst first = `first\n   keep`;\nconst second = `second\n   keep`;\nexport function snapshot() {\n    return [first, second, /`/.source];\n}\n',
   extendsRegex: 'class Value extends /`/.constructor {}\nconst first = `first\n   keep`;\nconst second = `second\n   keep`;\nexport function snapshot() {\n    return [new Value().source, first, second, /`/.source];\n}\n',
 };
-fixtures.bounded = 'export function snapshot() {\n    return [' + Array.from({length: 258}, () => '`start${').join('') + '1' + Array.from({length: 258}, () => '}end`').join('') + '];\n}\n';
+// Beyond the release scanner's stricter bound, but accepted by the minimum
+// Node22 native parser. A 258-level fixture crashes that older parser before
+// our build pass runs, so it cannot demonstrate scanner fallback there.
+fixtures.bounded = 'export function snapshot() {\n    return [' + Array.from({length: 66}, () => '`start${').join('') + '1' + Array.from({length: 66}, () => '}end`').join('') + '];\n}\n';
 
 async function releaseBuild(t, mapped = false) {
   const root = await mkdtemp(join(tmpdir(), 'clank-release-layout-'));

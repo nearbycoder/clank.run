@@ -94,7 +94,7 @@ function compactReleaseLayout(source) {
   }
 
   function template(start, depth) {
-    if (depth > 256) return null;
+    if (depth > 64) return null;
     for (let index = start + 1; index < source.length;) {
       if (source[index] === "\\") { index += 2; continue; }
       if (source[index] === "`") return index + 1;
