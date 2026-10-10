@@ -19,7 +19,7 @@ export async function capturedProvider(t){
     const suffix=path==='/__clank/pitr/checkpoint'?path:path.slice(entry.ingress.route.length)||'/';
     if(path!=='/__clank/pitr/checkpoint'&&request.headers.get('authorization')!=='Bearer '+entry.ingress.token)return new Response(null,{status:404});
     return fetch(entry.origin+suffix,{headers:request.headers,redirect:'error'});
-  },{hostname:'127.0.0.1',port:0});const origin='http://127.0.0.1:'+server.port;
+  },{hostname:'127.0.0.1',port:0,maxBodySize:8*1024*1024});const origin='http://127.0.0.1:'+server.port;
   const configuration={source:async(projectId)=>{
     const entry=entries.get(projectId);if(!entry)throw new Error('Native captured source is unavailable.');return {binding:entry.binding,origin,token:entry.token,encryptionKey:new Uint8Array(key),assertCurrent(){const row=native.prepare('SELECT release,generation,active FROM current_binding WHERE project=?').get(projectId);if(row?.release!==entry.binding.releaseId||row.generation!==entry.binding.generation||row.active!==1||entry.child.exitCode!==null||entry.child.signalCode!==null)throw new Error('Native captured source changed.');}};
   },restoreKey:async(projectId)=>{const key=native.prepare('SELECT key FROM retained_keys WHERE project=?').get(projectId)?.key;if(!(key instanceof Uint8Array))throw new Error('Independent native recovery key unavailable.');return new Uint8Array(key);},maxArchiveBytes:1024*1024};
@@ -33,7 +33,7 @@ export async function capturedProvider(t){
         const ready=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('Owned captured application startup: '+output)),15000);child.once('message',value=>{clearTimeout(timer);resolve(value);});child.once('close',()=>{clearTimeout(timer);reject(new Error('Owned captured application closed: '+output));});});assert.equal(ready.ready,true);
         const health=await fetch(ready.origin+'/healthz');assert.equal(health.status,200);assert.deepEqual((await health.json()).value,['mutation three']);entries.set(project,{...owned,binding,origin:ready.origin,token:manifest.ingress.controlToken,ingress:manifest.ingress});
       }};
-    deploymentHandler=createDeploymentProviderHandler(adapter,{token:providerToken,onError(error){t.diagnostic(String(error?.stack??error));}});
+    deploymentHandler=createDeploymentProviderHandler(adapter,{token:providerToken,maxArtifactBytes:8*1024*1024,maxRuntimeBytes:8*1024*1024,onError(error){t.diagnostic(String(error?.stack??error));}});
     agent=await openProviderDeploymentAgent({client:createDeploymentCoordinatorClient({baseUrl:f.options.publicUrl,fetch:(url,init)=>f.handle(new Request(url,init))}),registrationToken,node:{id:'owned-native-pitr-provider',region:'local',endpoint:origin,capacity:5},pollIntervalMs:20,heartbeatIntervalMs:100,onError(error){t.diagnostic(String(error?.stack??error));},provider:createHttpDeploymentProvider({baseUrl:origin,token:providerToken,retries:0,timeoutMs:30000})});
   };
   return {root,node,configuration,registrationToken,openAgent,
