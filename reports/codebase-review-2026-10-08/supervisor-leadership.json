@@ -1,7 +1,7 @@
 {
   "feature": 6,
   "proposal": "https://github.com/nearbycoder/clank.run/issues/313",
-  "status": "verified-awaiting-final-hosted-head-and-protected-merge",
+  "status": "updated-diagnostic-source-awaiting-full-gates",
   "counted": false,
   "base": "0729abca3ed24743b2af1a25089071e7107a81f7",
   "implemented": [
@@ -20,8 +20,8 @@
     "One actual packaged platform CLI takeover and one strict environment contract check"
   ],
   "pending": [
-    "Fresh hosted checks and review-thread review on the final report-only head",
-    "Normal protected expected-head squash, exact tree verification and preserved-file checks"
+    "Both full native release gates and fresh hosted checks on the updated diagnostic source",
+    "Final report-only head checks and normal protected expected-head squash"
   ],
   "acceptedFeatures": 26,
   "remainingFeatures": 14,
@@ -191,5 +191,17 @@
     "unresolvedThreads": 0,
     "annotations": "Actual Ubuntu 26 runner-migration notice read; no actionable annotation.",
     "proofSha256": "6b99ebc67af66d00e39102a9394fbde88d101bc85137104bb35262e962ea7533"
+  },
+  "finalReportHeadFailure": {
+    "head": "b222dedafb367c77fb729719c9bace3f702fdcdd",
+    "runtime22": "success",
+    "runtime24": "success",
+    "conformance": "One test failed; bounded log excludes the assertion; cause remains unknown.",
+    "diagnosticsRepair": "Bounded first16 TAP failure blocks, total64KiB, emitted after forwarded stdout drains. Actual early-failure/later200KiB-output regression passes without retrying or changing its failed exit.",
+    "diagnosticTests": {
+      "passed": 8,
+      "failed": 0,
+      "logSha256": "be33b8e6f7acf38280f12c4d1a87ad5561715e81725cb20abc158a979fc97829"
+    }
   }
 }
