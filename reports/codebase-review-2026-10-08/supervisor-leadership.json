@@ -1,7 +1,7 @@
 {
   "feature": 6,
   "proposal": "https://github.com/nearbycoder/clank.run/issues/313",
-  "status": "updated-diagnostic-source-awaiting-full-gates",
+  "status": "verified-awaiting-final-head-protected-merge",
   "counted": false,
   "base": "0729abca3ed24743b2af1a25089071e7107a81f7",
   "implemented": [
@@ -20,8 +20,7 @@
     "One actual packaged platform CLI takeover and one strict environment contract check"
   ],
   "pending": [
-    "Both full native release gates and fresh hosted checks on the updated diagnostic source",
-    "Final report-only head checks and normal protected expected-head squash"
+    "Fresh final report-only head checks and normal protected expected-head squash"
   ],
   "acceptedFeatures": 26,
   "remainingFeatures": 14,
@@ -203,5 +202,117 @@
       "failed": 0,
       "logSha256": "be33b8e6f7acf38280f12c4d1a87ad5561715e81725cb20abc158a979fc97829"
     }
+  },
+  "nativeSource03": {
+    "source": "ef72f0c9e55564eb2443a4c9fecb98e9b4589681",
+    "tree": "0bc4be8151b50042cd25e73029fbb881d3cd1aaa",
+    "tarSha256": "930ab84e796ce2c9a258dad600b94a461123b9b8d59271142fe67a25d6454afb",
+    "inputs": 1108,
+    "ordinaryUid": 1000,
+    "results": {
+      "22": {
+        "exit": 0,
+        "counts": {
+          "tests": 2109,
+          "pass": 2106,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": [
+          91.64,
+          81.04,
+          90.1
+        ],
+        "logSha256": "797087b4b16a15413cfc016a5c96074081e47582993facd6fda66d051026254f"
+      },
+      "26": {
+        "exit": 0,
+        "counts": {
+          "tests": 2109,
+          "pass": 2106,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": [
+          91.64,
+          81.02,
+          90.07
+        ],
+        "logSha256": "2194d8c03d20eb815b8f6bc40e85c13b2a62f7c340b623bc1d34eed76d5de4fa"
+      }
+    }
+  },
+  "nativeSource04": {
+    "source": "274b4b0bad46a5a62b7a11329342196254096aca",
+    "tree": "5dfb3827d6fff99f9dacf6080e92def5e725a187",
+    "tarSha256": "7bdc529002f752772a5a840d4806aed2afb46a4526d8fd553d63bc1c6f7fbaaa",
+    "inputs": 1108,
+    "ordinaryUid": 1000,
+    "results": {
+      "22": {
+        "exit": 0,
+        "counts": {
+          "tests": 2109,
+          "pass": 2106,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": [
+          91.63,
+          81.04,
+          90.11
+        ],
+        "logSha256": "13e50372dcb27209f56c0bb046f9784517a1c2f0d87f85b5ec8d02359314556b"
+      },
+      "26": {
+        "exit": 0,
+        "counts": {
+          "tests": 2109,
+          "pass": 2106,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": [
+          91.64,
+          81.02,
+          90.07
+        ],
+        "logSha256": "036b5bb133304b336024e3782b60e838d81a65358cc5876aea9fc006078edf15"
+      }
+    }
+  },
+  "hostedSource04": {
+    "head": "274b4b0bad46a5a62b7a11329342196254096aca",
+    "allSix": "success",
+    "newCodeQLAlerts": 0,
+    "unresolvedThreads": 0,
+    "annotations": "Actual Ubuntu 26 runner migration notice read; no actionable annotation.",
+    "proofSha256": "8ff0421c8562145b9ce55c0098fbb0af152b654b85811310e914ff726dbd5ac2"
+  },
+  "actualDiagnosticFailure": {
+    "head": "ef72f0c9e55564eb2443a4c9fecb98e9b4589681",
+    "jobs": [
+      "Node 24",
+      "Packaged-release conformance"
+    ],
+    "assertion": "tests/supervisor-runtime-process.test.mjs:83; scheduler lastBackupId is null while its encrypted archive is already visible.",
+    "repair": "Bounded observation waits for exactly one listed archive, matching durable scheduler acknowledgment and a cleared running lease. Encryption, completion and no-overlapping-writer assertions remain strict.",
+    "focused": {
+      "passed": 8,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "logSha256": "41f3f7284d8ece01e39f23c8ead2e32044ee8e68c82c9d5e4b257fccd807c12a"
+    },
+    "earlierTruncatedFailures": "Remain unclassified; no shared cause is inferred."
+  },
+  "additionalImmutableEvidence": {
+    "files": 31,
+    "indexSha256": "783a3916d178a5813e6de593c787c807b839a95c0362e0717ca2ad92d950da82",
+    "previous95FileIndexUnchanged": true
   }
 }
