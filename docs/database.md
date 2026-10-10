@@ -1,5 +1,8 @@
 # Database revisions and correctness
 
+SQLite is the default store. The [PostgreSQL application subset](postgres-application.md)
+reuses typed table/function contracts with an explicit supported-operation and service boundary.
+
 Clank uses Node's built-in SQLite as a transactional document store. Application fields live as validated JSON, while identity, ownership, creation time, and document version live in dedicated columns.
 
 There are two different revision concepts:
