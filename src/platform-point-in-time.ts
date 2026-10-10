@@ -12,6 +12,8 @@ export interface PlatformPointInTimeSource {
 export interface PlatformPointInTimeOptions {
   /** Resolve only operator-registered provider endpoints, credentials and per-project keys. */
   source(projectId: string): Promise<PlatformPointInTimeSource>;
+  /** Recover the checkpoint's key independently of its source node's liveness. */
+  restoreKey?(projectId: string, checkpoint: PlatformPointInTimeCheckpoint): Promise<Uint8Array>;
   maxArchiveBytes?: number;
   maxEntries?: number;
   maxArchivesPerProject?: number;
@@ -65,10 +67,11 @@ export async function openPlatformPointInTime(options:{
   assertOwner(projectId:string,ownerId:string):void;
   onError?:(error:unknown)=>void;
 }){
-  const {internal}=options,source=options.configuration.source,ownerAssertion=options.assertOwner,onError=options.onError;
+  const {internal}=options,source=options.configuration.source,restoreKey=options.configuration.restoreKey,ownerAssertion=options.assertOwner,onError=options.onError;
   const assertOwner=(project:string,owner:string)=>synchronous(()=>ownerAssertion(project,owner));
   const maxBytes=number(options.configuration.maxArchiveBytes??32*1024*1024,4096,256*1024*1024),maxEntries=number(options.configuration.maxEntries??10000,1,100000),maxArchives=number(options.configuration.maxArchivesPerProject??30,1,1000),maxTotalBytes=number(options.configuration.maxTotalArchiveBytes??2*1024*1024*1024,maxBytes,128*1024*1024*1024),configuredDirectory=options.directory;
   if(typeof source!=="function"||typeof ownerAssertion!=="function")throw new TypeError("Registered recovery sources and current owner authorization are required.");
+  if(restoreKey!==undefined&&typeof restoreKey!=="function")throw new TypeError("Recovery restore keys require an operator key resolver.");
   const fsName="node:fs/promises",pathName="node:path",cryptoName="node:crypto";
   const [fs,path,crypto]=await Promise.all([import(fsName),import(pathName),import(cryptoName)]);
   await fs.mkdir(configuredDirectory,{recursive:true,mode:0o700});
@@ -131,7 +134,29 @@ export async function openPlatformPointInTime(options:{
   };
   const capacity=()=>{if(Number(internal.prepare("SELECT count(*) AS n FROM clank_platform_pitr_operations").get()!.n)>=10000)throw new Error("Retained recovery operation capacity is full.");};
   let closed=false,timer:ReturnType<typeof setTimeout>|undefined,flight:Promise<void>|undefined;
-  const captures=new Set<Promise<PlatformPointInTimeCheckpoint>>(),cancellations=new Set<AbortController>();
+  const captures=new Set<Promise<unknown>>(),cancellations=new Set<AbortController>();
+  const performRestore=async(project:string,id:string,input:{targetPath:string;throughSequence:number},assertCurrent:()=>void)=>{
+    protocol();synchronous(assertCurrent);if(closed)throw new Error("Recovery controller is closed.");if(!restoreKey)throw new Error("An independent recovery key resolver is required.");
+    identifier(project);const configured=row(project);if(!configured)throw new Error("Retained recovery policy is unavailable.");
+    const version=Number(configured.version),owner=String(configured.owner),targetPath=input.targetPath,throughSequence=number(input.throughSequence,0,Number.MAX_SAFE_INTEGER);
+    if(typeof targetPath!=="string"||!path.isAbsolute(targetPath)||targetPath.includes("\0"))throw new TypeError("Recovery requires a reserved stopped destination path.");
+    const native=internal.prepare("SELECT * FROM clank_platform_pitr_checkpoints WHERE project=? AND id=?").get(project,id);if(!native)throw new Error("Recovery checkpoint is unavailable.");
+    const retained=checkpoint(native),encoded=archive(project,id,assertCurrent);if(throughSequence>retained.sequence)throw new Error("Requested recovery point exceeds its retained horizon.");
+    const cancellation=new AbortController();cancellations.add(cancellation);let key:Uint8Array|undefined;
+    const deadline=setTimeout(()=>cancellation.abort(new Error("Recovery restore deadline exceeded.")),30000);deadline.unref?.();
+    const current=()=>{protocol();synchronous(assertCurrent);assertOwner(project,owner);const r=row(project);if(closed||cancellation.signal.aborted||r?.version!==version||r.owner!==owner)throw new Error("Recovery restore lost its current policy or ownership.");};
+    try{
+      current();const value=await new Promise<Uint8Array>((resolve,reject)=>{
+        const cleanup=()=>cancellation.signal.removeEventListener("abort",aborted),aborted=()=>{cleanup();reject(cancellation.signal.reason);};
+        if(cancellation.signal.aborted){aborted();return;}cancellation.signal.addEventListener("abort",aborted,{once:true});
+        void Promise.resolve().then(()=>restoreKey(project,retained)).then(value=>{cleanup();resolve(value);},error=>{cleanup();reject(error);});
+      });current();if(!(value instanceof Uint8Array)||value.byteLength!==32)throw new Error("Recovery key is unavailable.");key=new Uint8Array(value);
+      const result=await restorePointInTimeArchive(JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(encoded)),{encryptionKey:key,targetPath,confirmation:"restore point in time",throughSequence,expectedEpoch:retained.epoch,expectedSequence:retained.sequence,expectedDigest:retained.digest,expectedBinding:retained.binding,operationId:retained.operationId,maxArchiveBytes:maxBytes,maxEntries,assertCurrent:current});current();return result;
+    }catch(error){report(error);throw error;}finally{clearTimeout(deadline);cancellations.delete(cancellation);key?.fill(0);}
+  };
+  const restore=(project:string,id:string,input:{targetPath:string;throughSequence:number},assertCurrent:()=>void)=>{
+    const pending=performRestore(project,id,input,assertCurrent);captures.add(pending);void pending.then(()=>captures.delete(pending),()=>captures.delete(pending));return pending;
+  };
   const configure=(project:string,owner:string,input:{operationId:string;expectedVersion:number;enabled:boolean;intervalMs:number},assertCurrent:()=>void)=>transaction(()=>{
     protocol();synchronous(assertCurrent);if(closed)throw new Error("Recovery controller is closed.");identifier(project);identifier(owner);operationIdentifier(input.operationId);number(input.expectedVersion,0,Number.MAX_SAFE_INTEGER);number(input.intervalMs,1000,24*60*60*1000);if(typeof input.enabled!=="boolean")throw new TypeError("Recovery policy enabled must be boolean.");
     assertOwner(project,owner);
@@ -207,7 +232,7 @@ export async function openPlatformPointInTime(options:{
       const encoded=(globalThis as any).Buffer.concat(chunks),archive=JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(encoded)) as PointInTimeArchive;
       if(archive.operationId!==operationId||archive.epoch!==configured.epoch&&configured.epoch!==null||configured.sequence!==null&&(archive.sequence<Number(configured.sequence)||archive.sequence===configured.sequence&&archive.digest!==configured.digest))throw new Error("Recovery checkpoint replays or changes its retained epoch/horizon.");
       const verificationDirectory=await fs.mkdtemp(path.join(directory,".verify-"));
-      try{await restorePointInTimeArchive(archive,{encryptionKey:key,targetPath:path.join(verificationDirectory,"verified.sqlite"),confirmation:"restore point in time",throughSequence:archive.sequence,expectedEpoch:archive.epoch,expectedSequence:archive.sequence,expectedDigest:archive.digest,expectedBinding:binding,operationId,maxArchiveBytes:maxBytes,maxEntries});}finally{await fs.rm(verificationDirectory,{recursive:true,force:true});}
+      try{await restorePointInTimeArchive(archive,{encryptionKey:key,targetPath:path.join(verificationDirectory,"verified.sqlite"),confirmation:"restore point in time",throughSequence:archive.sequence,expectedEpoch:archive.epoch,expectedSequence:archive.sequence,expectedDigest:archive.digest,expectedBinding:binding,operationId,maxArchiveBytes:maxBytes,maxEntries,assertCurrent(){current();sourceCurrent();}});}finally{await fs.rm(verificationDirectory,{recursive:true,force:true});}
       current();sourceCurrent();const id="pitr_"+crypto.createHash("sha256").update(project+"\0"+operationId).digest("hex"),digest=crypto.createHash("sha256").update(encoded).digest("hex");
       return internal.transaction(()=>{
         current();sourceCurrent();internal.prepare("INSERT INTO clank_platform_pitr_checkpoints VALUES(?,?,?,?,?,?,?,?,?,?,?,?)").run(id,project,operationId,version,JSON.stringify(binding),archive.epoch,archive.sequence,archive.digest,archive.committedAt,bytes,digest,Date.now());
@@ -226,5 +251,5 @@ export async function openPlatformPointInTime(options:{
     for(const r of rows){if(closed)return;const project=String(r.project),operation=r.pending===null?"scheduled_"+crypto.randomUUID().replaceAll("-",""):String(r.pending);try{await capture(project,operation,()=>{if(closed)throw new Error("Recovery scheduler closed.");});}catch(error){report(error);}}
   };
   const schedule=()=>{if(closed||timer)return;timer=setTimeout(()=>{timer=undefined;flight=run().catch(report).finally(()=>{flight=undefined;schedule();});},1000);timer.unref?.();};
-  return Object.freeze({policy,configure,resolve,capture,archive,checkpoints(project:string){protocol();return internal.prepare("SELECT * FROM clank_platform_pitr_checkpoints WHERE project=? ORDER BY created_at DESC,id DESC LIMIT ?").all(identifier(project),maxArchives).map(checkpoint);},start(){schedule();},async close(){closed=true;if(timer)clearTimeout(timer);for(const cancellation of cancellations)cancellation.abort(new Error("Recovery controller closed."));await Promise.allSettled([...captures]);await flight;}});
+  return Object.freeze({policy,configure,resolve,capture,archive,restore,checkpoints(project:string){protocol();return internal.prepare("SELECT * FROM clank_platform_pitr_checkpoints WHERE project=? ORDER BY created_at DESC,id DESC LIMIT ?").all(identifier(project),maxArchives).map(checkpoint);},start(){schedule();},async close(){closed=true;if(timer)clearTimeout(timer);for(const cancellation of cancellations)cancellation.abort(new Error("Recovery controller closed."));await Promise.allSettled([...captures]);await flight;}});
 }

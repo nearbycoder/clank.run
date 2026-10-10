@@ -47,6 +47,10 @@ export interface PointInTimeRestoreOptions {
   throughSequence?: number;
   /** Select the latest recorded commit timestamp at or before this time. */
   asOf?: number;
+  /** Overall monotonic replay budget; defaults to 30 seconds, at most 60 seconds. */
+  maxDurationMs?: number;
+  /** Trusted synchronous ownership check; destination must remain stopped and exclusively owned. */
+  assertCurrent?: () => void;
 }
 export interface PointInTimeRestoreResult { epoch: string; sequence: number; committedAt: number; databasePath: string; }
 export interface PointInTimeArchive {
@@ -96,6 +100,8 @@ export interface PointInTimeArchiveRestoreOptions extends PointInTimeArchiveBoun
   expectedSequence: number;
   expectedDigest: string;
   expectedBinding?: PointInTimeProviderBinding;
+  maxDurationMs?: number;
+  assertCurrent?: () => void;
 }
 const archiveSources = new WeakMap<PointInTimeRecovery, (bounds: PointInTimeArchiveBounds) => Promise<PointInTimeArchive>>();
 const bounded = (value: number, name: string, min: number, max: number) => {
@@ -105,6 +111,18 @@ const bounded = (value: number, name: string, min: number, max: number) => {
 const keyBytes = (value: Uint8Array) => {
   if (!(value instanceof Uint8Array) || value.byteLength !== 32) throw new TypeError("Recovery encryptionKey must contain exactly 32 bytes.");
   return new Uint8Array(value);
+};
+const restoreGuard=(duration:number|undefined,assertCurrent:(()=>void)|undefined)=>{
+  const deadline=performance.now()+bounded(duration??30000,"maxDurationMs",1,60000);
+  if(assertCurrent!==undefined&&typeof assertCurrent!=="function")throw new TypeError("Recovery current authority must be a synchronous assertion.");
+  return ()=>{
+    if(performance.now()>deadline)throw new Error("Recovery restore deadline exceeded.");
+    const result:unknown=assertCurrent?.();if(result!==undefined){
+      if(result&&(typeof result==="object"||typeof result==="function")&&typeof Reflect.get(result,"then")==="function")void Promise.resolve(result).catch(()=>undefined);
+      throw new TypeError("Recovery current authority assertions must complete synchronously.");
+    }
+    if(performance.now()>deadline)throw new Error("Recovery restore deadline exceeded.");
+  };
 };
 
 /** Captures every successful framework transaction, after service schema bootstrap and before serving requests. */
@@ -402,6 +420,7 @@ export function createPointInTimeRecoveryProvider(recovery: PointInTimeRecovery,
 
 /** Validates the complete encrypted archive against an independently retained horizon. */
 export async function restorePointInTimeArchive(archive: PointInTimeArchive, options: PointInTimeArchiveRestoreOptions): Promise<PointInTimeRestoreResult> {
+  const current=restoreGuard(options.maxDurationMs,options.assertCurrent);current();
   const limits = archiveBounds(options), key = keyBytes(options.encryptionKey), targetPath = options.targetPath;
   const confirmation = options.confirmation, through = bounded(options.throughSequence,"throughSequence",0,Number.MAX_SAFE_INTEGER);
   const expected = {epoch:options.expectedEpoch,sequence:bounded(options.expectedSequence,"expectedSequence",0,limits.entries),digest:options.expectedDigest};
@@ -417,6 +436,7 @@ export async function restorePointInTimeArchive(archive: PointInTimeArchive, opt
   const [fs,path,crypto,os] = await Promise.all([import(fsName),import(pathName),import(cryptoName),import(osName)]);
   let temporary: string | undefined;
   try {
+    current();
     const {authentication,...content} = captured;
     const actualMac = crypto.createHmac("sha256",key).update(JSON.stringify(content)).digest();
     if(typeof authentication!=="string" || !/^[0-9a-f]{64}$/u.test(authentication)
@@ -427,6 +447,7 @@ export async function restorePointInTimeArchive(archive: PointInTimeArchive, opt
       || !Array.isArray(captured.files) || captured.files.length!==captured.sequence+4 || !Number.isSafeInteger(captured.committedAt) || captured.committedAt<0) throw new Error("Recovery archive does not match its retained horizon.");
     const names = new Set<string>(), decoded = new Map<string,Uint8Array>();
     for(const file of captured.files) {
+      current();
       if(!file || typeof file.name!=="string" || typeof file.contents!=="string" || !Number.isSafeInteger(file.bytes) || file.bytes<0
         || !/^[0-9a-f]{64}$/u.test(file.sha256) || names.has(file.name)
         || !(file.name==="epoch.json" || file.name==="head.json" || /^[0-9]{16}\.json$/u.test(file.name)
@@ -448,50 +469,63 @@ export async function restorePointInTimeArchive(archive: PointInTimeArchive, opt
     for(let sequence=1;sequence<=captured.sequence;sequence++)required.add(`${String(sequence).padStart(16,"0")}.json`);
     if(required.size!==names.size || [...required].some(name=>!names.has(name)))throw new Error("Recovery archive has a missing or foreign file.");
     const repository: string=await fs.mkdtemp(path.join(os.tmpdir(),"clank-pitr-archive-"));temporary=repository;
+    current();
     await fs.mkdir(path.join(repository,"base",epoch.manifest.baseBackupId),{recursive:true,mode:0o700});
     for(const [name,bytes] of decoded) {
+      current();
       const file=await fs.open(path.join(repository,name),"wx",0o600);
       try{await file.writeFile(bytes);await file.sync();}finally{await file.close();}
     }
-    return await restorePointInTime({directory:repository,encryptionKey:key,targetPath,confirmation,throughSequence:through});
+    current();return await restorePointInTime({directory:repository,encryptionKey:key,targetPath,confirmation,throughSequence:through,assertCurrent:current});
   } finally {key.fill(0);if(temporary)await fs.rm(temporary,{recursive:true,force:true});}
 }
 
 /** Replays an authenticated encrypted base and an unbroken journal into a stopped destination. */
 export async function restorePointInTime(options: PointInTimeRestoreOptions): Promise<PointInTimeRestoreResult> {
+  const current=restoreGuard(options.maxDurationMs,options.assertCurrent);current();
+  // Capture the whole request before the first asynchronous boundary.
+  options={directory:options.directory,targetPath:options.targetPath,confirmation:options.confirmation,throughSequence:options.throughSequence,asOf:options.asOf,encryptionKey:keyBytes(options.encryptionKey)};
+  const key=options.encryptionKey;let cleanup=async()=>{};
+  try{
   if (options.confirmation !== "restore point in time") throw new TypeError("Point-in-time restore confirmation is required.");
   if ((options.throughSequence === undefined) === (options.asOf === undefined)) throw new TypeError("Choose exactly one committed sequence or asOf timestamp.");
   if (options.throughSequence !== undefined) bounded(options.throughSequence, "throughSequence", 0, Number.MAX_SAFE_INTEGER);
   if (options.asOf !== undefined) bounded(options.asOf, "asOf", 0, Number.MAX_SAFE_INTEGER);
   const fsName = "node:fs/promises", pathName = "node:path", cryptoName = "node:crypto", osName = "node:os", constantsName = "node:fs";
   const [fs, path, crypto, os, { constants }] = await Promise.all([import(fsName), import(pathName), import(cryptoName), import(osName), import(constantsName)]);
+  current();
   const readBounded = async (filename: string, maximum: number): Promise<string> => {
     const handle = await fs.open(filename, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
       const stats = await handle.stat();
+      current();
       if (!stats.isFile() || stats.size > maximum) throw new Error("Recovery archive entry is not a bounded regular file.");
       const bytes = new Uint8Array(maximum + 1); let length = 0;
-      while (length < bytes.length) { const read = await handle.read(bytes, length, bytes.length - length, length); if (!read.bytesRead) break; length += read.bytesRead; }
+      while (length < bytes.length) { const read = await handle.read(bytes, length, bytes.length - length, length);current();if (!read.bytesRead) break; length += read.bytesRead; }
       if (length > maximum) throw new Error("Recovery archive entry exceeds its size bound.");
       return new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, length));
     } finally { await handle.close(); }
   };
-  const key = keyBytes(options.encryptionKey), directory = path.resolve(options.directory);
+  const directory = path.resolve(options.directory);
   const encoded = JSON.parse(await readBounded(path.join(directory, "epoch.json"), 64 * 1024));
   const expected = crypto.createHmac("sha256", key).update(JSON.stringify(encoded.manifest)).digest("hex");
   if (encoded.mac !== expected || encoded.manifest?.protocol !== "clank-pitr-repository/1") throw new Error("Recovery repository authentication failed.");
   const head = JSON.parse(await readBounded(path.join(directory, "head.json"), 64 * 1024));
   if (head.mac !== crypto.createHmac("sha256", key).update(JSON.stringify(head.checkpoint)).digest("hex") || head.checkpoint.epoch !== encoded.manifest.epoch
     || !Number.isSafeInteger(head.checkpoint.sequence) || head.checkpoint.sequence < 0) throw new Error("Recovery export checkpoint authentication failed.");
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "clank-pitr-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "clank-pitr-"));cleanup=async()=>{await fs.rm(root,{recursive:true,force:true});};current();
   const temporary = path.join(root, "replay.sqlite");
   const manager = await openBackupManager({ repositoryDirectory: path.join(directory, "base"), encryptionKey: key, keyId: encoded.manifest.keyId, maxDatabaseBytes: 512 * 1024 * 1024 });
   try {
+    current();
     await manager.restore(encoded.manifest.baseBackupId, { targetPath: temporary, confirmation: `restore ${encoded.manifest.baseBackupId}` });
+    current();
     const entries = (await fs.readdir(directory)).filter((name: string) => /^[0-9]{16}\.json$/u.test(name)).sort();
     let result = await runSQLiteTask<PointInTimeRestoreResult>("recovery", "replayJournal", [temporary, [], Array.from(key), encoded.manifest.epoch, options.throughSequence, options.asOf]);
+    current();
     let verifiedSequence = 0, verifiedDigest = "0".repeat(64);
     for (const entry of entries) {
+      current();
       const envelope = await readBounded(path.join(directory, entry), 12 * 1024 * 1024);
       if ((globalThis as any).Buffer.byteLength(envelope) > 12 * 1024 * 1024) throw new Error("Recovery entry exceeds size limit.");
       const parsed = JSON.parse(envelope);
@@ -507,13 +541,15 @@ export async function restorePointInTime(options: PointInTimeRestoreOptions): Pr
       if (options.throughSequence !== undefined && Number(parsed.sequence) > options.throughSequence) continue;
       if (options.asOf !== undefined && Number(parsed.committedAt) > options.asOf) continue;
       result = await runSQLiteTask<PointInTimeRestoreResult>("recovery", "replayJournal", [temporary, [envelope], Array.from(key), encoded.manifest.epoch, options.throughSequence, options.asOf]);
+      current();
     }
     if (verifiedSequence !== head.checkpoint.sequence || verifiedDigest !== head.checkpoint.digest) throw new Error("Recovery journal is missing its authenticated exported tail.");
     if (options.throughSequence !== undefined && result.sequence !== options.throughSequence) throw new Error("Requested recovery sequence is not available in the exported repository.");
     if (options.asOf !== undefined && result.committedAt > options.asOf) throw new Error("Requested recovery time predates the base backup.");
     // A restored database begins a new epoch. Its old journal is not resumed accidentally.
     await runSQLiteTask("recovery", "finishReplay", [temporary]);
-    await restoreSQLiteBackup(temporary, options.targetPath);
+    current();await restoreSQLiteBackup(temporary, options.targetPath,current);current();
     return { ...result, databasePath: path.resolve(options.targetPath) };
-  } finally { manager.close(); key.fill(0); await fs.rm(root, { recursive: true, force: true }); }
+  } finally { manager.close(); }
+  }finally{key.fill(0);await cleanup();}
 }

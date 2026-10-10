@@ -6,6 +6,7 @@ import {mkdtemp,mkdir,rm,readdir,readFile,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createHash} from 'node:crypto';
+import {DatabaseSync} from 'node:sqlite';
 import {defineDatabase,openSQLite} from '../dist/backend.js';
 import {createSQLiteTaskScope} from '../dist/sqlite-task.js';
 import {openPlatformPointInTime} from '../dist/platform-point-in-time.js';
@@ -16,11 +17,13 @@ async function fixture(run,configuration={}){
   const scope=await createSQLiteTaskScope('trusted-process');
   await scope.run(async()=>{
     const worker=fork(new URL('./fixtures/point-in-time-provider-worker.mjs',import.meta.url),[JSON.stringify({root:node,token})],{stdio:['ignore','ignore','pipe','ipc']});
-    const closed=new Promise(resolve=>worker.once('close',resolve));let output='';worker.stderr.on('data',part=>output=(output+part).slice(-4096));let database,controller;
+    const closed=new Promise(resolve=>worker.once('close',resolve));let output='';worker.stderr.on('data',part=>output=(output+part).slice(-4096));let database,controller,keyStore;
     try{
       const ready=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('Owned native provider startup deadline: '+output)),10000);worker.once('message',value=>{clearTimeout(timer);resolve(value);});worker.once('exit',()=>{clearTimeout(timer);reject(new Error('Owned native provider exited: '+output));});});assert.equal(ready.ready,true);
       const catalog=join(root,'controller.sqlite'),directory=join(root,'recovery');
-      let resolutions=0,sourceOverride;
+      let resolutions=0,sourceOverride,keyResolutions=0,keyOverride;
+      keyStore=new DatabaseSync(join(root,'operator-keys.sqlite'));keyStore.exec('CREATE TABLE retained_keys(project TEXT PRIMARY KEY,key BLOB) STRICT');keyStore.prepare('INSERT INTO retained_keys VALUES(?,?)').run('project_native',new Uint8Array(32).fill(71));
+      const restoreKey=async(project,checkpoint)=>{keyResolutions++;assert.equal(checkpoint.projectId,project);if(keyOverride)return keyOverride(project,checkpoint);const stored=keyStore.prepare('SELECT key FROM retained_keys WHERE project=?').get(project)?.key;if(!(stored instanceof Uint8Array))throw new Error('Independent operator key unavailable.');return new Uint8Array(stored);};
       const current=()=>{if(internal.prepare('SELECT active FROM native_owners WHERE project=? AND owner=?').get('project_native','owner_native')?.active!==1)throw new Error('Native owner was revoked.');};
       const source=async()=>{
         resolutions++;if(sourceOverride)return sourceOverride();
@@ -33,13 +36,13 @@ async function fixture(run,configuration={}){
         await controller?.close();database?.close();database=await openSQLite(defineDatabase({}),{path:catalog});internal=database[Symbol.for('clank.sqlite.internal')];
         internal.exec('CREATE TABLE IF NOT EXISTS native_owners(project TEXT PRIMARY KEY,owner TEXT,active INTEGER) STRICT;CREATE TABLE IF NOT EXISTS registered_source(id INTEGER PRIMARY KEY CHECK(id=1),generation INTEGER,active INTEGER) STRICT;');
         internal.prepare('INSERT OR IGNORE INTO native_owners VALUES(?,?,1)').run('project_native','owner_native');internal.prepare('INSERT OR IGNORE INTO registered_source VALUES(1,3,1)').run();
-        controller=await openPlatformPointInTime({internal,directory,configuration:{source,maxArchiveBytes:1024*1024,...configuration},assertOwner(project,owner){assert.equal(project,'project_native');assert.equal(owner,'owner_native');current();}});
+        controller=await openPlatformPointInTime({internal,directory,configuration:{source,restoreKey,maxArchiveBytes:1024*1024,...configuration},assertOwner(project,owner){assert.equal(project,'project_native');assert.equal(owner,'owner_native');current();}});
       };
       await reopen();
-      const f={root,node,current,reopen,get internal(){return internal;},get controller(){return controller;},get resolutions(){return resolutions;},set sourceOverride(value){sourceOverride=value;},enable(input={}){return controller.configure('project_native','owner_native',{operationId:'configure_native_01',expectedVersion:0,enabled:true,intervalMs:60000,...input},current);},capture(operation='checkpoint_native_01',claim=current){return controller.capture('project_native',operation,claim);}};
+      const f={root,node,current,reopen,get internal(){return internal;},get controller(){return controller;},get resolutions(){return resolutions;},get keyResolutions(){return keyResolutions;},set keyOverride(value){keyOverride=value;},set sourceOverride(value){sourceOverride=value;},async loseSource(){if(worker.exitCode===null&&worker.signalCode===null)worker.kill('SIGKILL');await closed;await rm(node,{recursive:true,force:true});internal.prepare('UPDATE registered_source SET active=0').run();},enable(input={}){return controller.configure('project_native','owner_native',{operationId:'configure_native_01',expectedVersion:0,enabled:true,intervalMs:60000,...input},current);},capture(operation='checkpoint_native_01',claim=current){return controller.capture('project_native',operation,claim);}};
       await run(f);
     }finally{
-      await controller?.close();database?.close();if(worker.exitCode===null&&worker.signalCode===null)worker.kill('SIGKILL');await closed;await rm(root,{recursive:true,force:true});
+      await controller?.close();database?.close();keyStore?.close();if(worker.exitCode===null&&worker.signalCode===null)worker.kill('SIGKILL');await closed;await rm(root,{recursive:true,force:true});
     }
   });
 }
@@ -139,4 +142,26 @@ test('resolution refuses a live native export lease and revoked current authorit
   const input={operationId:'resolve_native_01',pendingOperationId:'checkpoint_native_01',expectedVersion:2};assert.throws(()=>f.controller.resolve('project_native','owner_native',input,f.current),/active native lease/);
   f.internal.prepare('UPDATE clank_platform_pitr_policies SET lease=NULL,lease_until=NULL').run();f.internal.prepare('UPDATE native_owners SET active=0').run();assert.throws(()=>f.controller.resolve('project_native','owner_native',input,f.current),/revoked/);
   assert.equal(f.internal.prepare('SELECT state FROM clank_platform_pitr_operations WHERE id=?').get('checkpoint_native_01').state,'pending');assert.equal(f.internal.prepare('SELECT count(*) AS n FROM clank_platform_pitr_operations WHERE kind=?').get('resolve').n,0);
+}));
+
+test('the native controller restores a retained known sequence after actual provider SIGKILL and complete source-volume removal using independent operator keys',async()=>fixture(async f=>{
+  f.enable();const checkpoint=await f.capture(),retained=f.controller.archive('project_native',checkpoint.id,f.current);await f.loseSource();await f.reopen();
+  const target=join(f.root,'separate-stopped.sqlite'),result=await f.controller.restore('project_native',checkpoint.id,{targetPath:target,throughSequence:2},f.current);assert.equal(result.sequence,2);assert.equal(result.epoch,checkpoint.epoch);assert.equal(f.resolutions,1);assert.equal(f.keyResolutions,1);
+  const database=new DatabaseSync(target,{readOnly:true});try{assert.deepEqual(database.prepare('SELECT json_extract(_data,\'$.value\') AS value FROM clank_records').all().map(row=>row.value),['mutation two']);assert.equal(database.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE name GLOB 'clank_pitr_*'").get().n,0);}finally{database.close();}
+  assert.deepEqual(f.controller.archive('project_native',checkpoint.id,f.current),retained);assert.equal(f.controller.checkpoints('project_native').length,1);assert.equal(f.controller.policy('project_native').sequence,3);
+}));
+
+test('controller restore refuses corrupted ciphertext and out-of-horizon or relative destinations before consulting the independent key resolver',async()=>fixture(async f=>{
+  f.enable();const checkpoint=await f.capture(),targetPath=join(f.root,'never-restored.sqlite');await assert.rejects(f.controller.restore('project_native',checkpoint.id,{targetPath,throughSequence:4},f.current),/retained horizon/);await assert.rejects(f.controller.restore('project_native',checkpoint.id,{targetPath:'relative.sqlite',throughSequence:2},f.current),/reserved stopped destination/);
+  f.internal.prepare('UPDATE clank_platform_pitr_archives SET contents=? WHERE id=?').run(new Uint8Array([1,2]),checkpoint.id);await assert.rejects(f.controller.restore('project_native',checkpoint.id,{targetPath,throughSequence:2},f.current),/missing or corrupt/);assert.equal(f.keyResolutions,0);await assert.rejects(readFile(targetPath),{code:'ENOENT'});
+}));
+
+test('native policy ownership is revalidated after held key resolution before any destination publication',async()=>fixture(async f=>{
+  f.enable();const checkpoint=await f.capture();let entered,deliver;const started=new Promise(resolve=>{entered=resolve;}),held=new Promise(resolve=>{deliver=resolve;});f.keyOverride=()=>{entered();return held;};const targetPath=join(f.root,'revoked-restore.sqlite'),pending=f.controller.restore('project_native',checkpoint.id,{targetPath,throughSequence:2},f.current),rejected=assert.rejects(pending,/revoked/);
+  await started;f.internal.prepare('UPDATE native_owners SET active=0').run();deliver(new Uint8Array(32).fill(71));await rejected;await assert.rejects(readFile(targetPath),{code:'ENOENT'});assert.equal(f.controller.checkpoints('project_native').length,1);
+}));
+
+test('controller shutdown cancels a stalled independent key lookup before its native catalog closes',async()=>fixture(async f=>{
+  f.enable();const checkpoint=await f.capture();let entered;const started=new Promise(resolve=>{entered=resolve;});f.keyOverride=()=>{entered();return new Promise(()=>{});};const targetPath=join(f.root,'closed-restore.sqlite'),pending=f.controller.restore('project_native',checkpoint.id,{targetPath,throughSequence:2},f.current),rejected=assert.rejects(pending,/controller closed/);
+  await started;await f.controller.close();await rejected;await assert.rejects(readFile(targetPath),{code:'ENOENT'});assert.equal(f.controller.checkpoints('project_native').length,1);
 }));

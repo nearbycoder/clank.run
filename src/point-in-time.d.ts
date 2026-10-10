@@ -31,6 +31,8 @@ export interface PointInTimeRestoreOptions {
     confirmation: "restore point in time";
     throughSequence?: number;
     asOf?: number;
+    maxDurationMs?: number;
+    assertCurrent?: () => void;
 }
 export interface PointInTimeRestoreResult {
     epoch: string;
@@ -62,6 +64,8 @@ export interface PointInTimeArchiveRestoreOptions extends PointInTimeArchiveBoun
     expectedSequence: number;
     expectedDigest: string;
     expectedBinding?: PointInTimeProviderBinding;
+    maxDurationMs?: number;
+    assertCurrent?: () => void;
 }
 export declare function exportPointInTimeRecovery(recovery: PointInTimeRecovery, bounds?: PointInTimeArchiveBounds): Promise<PointInTimeArchive>;
 export declare function restorePointInTimeArchive(archive: PointInTimeArchive, options: PointInTimeArchiveRestoreOptions): Promise<PointInTimeRestoreResult>;

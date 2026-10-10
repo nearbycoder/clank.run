@@ -975,7 +975,7 @@ const MAX_ACTIVE_RUNNER_ENROLLMENTS = 50;
 export async function openPlatform(options: ClankPlatformOptions): Promise<PlatformRuntime> {
   if(options.pointInTime){
     const configured=options.pointInTime;
-    options={...options,pointInTime:Object.freeze({source:configured.source,maxArchiveBytes:configured.maxArchiveBytes,maxEntries:configured.maxEntries,maxArchivesPerProject:configured.maxArchivesPerProject,maxTotalArchiveBytes:configured.maxTotalArchiveBytes})};
+    options={...options,pointInTime:Object.freeze({source:configured.source,restoreKey:configured.restoreKey,maxArchiveBytes:configured.maxArchiveBytes,maxEntries:configured.maxEntries,maxArchivesPerProject:configured.maxArchivesPerProject,maxTotalArchiveBytes:configured.maxTotalArchiveBytes})};
   }
   // Standby activation can be delayed indefinitely. Capture ordinary operator
   // configuration before the first await; changing the caller's input must not
