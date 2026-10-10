@@ -4,6 +4,17 @@ import {openOrganizationSso} from '../dist/organization-sso.js';
 import {fixture,company,other,defaults} from './fixtures/organization-policy-fixture.mjs';
 import {mockPolicyIdp} from './fixtures/organization-policy-idp.mjs';
 
+test('the actual test IdP redirects only to its registered callback',async t=>{
+  const idp=await mockPolicyIdp();t.after(()=>idp.close());
+  for(const redirect of ['https://untrusted.example/callback','//untrusted.example','http://127.0.0.1:42421/__clank/sso/callback/other',null]){
+    const url=new URL('/authorize',idp.issuer);if(redirect!==null)url.searchParams.set('redirect_uri',redirect);
+    const response=await fetch(url,{redirect:'manual'});assert.equal(response.status,400);assert.equal(response.headers.get('location'),null);
+  }
+  const url=new URL('/authorize',idp.issuer);url.searchParams.set('redirect_uri','http://127.0.0.1:42421/__clank/sso/callback');url.searchParams.set('state','https://untrusted.example/?nested=value');
+  const response=await fetch(url,{redirect:'manual'});assert.equal(response.status,302);const target=new URL(response.headers.get('location'));
+  assert.equal(target.origin,'http://127.0.0.1:42421');assert.equal(target.pathname,'/__clank/sso/callback');assert.equal(target.searchParams.get('state'),url.searchParams.get('state'));assert.ok(target.searchParams.get('code'));
+});
+
 async function linked(f,sso,organization) {
   const start=await sso.handle(f.request('/__clank/sso/link/'+organization,f.owner,{}));assert.equal(start.status,200,await start.clone().text());
   const {authorizationUrl}=await start.json(),authorized=await fetch(authorizationUrl,{redirect:'manual'});
