@@ -56,6 +56,16 @@ function compactReleaseLayout(source) {
   const isLineEnd = character => /[\r\n\u2028\u2029]/u.test(character);
   const expressionWords = new Set(["return", "throw", "case", "default", "extends", "delete", "void", "typeof", "new", "instanceof", "in", "yield", "await", "else", "do"]);
 
+  // Native compilation has parsed this module. A regexp literal cannot cross
+  // a line terminator; without another slash on this line, division is certain.
+  function noClosingSlash(start) {
+    for (let index = start + 1; index < source.length; index++) {
+      if (isLineEnd(source[index])) return true;
+      if (source[index] === "/") return false;
+    }
+    return true;
+  }
+
   function quoted(start, quote) {
     for (let index = start + 1; index < source.length; index++) {
       const character = source[index];
@@ -148,7 +158,7 @@ function compactReleaseLayout(source) {
         continue;
       }
       if (character === "/") {
-        if (expression === false) {
+        if (expression === false || expression === "ambiguous" && noClosingSlash(index)) {
           index += source[index + 1] === "=" ? 2 : 1;
           expression = true; previous = "/";
           continue;

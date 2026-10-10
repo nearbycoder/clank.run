@@ -4,13 +4,13 @@ import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
-import {createApi,createSyncClient,defineBackend,defineDatabase,defineTable,openBackend} from '../dist/backend.js';
+import {createApi,createSyncClient,defineBackend,defineDatabase,defineTable,openBackend,openSQLite} from '../dist/backend.js';
 import {defineAuth} from '../dist/auth.js';
 import {s} from '../dist/ai.js';
 import {defineBucket,openBucketManager,createBucketClient,resolveBucketAttachment} from '../dist/buckets.js';
 import {openLocalObjectStore} from '../dist/object-storage.js';
 const origin='https://attachments.example',referenceSchema=s.object({bucket:s.string(),key:s.string(),objectId:s.string(),sha256:s.string(),generation:s.string()}),api=createApi();
-async function fixture(t,{separate=false,copyManager=false,onAttach}={}){
+async function fixture(t,{separate=false,copyManager=false,suppliedDatabase=false,onAttach}={}){
   const root=await mkdtemp(join(tmpdir(),'clank-attachments-native-')),databasePath=join(root,'app.sqlite'),store=await openLocalObjectStore({directory:join(root,'objects')});
   const manager=await openBucketManager({definitions:[defineBucket({name:'files',ownership:'user',visibility:'private',browserAccess:'authenticated',resumable:true,maxChunkBytes:3,maxObjectBytes:1000,allowedContentTypes:['text/plain']})],store,databasePath:separate?join(root,'catalog.sqlite'):databasePath,stagingDirectory:join(root,'staging'),signingKey:'owned_attachment_signing_credential_0123456789',publicOrigin:origin,capabilityTtlMs:1000});
   let retained, runtime, session, loseMutation=false, loseUpload=false, partial=false, hook;
@@ -20,15 +20,16 @@ async function fixture(t,{separate=false,copyManager=false,onAttach}={}){
     list:query({args:{},handler:({db})=>db.table('records').collect()}),
   }));
   const options={path:databasePath,buckets:copyManager?{...manager}:manager,offlineMutations:{},agent:false};
-  runtime=await openBackend(definition,options);
+  async function open(){if(suppliedDatabase)options.database=await openSQLite(definition.schema,{path:databasePath});runtime=await openBackend(definition,options);}
+  await open();
   async function register(email){const r=await runtime.handle(new Request(origin+'/__clank/auth/register',{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({email,password:'correct horse battery staple'})}));assert.equal(r.status,201);const p=await r.json();return {cookie:r.headers.get('set-cookie').split(';',1)[0],csrf:p.csrfToken,userId:p.user.id};}
   const alice=await register('alice@example.test'),bob=await register('bob@example.test');session=alice;
   const transport=async(url,init={})=>{const r=await runtime.handle(new Request(new URL(url,origin),{...init,headers:{...init.headers,origin,cookie:session.cookie}}));await hook?.(url,r);
     if(loseMutation&&String(url).includes('/mutation/')){loseMutation=false;throw new TypeError('Owned fixture lost mutation acknowledgment after native commit.');}
     if(String(url).includes('/cap/')&&((loseUpload&&r.status===201)||(partial&&r.status===204))){loseUpload=false;partial=false;throw new TypeError('Owned fixture lost upload acknowledgment.');}return r;};
   const client=createSyncClient({url:origin,fetch:transport,auth:{csrfHeader:()=>({'x-clank-csrf':session.csrf})}}),bucket=createBucketClient('files',{fetch:transport,csrfToken:()=>session.csrf});
-  const f={root,manager,client,bucket,alice,bob,get runtime(){return runtime;},set session(value){session=value;},set loseMutation(value){loseMutation=value;},set loseUpload(value){loseUpload=value;},set partial(value){partial=value;},set hook(value){hook=value;},
-    inspect(work){const db=new DatabaseSync(databasePath);try{return work(db);}finally{db.close();}},async reopen(){runtime.close();runtime=await openBackend(definition,options);},
+  const f={root,manager,client,bucket,alice,bob,get runtime(){return runtime;},get suppliedDatabase(){return options.database;},set session(value){session=value;},set loseMutation(value){loseMutation=value;},set loseUpload(value){loseUpload=value;},set partial(value){partial=value;},set hook(value){hook=value;},
+    inspect(work){const db=new DatabaseSync(databasePath);try{return work(db);}finally{db.close();}},async reopen(){runtime.close();await open();},
     reference(object){return {bucket:object.bucket,key:object.key,objectId:object.id,sha256:object.sha256,generation:object.generation};},
     async upload(key='offline-owned'){return bucket.upload({key,value:new Blob(['owned attachment'],{type:'text/plain'}),ifSha256:null});},get retained(){return retained;},
     request(name,attachment,key=Date.now()+'.'+crypto.randomUUID(),extra={}){return client.mutateOnce(api.attach,{name,attachment,...extra},{key,userId:alice.userId});},
@@ -40,6 +41,23 @@ test('completed private attachment and replay receipt commit once across a lost 
   await f.reopen();const id=await f.request('Known attachment',attachment,key);const rows=await f.client.query(api.list);assert.equal(rows.length,1);assert.equal(rows[0]._id,id);assert.deepEqual(rows[0].attachment,attachment);
   assert.equal(f.inspect(db=>db.prepare('SELECT count(*) AS n FROM clank_mutation_receipts').get().n),1);
   await assert.rejects(f.request('Changed input',attachment,key),e=>e.code==='MUTATION_KEY_REUSED');
+});
+test('a supplied native SQLite database keeps attachment rows and receipt replay scoped to the current owner',async t=>{
+  const f=await fixture(t,{suppliedDatabase:true}),aliceAttachment=f.reference(await f.upload()),key=Date.now()+'.'+crypto.randomUUID();
+  assert.equal(f.runtime.database,f.suppliedDatabase);
+  const aliceId=await f.request('Alice attachment',aliceAttachment,key);
+  f.session=f.bob;
+  const asBob=(attachment)=>f.client.mutateOnce(api.attach,{name:'Bob attachment',attachment},{key,userId:f.bob.userId});
+  await assert.rejects(asBob(aliceAttachment),error=>error.code==='ATTACHMENT_CHANGED');
+  assert.deepEqual(await f.client.query(api.list),[]);
+  assert.equal(f.inspect(db=>db.prepare('SELECT count(*) AS n FROM clank_mutation_receipts').get().n),1);
+  const bobAttachment=f.reference(await f.upload()),bobId=await asBob(bobAttachment);
+  assert.notEqual(aliceId,bobId);assert.equal((await f.client.query(api.list))[0]._id,bobId);
+  await f.reopen();assert.equal(f.runtime.database,f.suppliedDatabase);assert.equal(await asBob(bobAttachment),bobId);
+  f.session=f.alice;assert.equal(await f.request('Alice attachment',aliceAttachment,key),aliceId);
+  const rows=await f.client.query(api.list);assert.equal(rows.length,1);assert.deepEqual(rows[0].attachment,aliceAttachment);
+  const receipts=f.inspect(db=>db.prepare('SELECT owner,output FROM clank_mutation_receipts WHERE key=? ORDER BY owner').all(key));
+  assert.deepEqual(new Map(receipts.map(row=>[row.owner,JSON.parse(row.output)])),new Map([[f.alice.userId,{value:aliceId}],[f.bob.userId,{value:bobId}]]));
 });
 test('foreign ownership, altered object identity/digest and an identical-byte rewrite cannot attach',async t=>{
   const f=await fixture(t),object=await f.upload(),reference=f.reference(object);
