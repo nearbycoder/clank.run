@@ -20,5 +20,5 @@ const platform=await openPlatform({...input,pointInTime:{maxArchiveBytes:1024*10
   }},onError(error){console.error('Owned native project recovery diagnostic:',error?.stack??error);}});
 process.on('message',message=>{
   if(message.close){void platform.close().then(()=>{registry.close();process.exit(0);},()=>process.exit(1));return;}
-  void(async()=>{const request=new Request(message.url,{method:message.method,headers:message.headers,...(message.body===null?{}:{body:Buffer.from(message.body,'base64')})}),response=await platform.handle(request);process.send({id:message.id,status:response.status,headers:[...response.headers],body:await response.text()});})().catch(()=>process.send({id:message.id,error:true}));
+  void(async()=>{const request=new Request(message.url,{method:message.method,headers:message.headers,...(message.body===null?{}:{body:Buffer.from(message.body,'base64')})}),response=await platform.handle(request);process.send({id:message.id,status:response.status,headers:[...response.headers],bodyEncoding:'base64',body:response.body?Buffer.from(await response.arrayBuffer()).toString('base64'):null});})().catch(()=>process.send({id:message.id,error:true}));
 });process.send({ready:true});

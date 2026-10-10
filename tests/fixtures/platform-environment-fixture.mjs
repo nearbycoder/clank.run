@@ -23,7 +23,7 @@ async function childPlatform(options, entry = 'tests/fixtures/platform-promotion
     if (message.ready) { ready(); return; }
     const entry = pending.get(message.id); if (!entry) return; pending.delete(message.id);
     if (message.error) entry.reject(new Error('Controller request failed.'));
-    else entry.resolve(new Response(message.body, { status: message.status, headers: message.headers }));
+    else entry.resolve(new Response(message.bodyEncoding === 'base64' && message.body !== null ? Buffer.from(message.body, 'base64') : message.body, { status: message.status, headers: message.headers }));
   });
   await initialized;
   return {
