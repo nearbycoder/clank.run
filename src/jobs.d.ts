@@ -15,6 +15,8 @@ export type InferJobArgs<Args extends JobArgs> = Args extends Schema<any>
         ? InferSchemaShape<Args>
         : never;
 export type JobState = "queued" | "running" | "retry" | "succeeded" | "dead" | "cancelled";
+/** @internal Consult the actual current claim; a copied context grants no authority. */
+export declare function assertJobAttemptCurrent(context: JobHandlerContext<any, any>): void;
 export type CronConcurrency = "allow" | "forbid" | "replace";
 
 export interface JobRetryOptions {

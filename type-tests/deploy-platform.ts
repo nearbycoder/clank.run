@@ -58,6 +58,17 @@ const runner: PlatformRunnerOptions = {
 declare const objects: ObjectStore;
 
 void openPlatform({
+  dataDirectory: ".clank-trusted-platform", publicUrl: "https://deploy.example.com",
+  hostingProfile: "trusted", runner: { kind: "process" }, signup: "bootstrap",
+  sqliteIsolation: "trusted-process",
+});
+void openPlatform({
+  dataDirectory: ".clank-platform", publicUrl: "https://deploy.example.com",
+  // @ts-expect-error unknown isolation policies must never silently disable isolation
+  sqliteIsolation: "disabled",
+});
+
+void openPlatform({
   dataDirectory: ".clank-platform",
   publicUrl: "https://deploy.example.com",
   appUrlTemplate: "https://{slug}.apps.example.com",

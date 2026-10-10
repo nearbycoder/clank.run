@@ -1,5 +1,6 @@
 import { openNodeEvacuations, type NodeEvacuationPlan, type EvacuationProject, type NodeEvacuationHooks } from "./node-evacuation.ts";
 import { openProjectIncidents, ProjectIncidentError, type PlatformIncidentOptions, type IncidentAuthority } from "./platform-incidents.ts";
+import { openProjectSlos, ProjectSloError, type PlatformSloOptions, type SloAuthority } from "./platform-slo.ts";
 import { createManagedCanary, validateManagedCanary, type ManagedCanaryOptions } from "./managed-canary.ts";
 import { decodeReleaseAttestation, verifyReleaseAttestation, type ReleaseAttestation, type ReleaseAttestationPolicy } from "./release-attestation.ts";
 import { createOperationalMonitor, type OperationalSignal, type PlatformOperationsOptions } from "./operations-monitor.ts";
@@ -10,8 +11,9 @@ import { openAuditExporter, type AuditExportOptions } from "./audit-export.ts";
 import { forecastUsage } from "./usage-forecast.ts";
 import { openOrganizationSso, type OrganizationSsoOptions, type OrganizationProvisioningAssignment } from "./organization-sso.ts";
 import { captureLogLines, redactLogSecrets } from "./security.ts";
-import { runSQLiteTask } from "./sqlite-task.ts";
+import { createSQLiteTaskScope, runSQLiteTask } from "./sqlite-task.ts";
 import { openSecretRotations, type SecretRotationOptions, type SecretRevision } from "./secret-rotation.ts";
+import {openPlatformServiceAccounts, assertServiceAccountProtocol, ServiceAccountError, type PlatformServiceAccountOptions, type ServiceAccountAuthority, type AuthenticatedServiceAccount} from "./platform-service-accounts.ts";
 import {
   AuthError,
   defineAuth,
@@ -121,6 +123,9 @@ import {
   trustedClientAddress,
 } from "./security.ts";
 import { SQLITE_INTERNAL, type SQLiteInternal } from "./sqlite-internal.ts";
+import { openSupervisorLease, armSupervisorGuardian, waitForSupervisorCleanup, normalizeSupervisorOptions,
+  PlatformSupervisorError, type SupervisorLease, type PlatformSupervisorOptions, type PlatformSupervisorStatus } from "./platform-supervisor.ts";
+export type { PlatformSupervisorOptions, PlatformSupervisorStatus } from "./platform-supervisor.ts";
 import { ensureDeploymentComparisons, recordDeploymentActivation, deploymentComparisonWindows } from "./platform-comparisons.ts";
 import type { ObjectStore } from "./object-storage.ts";
 import {
@@ -544,6 +549,12 @@ const PLATFORM_QUOTA_DEFINITIONS = Object.freeze({
 export interface ClankPlatformOptions {
   /** Bounded project incident workspace and optional scoped readonly diagnostic adapter. */
   incidents?: PlatformIncidentOptions;
+  /** Bounded native-ingress completion objectives and durable burn metadata. */
+  slos?: PlatformSloOptions;
+  /** Same-host Linux coordinators; each must occupy a dedicated process. Lost leadership terminates that process. */
+  supervisor?: PlatformSupervisorOptions;
+  /** Opt-in dedicated organization machine identities with project-scoped credentials. */
+  serviceAccounts?: PlatformServiceAccountOptions;
   /**
    * Private operator certificates for co-located, loopback provider nodes.
    * Every provider promotion requires a current report under its exact node ID.
@@ -575,6 +586,8 @@ export interface ClankPlatformOptions {
    * Docker runner. Defaults from the selected runner for programmatic callers.
    */
   hostingProfile?: PlatformHostingProfile;
+  /** Defaults to namespaces. trusted-process requires explicit trusted process hosting and closed public signup. */
+  sqliteIsolation?: "namespace" | "trusted-process";
   runner?: PlatformRunnerOptions;
   /**
    * Enables the authenticated remote deployment-node coordination API.
@@ -698,7 +711,11 @@ export interface ClankPlatformOptions {
 export type PlatformRuntimePolicy = "always_on" | "on_demand" | "suspended";
 
 export interface PlatformRuntime {
+  /** Local status contains no lease token or process authority. Present only for the opt-in coordinator topology. */
+  readonly supervisor?: () => PlatformSupervisorStatus;
   readonly handle: (request: Request) => Promise<Response>;
+  /** Resolve a current machine credential for trusted server-side budget adapters. */
+  authenticateServiceAccount(request: Request): AuthenticatedServiceAccount;
   readonly publicUrl: string;
   readonly dataDirectory: string;
   readonly hostingProfile: PlatformHostingProfile;
@@ -826,6 +843,7 @@ interface EnvironmentPromotionContext {
 }
 
 interface TokenPrincipal {
+  machine?: AuthenticatedServiceAccount;
   tokenId: string | null;
   sessionId: string | null;
   userId: string;
@@ -835,6 +853,22 @@ interface TokenPrincipal {
   permissions: readonly ProjectPermission[];
   previewName: string | null;
   impersonation: PlatformImpersonation | null;
+}
+
+// Request-local authority never becomes a persisted credential or an audit field.
+const admittedTokenAuthority = new WeakMap<TokenPrincipal, string>();
+function machineProjectPermission(operation: string, method: string): ProjectPermission {
+  if(method==='GET' && ['', 'usage', 'releases', 'backups'].includes(operation)) return 'read';
+  if(method==='GET' && operation==='logs') return 'logs';
+  if(method==='GET' && operation==='audit') return 'audit';
+  if(operation==='secrets' && ['GET','PUT'].includes(method) || /^secrets\/[^/]+$/u.test(operation) && method==='DELETE') return 'secrets';
+  if(operation==='releases' && method==='POST' || operation==='runtime' && ['GET','PUT'].includes(method)) return 'deploy';
+  if(operation==='rollback' && method==='POST') return 'rollback';
+  if(operation==='jobs' && method==='GET' || /^jobs\/job_[a-f0-9]{32}\/(cancel|retry)$/u.test(operation) && method==='POST') return 'jobs';
+  throw new PlatformError(403,'SERVICE_ACCOUNT_SCOPE_DENIED','This project operation requires a human account or a different credential scope.');
+}
+function tokenAuthorityFingerprint(row: Record<string, unknown>): string {
+  return syncHash(JSON.stringify([row.token_hash, row.organization_id, row.project_id, row.permissions, row.preview_name, row.expires_at]));
 }
 
 interface PlatformImpersonation {
@@ -856,6 +890,7 @@ type ProjectPermission =
   | "rollback"
   | "jobs"
   | "incidents"
+  | "slo"
   | "secrets"
   | "tokens"
   | "audit"
@@ -942,6 +977,119 @@ const MAX_ACTIVE_RUNNER_ENROLLMENTS = 50;
 
 /** Opens Clank's self-hostable deployment control plane and release supervisor. */
 export async function openPlatform(options: ClankPlatformOptions): Promise<PlatformRuntime> {
+  // Standby activation can be delayed indefinitely. Capture ordinary operator
+  // configuration before the first await; changing the caller's input must not
+  // turn off leadership or change the trust policy during later takeover.
+  if(options.supervisor)options=captureSupervisorPlatformOptions(options);
+  const sqliteIsolation = options.sqliteIsolation ?? "namespace";
+  if (sqliteIsolation !== "namespace" && sqliteIsolation !== "trusted-process") {
+    throw new TypeError('sqliteIsolation must be "namespace" or "trusted-process".');
+  }
+  if (sqliteIsolation === "trusted-process" && (options.hostingProfile !== "trusted"
+    || (options.runner?.kind ?? "process") !== "process" || options.signup === true)) {
+    throw new TypeError('sqliteIsolation "trusted-process" requires explicit trusted process hosting without public signup.');
+  }
+  const scope = await createSQLiteTaskScope(sqliteIsolation);
+  // Startup/recovery timers inherit this instance's policy. Requests and close
+  // re-enter it explicitly so another platform or caller cannot change it.
+  const runtime = await scope.run(() => options.supervisor ? openClusterPlatformScoped(options) : openPlatformScoped(options));
+  return { ...runtime,
+    handle: request => scope.run(() => runtime.handle(request)),
+    close: () => scope.run(() => runtime.close()),
+  };
+}
+
+function captureSupervisorPlatformOptions(input:ClankPlatformOptions):ClankPlatformOptions {
+  const active=new Set<object>();let size=0;
+  const copy=(value:any,depth:number,root=false):any=>{
+    if(value===null||typeof value!=="object")return value;
+    if(++size>10000||depth>32||active.has(value))throw new TypeError("Supervisor configuration must be bounded and acyclic.");
+    if(value instanceof Uint8Array)return new Uint8Array(value);
+    const prototype=Object.getPrototypeOf(value);
+    // Registered adapters and class instances retain their native identity.
+    // Their implementation/state must be kept compatible by the operator.
+    if(!root&&!Array.isArray(value)&&(prototype!==Object.prototype&&prototype!==null
+      ||Object.values(Object.getOwnPropertyDescriptors(value)).some(item=>typeof item.value==="function")))return value;
+    active.add(value);const result:any=Array.isArray(value)?[]:Object.create(prototype);
+    for(const [key,item] of Object.entries(Object.getOwnPropertyDescriptors(value))){
+      if(key==="length"&&Array.isArray(value))continue;
+      if(!("value" in item))throw new TypeError("Supervisor configuration accessors are not supported.");
+      Object.defineProperty(result,key,{value:copy(item.value,depth+1),enumerable:item.enumerable,writable:false,configurable:false});
+    }
+    active.delete(value);return Object.freeze(result);
+  };
+  const captured=copy(input,0,true);
+  return Object.freeze({...captured,supervisor:normalizeSupervisorOptions(captured.supervisor)});
+}
+
+let processSupervisorActive=false;
+async function openClusterPlatformScoped(options:ClankPlatformOptions):Promise<PlatformRuntime> {
+  const configuration=normalizeSupervisorOptions(options.supervisor!),proc=(globalThis as any).process;
+  if(processSupervisorActive)throw new TypeError("Automatic leadership requires one supervisor in its own dedicated coordinator process.");
+  const publicUrl=normalizePublicUrl(options.publicUrl),runnerKind=options.runner?.kind??"process",hostingProfile=options.hostingProfile??(runnerKind==="docker"?"isolated":"trusted");
+  if(hostingProfile!=="trusted"&&hostingProfile!=="isolated"||hostingProfile==="isolated"&&runnerKind!=="docker")throw new TypeError("Invalid supervisor hosting profile.");
+  proc.umask?.(0o077);processSupervisorActive=true;
+  let lease:SupervisorLease,paths:Awaited<ReturnType<typeof prepareDirectories>>;
+  try{paths=await prepareDirectories(options.dataDirectory);lease=await openSupervisorLease(paths.controlDatabase,configuration);}
+  catch(error){processSupervisorActive=false;throw error;}
+  const effective=Object.freeze({...options,dataDirectory:paths.root,publicUrl,supervisor:configuration});
+  let state:PlatformSupervisorStatus["state"]="standby",runtime:PlatformRuntime|undefined,guardian:Awaited<ReturnType<typeof armSupervisorGuardian>>|undefined;
+  let closed=false,owned=false,flight:Promise<void>|undefined,closeFlight:Promise<void>|undefined,lastStatus=lease.status(state);
+  const report=(error:unknown)=>{try{void Promise.resolve(options.onError?.(error)).catch(()=>undefined);}catch{}};
+  const unavailable=()=>{
+    const retryAfter=Math.max(1,Math.ceil(configuration.pollIntervalMs/1000));
+    const response=problem(503,"SUPERVISOR_UNAVAILABLE","An authoritative supervisor is not ready; retry after leadership recovery.",retryAfter);
+    response.headers.set("retry-after",String(retryAfter));return response;
+  };
+  const fence=(error:unknown)=>{state="fenced";report(error);if(guardian)proc.kill(proc.pid,"SIGKILL");};
+  const renewal=setInterval(()=>{
+    if(!owned||!['starting','leader','closing'].includes(state))return;
+    try{lease.renew();}catch(error){fence(error);}
+  },configuration.pollIntervalMs);renewal.unref?.();
+  const tick=async()=>{
+    if(closed||state!=="standby")return;
+    if(!lease.acquire())return;
+    owned=true;
+    state="starting";
+    try{
+      await waitForSupervisorCleanup(paths.root,lease);lease.assertCurrent();
+      guardian=await armSupervisorGuardian(paths.root,lease);lease.assertCurrent();
+      runtime=await openPlatformScoped(effective,lease);lease.assertCurrent();
+      state=closed?"closing":"leader";
+    }catch(error){fence(error);if(!guardian){try{lease.release();}catch{}}throw error;}
+  };
+  const poll=setInterval(()=>{
+    if(flight||closed||state!=="standby")return;
+    flight=tick().catch(report).finally(()=>{flight=undefined;});
+  },configuration.pollIntervalMs);poll.unref?.();
+  try{flight=tick();await flight;}catch(error){clearInterval(poll);clearInterval(renewal);lease.close();processSupervisorActive=false;throw error;}finally{flight=undefined;}
+  return {
+    publicUrl,dataDirectory:paths.root,hostingProfile,runnerKind,
+    supervisor(){if(state==="closed")return lastStatus;if(owned){try{lease.assertCurrent();}catch(error){fence(error);throw error;}}lastStatus=lease.status(state);return lastStatus;},
+    async handle(request){
+      if(state!=="leader"||!runtime)return unavailable();
+      try{lease.assertCurrent();const response=await runtime.handle(request);lease.assertCurrent();return response;}
+      catch(error){if(error instanceof PlatformSupervisorError){fence(error);return unavailable();}throw error;}
+    },
+    authenticateServiceAccount(request){if(state!=="leader"||!runtime)throw new PlatformSupervisorError("SUPERVISOR_UNAVAILABLE","An authoritative supervisor is not ready.");lease.assertCurrent();return runtime.authenticateServiceAccount(request);},
+    close(){if(closeFlight)return closeFlight;closed=true;state="closing";clearInterval(poll);
+      closeFlight=(async()=>{
+        await flight;
+        await runtime?.close();await guardian?.stop();clearInterval(renewal);
+        if(owned)lease.release();owned=false;
+        try{lastStatus=lease.status("closed");}catch(error){
+          if(guardian)throw error;
+          // A superseded standby owns no duties or workers. Its local observer
+          // can close even when a newer catalog configuration fences reads.
+          lastStatus=Object.freeze({...lastStatus,state:"closed"});
+        }
+        lease.close();state="closed";processSupervisorActive=false;
+      })().catch(error=>{fence(error);throw error;});return closeFlight;
+    },
+  };
+}
+
+async function openPlatformScoped(options: ClankPlatformOptions,leadership?:SupervisorLease): Promise<PlatformRuntime> {
   const authentication = {
     concurrency: integerInRange(options.authentication?.concurrency ?? 2, "authentication.concurrency", 1, 16),
     maxQueue: integerInRange(options.authentication?.maxQueue ?? 16, "authentication.maxQueue", 1, 128),
@@ -1259,6 +1407,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     );
   }
   const paths = await prepareDirectories(options.dataDirectory);
+  await assertPlatformSupervisorMode(paths.controlDatabase,Boolean(leadership));
   const runtimeGuardianDirectory = await prepareRuntimeGuardians(paths.root);
   const masterKey = await resolveMasterKey(paths.root, options.masterKey);
   const signupMode = options.signup ?? "bootstrap";
@@ -1267,12 +1416,14 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     : signupMode === false
       ? "disabled"
       : "bootstrap";
-  const storage = await openPlatformDatabase(paths.controlDatabase, masterKey, authentication);
+  const storage = await openPlatformDatabase(paths.controlDatabase, masterKey, authentication,leadership);
+  const machineResponseGuards = new WeakMap<Request, () => void>();
   const evacuations = openNodeEvacuations(storage.internal);
   const requireNoEvacuation = (projectId: string) => { if (evacuations.activeForProject(projectId)) throw new PlatformError(409, "PROJECT_EVACUATING", "Resume or cancel the node evacuation before changing this project."); };
   storage.internal.exec("CREATE TABLE IF NOT EXISTS clank_platform_release_attestations (release_id TEXT PRIMARY KEY REFERENCES clank_platform_releases(id) ON DELETE CASCADE, attestation TEXT NOT NULL, verified_at INTEGER NOT NULL)");
   const freshAuthenticationAge = integerInRange(options.freshAuthentication?.maxAgeMs ?? 300_000, "freshAuthentication.maxAgeMs", 1000, 3_600_000);
   const requireFreshPlatformAuthentication = (principal: TokenPrincipal) => {
+    if (principal.machine) throw new PlatformError(403, "HUMAN_AUTH_REQUIRED", "This operation requires a current human browser session.");
     if (!options.freshAuthentication?.required) return;
     const current = principal.sessionId ? storage.auth.refreshSession(principal.sessionId) : null;
     if (!current || current.user?.id !== principal.userId) throw new PlatformError(403, "FRESH_AUTH_REQUIRED", "A browser passkey or MFA verification is required for this operation.");
@@ -1309,24 +1460,41 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   }) : undefined;
   const secretRotations = await openSecretRotations(storage.internal, { encrypt: value => encryptSecret(value, masterKey), decrypt: value => decryptSecret(value, masterKey), validate: options.validateSecret });
   let projectIncidents: Awaited<ReturnType<typeof openProjectIncidents>>;
+  let projectSlos: ReturnType<typeof openProjectSlos>;
+  let closeProjectSlos: (() => void) | undefined;
+  let serviceAccounts: ReturnType<typeof openPlatformServiceAccounts> | undefined;
   let auditExporter: Awaited<ReturnType<typeof openAuditExporter>> | undefined;
   let retentionController: Awaited<ReturnType<typeof createRetentionController>> | undefined;
   let invitationDeliveries: ReturnType<typeof createPlatformInvitationDeliveryScheduler>;
   const usageOpenedAt = Date.now();
   try {
     projectIncidents = await openProjectIncidents(storage.internal, options.incidents ?? {}, {
+      // The SLO store is opened below before any reference can be requested.
       release(projectId, releaseId) {
         const row = storage.internal.prepare("SELECT id,digest,created_at,artifact_available FROM clank_platform_releases WHERE project_id=? AND id=?").get(projectId, releaseId);
         return row ? {id: String(row.id), digest: String(row.digest), createdAt: Number(row.created_at), available: Number(row.artifact_available ?? 1) === 1} : null;
       },
       alert(projectId, id) {
+        const slo = projectSlos.alert(projectId, id);
+        if (slo) return {state: slo.state === "open" || slo.state === "resolved" ? slo.state : "unknown", observedAt: slo.observedAt};
         if (!storage.internal.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_operational_incidents'").get()) return null;
         const row = storage.internal.prepare("SELECT signal,active,updated_at FROM clank_operational_incidents WHERE key=?").get(id);
         if (!row) return null;
         try { return JSON.parse(String(row.signal)).resourceId === projectId ? {state: Number(row.active) === 1 ? "open" : "resolved", observedAt: Number(row.updated_at)} : null; } catch { return null; }
       },
     });
+    serviceAccounts = options.serviceAccounts ? openPlatformServiceAccounts(storage.internal, options.serviceAccounts, {
+    hash: syncHash, encrypt: value => encryptSecret(value, masterKey), decrypt: value => decryptSecret(value, masterKey),
+    eligibleOwner(organizationId, ownerId, projectId, permissions) {
+      if (!storage.internal.prepare("SELECT 1 FROM clank_auth_users u JOIN clank_platform_memberships m ON m.user_id=u.id WHERE u.id=? AND u.disabled=0 AND m.organization_id=?").get(ownerId,organizationId)) return false;
+      if (!projectId) return true;
+      const project=projectById(storage.internal,projectId);
+      return !!project && !project.parentProjectId && project.organizationId===organizationId && (permissions??[]).every(permission=>projectMembershipAllows(storage.internal,project,ownerId,permission));
+    },
+  }) : undefined;
     if (options.auditExport) auditExporter = await openAuditExporter(storage.internal, options.auditExport);
+    projectSlos = openProjectSlos(storage.internal, options.slos ?? {}, {collecting: ingressEnabled, onError: options.onError});
+    closeProjectSlos = () => projectSlos.close();
     if (options.retention) retentionController = await createRetentionController({ ...options.retention, native: storage.internal, kinds: ["audit"],
       refresh(userId, sessionId) { const auth = storage.auth.refreshSession(sessionId); return auth?.user?.id === userId ? auth : null; },
       scope(_context, resource) { return resource.organizationId ? `organization:${resource.organizationId}` : resource.ownerId ? `account:${resource.ownerId}` : "platform"; },
@@ -1351,6 +1519,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     pruneUsageStorage(storage.internal, usageOpenedAt, limits.usageRetentionMonths);
     reconcileBackupObjectBinding(storage.internal, backupObjects);
   } catch (error) {
+    closeProjectSlos?.();
+    serviceAccounts?.close();
     retentionController?.close();
     await auditExporter?.close();
     storage.auth.close();
@@ -1698,6 +1868,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   };
   const canaries = canaryOptions ? createManagedCanary(storage.internal, canaryOptions) : undefined;
   const recordIngressMetric = (metric: IngressRequestMetric): void => {
+    projectSlos.record(metric);
     canaries?.record(metric);
     recordMetric(storage.internal, metric);
     if (metric.admitted) {
@@ -1944,6 +2115,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   };
 
   const requireRuntimeLaunchAuthority = (projectId: string): void => {
+    leadership?.assertCurrent();
     if (closed) throw new PlatformError(503, "PLATFORM_CLOSED", "Platform closed while the application was starting.");
     projectLeaseAssertions.get(projectId)?.();
   };
@@ -7995,8 +8167,41 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         });
       }
 
-      const principal = await requirePlatformPrincipal(storage, request);
+      const principal = await requirePlatformPrincipal(storage, request, serviceAccounts);
       if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) requireCurrentPlatformPrincipal(storage, principal);
+      if (principal.machine) {
+        requireCurrentPlatformPrincipal(storage,principal);
+        machineResponseGuards.set(request,()=>requireCurrentPlatformPrincipal(storage,principal));
+        if (url.pathname==="/api/service-account" && request.method==="GET") return api({ok:true,identity:principal.machine.identity});
+        if (!(url.pathname==="/api/projects" && request.method==="GET") && !url.pathname.startsWith('/api/projects/')) throw new PlatformError(403,"SERVICE_ACCOUNT_SCOPE_DENIED","Service credentials are limited to their project operations.");
+      }
+      const serviceAccountRoute=/^\/api\/organizations\/([A-Za-z0-9_-]{8,128})\/service-accounts(?:\/([A-Za-z0-9_-]{8,128})(?:\/(change|credentials))?)?$/u.exec(url.pathname);
+      if(serviceAccountRoute) {
+        if(!serviceAccounts) throw new PlatformError(404,"NOT_FOUND","Service accounts are not configured.");
+        if(principal.tokenId || principal.impersonation || !principal.sessionId) throw new PlatformError(403,"SERVICE_ACCOUNT_HUMAN_REQUIRED","Service account administration requires a human browser session.");
+        if(url.searchParams.size) throw new PlatformError(422,"SERVICE_ACCOUNT_INPUT","Service account endpoints do not accept query fields.");
+        const organizationId=serviceAccountRoute[1]!,accountId=serviceAccountRoute[2],operation=serviceAccountRoute[3];
+        const authority:ServiceAccountAuthority={userId:principal.userId,
+          authorize(id,write) {
+            requireCurrentPlatformPrincipal(storage,principal);
+            const role=storage.internal.prepare('SELECT role FROM clank_platform_memberships WHERE organization_id=? AND user_id=?').get(id,principal.userId)?.role;
+            if(role!=="owner" && role!=="admin") throw new PlatformError(404,"ORGANIZATION_NOT_FOUND","Organization administration is unavailable.");
+            if(write) {
+              const current=storage.auth.refreshSession(principal.sessionId!);
+              if(!current?.user || current.user.id!==principal.userId) throw new PlatformError(401,"UNAUTHENTICATED","Sign in to continue.");
+              storage.auth.requireFreshAuthentication(current,freshAuthenticationAge);
+            }
+          },
+          audit(action,metadata) {audit(storage.internal,principal.userId,null,null,action,metadata);},
+        };
+        authority.authorize(organizationId,request.method!=="GET");
+        if(!accountId && request.method==="GET") return api({ok:true,accounts:serviceAccounts.list(organizationId,authority)});
+        if(!accountId && request.method==="POST") return api({ok:true,account:serviceAccounts.create(organizationId,authority,await readJsonRequest(request,16*1024))},201);
+        if(accountId && !operation && request.method==="GET") return api({ok:true,detail:serviceAccounts.read(organizationId,accountId,authority)});
+        if(accountId && operation==="change" && request.method==="POST") return api({ok:true,account:serviceAccounts.change(organizationId,accountId,authority,await readJsonRequest(request,16*1024))});
+        if(accountId && operation==="credentials" && request.method==="POST") return api({ok:true,issued:serviceAccounts.issue(organizationId,accountId,authority,await readJsonRequest(request,16*1024))},201);
+        throw new PlatformError(404,"NOT_FOUND","Service account endpoint not found.");
+      }
       const retentionRoute = /^\/api\/retention\/(query|mutation)\/([A-Za-z]+)$/.exec(url.pathname);
       if (retentionRoute && request.method === "POST") {
         if (!retentionController) throw new PlatformError(404, "NOT_FOUND", "Retention administration is not configured.");
@@ -8679,6 +8884,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       const operation = matched[2] ?? "";
       const requiredPermission: ProjectPermission = !operation && request.method === "DELETE"
         ? "tokens"
+        : operation === "slo-policies" || operation.startsWith("slo-policies/")
+          ? request.method === "GET" || request.method === "HEAD" ? "read" : "slo"
         : operation === "incidents" || operation.startsWith("incidents/")
           ? "incidents"
         : operation === "members" || operation.startsWith("members/")
@@ -8719,12 +8926,19 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
                 : "read";
       const access = accessibleProject(storage.internal, matched[1]!, principal, requiredPermission);
       const project = access.project;
+      if(principal.machine) {
+        const permission=machineProjectPermission(operation,request.method);
+        accessibleProject(storage.internal,project.id,principal,permission);
+        machineResponseGuards.set(request,()=>{requireCurrentPlatformPrincipal(storage,principal);accessibleProject(storage.internal,project.id,principal,permission);});
+      }
       const incidentOperation = operation === "incidents" || operation.startsWith("incidents/");
-      const incidentCredentialHash = incidentOperation && principal.tokenId !== null
+      const sloOperation = operation === "slo-policies" || operation.startsWith("slo-policies/");
+      const metadataOperation = incidentOperation || sloOperation;
+      const incidentCredentialHash = metadataOperation && principal.tokenId !== null
         ? syncHash((request.headers.get("authorization") ?? "").slice(7)) : null;
-      if (!incidentOperation && request.method !== "GET" && request.method !== "HEAD") requireNoEvacuation(project.id);
+      if (!metadataOperation && request.method !== "GET" && request.method !== "HEAD") requireNoEvacuation(project.id);
       const requireCurrentProjectAuthority = () => {
-        if (!incidentOperation && request.method !== "GET" && request.method !== "HEAD") requireNoEvacuation(project.id);
+        if (!metadataOperation && request.method !== "GET" && request.method !== "HEAD") requireNoEvacuation(project.id);
         requireCurrentPlatformPrincipal(storage, principal);
         if (incidentCredentialHash !== null && !storage.internal.prepare("SELECT 1 FROM clank_platform_tokens WHERE id=? AND user_id=? AND token_hash=?").get(principal.tokenId, principal.userId, incidentCredentialHash)) {
           throw new PlatformError(401, "INVALID_TOKEN", "The CLI access token is invalid or expired.");
@@ -8732,6 +8946,20 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         accessibleProject(storage.internal, project.id, principal, requiredPermission);
         if (/^backups\/[^/]+\/restore$/u.test(operation) || (!operation && request.method === "DELETE")) requireFreshPlatformAuthentication(principal);
       };
+      if (sloOperation) {
+        if (url.searchParams.size) throw new PlatformError(422, "SLO_INPUT_INVALID", "SLO endpoints do not accept query fields.");
+        const authority: SloAuthority = {
+          userId: principal.userId,
+          authorize(write) {requireCurrentProjectAuthority(); if (write) accessibleProject(storage.internal, project.id, principal, "slo");},
+          audit(action, metadata) {audit(storage.internal, principal.userId, principal.tokenId, project.id, action, metadata);},
+        };
+        if (operation === "slo-policies" && request.method === "GET") return api({ok: true, policies: projectSlos.list(project.id, authority)});
+        if (operation === "slo-policies" && request.method === "POST") return api({ok: true, policy: projectSlos.create(project.id, authority, await readJsonRequest(request, 16 * 1024))}, 201);
+        const policy = /^slo-policies\/([A-Za-z0-9_-]{8,128})(?:\/(change))?$/u.exec(operation);
+        if (policy && !policy[2] && request.method === "GET") return api({ok: true, assessment: projectSlos.read(project.id, policy[1]!, authority)});
+        if (policy?.[2] === "change" && request.method === "POST") return api({ok: true, policy: projectSlos.change(project.id, policy[1]!, authority, await readJsonRequest(request, 16 * 1024))});
+        throw new PlatformError(404, "NOT_FOUND", "SLO endpoint not found.");
+      }
       if (incidentOperation) {
         const ownerAllowed = (userId: string) => Boolean(storage.internal.prepare("SELECT 1 FROM clank_auth_users WHERE id=? AND disabled=0").get(userId)) && projectMembershipAllows(storage.internal, project, userId, "incidents");
         const authority: IncidentAuthority = {
@@ -9045,6 +9273,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             role: access.role,
             canUseIncidents: projectMembershipAllows(storage.internal, project, principal.userId, "incidents", access.role)
               && (!principal.projectId || principal.permissions.includes("incidents")),
+            canManageSlos: projectMembershipAllows(storage.internal, project, principal.userId, "slo", access.role)
+              && (!principal.projectId || principal.permissions.includes("slo")),
             canDelete: principal.projectId === null && (access.role === "owner" || access.role === "admin"),
             canOperateJobs: roleAllows(access.role, "jobs")
               && (!principal.projectId || principal.permissions.includes("jobs")),
@@ -10474,9 +10704,11 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       }
       throw new PlatformError(404, "NOT_FOUND", "Platform endpoint not found.");
     } catch (error) {
+      if (error instanceof ServiceAccountError) return problem(error.status,error.code,error.message);
       if (error instanceof BackendActionError) return problem(error.status, error.code, error.message);
       if (error instanceof PlatformError) return problem(error.status, error.code, error.message, error.retryAfter);
       if (error instanceof ProjectIncidentError) return problem(error.status, error.code, error.message);
+      if (error instanceof ProjectSloError) return problem(error.status, error.code, error.message);
       if (error instanceof RequestInputError) return problem(error.status, error.code, error.message);
       if (error instanceof AuthError) return problem(error.status, error.code, error.message, error.retryAfter);
       if (error instanceof BillingWebhookError) {
@@ -10489,6 +10721,12 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
 
   const handle = async (request: Request): Promise<Response> => {
     const response = await handleRequest(request);
+    if(response.status<400) {
+      try {machineResponseGuards.get(request)?.();} catch(error) {
+        if(error instanceof ServiceAccountError || error instanceof PlatformError) return problem(error.status,error.code,error.message);
+        return problem(401,'SERVICE_ACCOUNT_INVALID_CREDENTIAL','Refresh service account authority before continuing.');
+      }
+    }
     const requestUrl = new URL(request.url);
     if (!securePublicUrl || normalizeHostname(requestUrl.hostname) !== publicHostname) return response;
     const headers = new Headers(response.headers);
@@ -10550,14 +10788,22 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   auditExporter?.start();
   if (options.retention?.intervalMs !== undefined && options.retention.intervalMs !== false) retentionController?.start();
   operationsMonitor?.start();
+  projectSlos.start();
 
   return {
     handle,
+    authenticateServiceAccount(request) {
+      if(!serviceAccounts) throw new PlatformError(401,"INVALID_TOKEN","Service account credentials are unavailable.");
+      const header=request.headers.get('authorization');
+      if(!header || !/^Bearer clsa_[A-Za-z0-9_-]{43}$/u.test(header)) throw new PlatformError(401,"INVALID_TOKEN","Supply a current service account credential.");
+      return serviceAccounts.resolve(header.slice(7));
+    },
     publicUrl,
     dataDirectory: paths.root,
     hostingProfile,
     runnerKind: runner.kind ?? "process",
     async close() {
+      projectSlos.close();
       projectIncidents.close();
       if (closed) return;
       closed = true;
@@ -10576,6 +10822,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       previewCleanupTimer = undefined;
       await previewCleanupFlight?.catch(() => undefined);
       await operationsMonitor?.close();
+      serviceAccounts?.close();
       retentionController?.close();
       await auditExporter?.close();
       await invitationDeliveries.close();
@@ -10595,11 +10842,28 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   };
 }
 
+async function assertPlatformSupervisorMode(path:string,enabled:boolean):Promise<void> {
+  if(enabled)return;
+  const fsName="node:fs/promises",sqliteName="node:sqlite",fs=await import(fsName);
+  try{
+    await fs.stat(path);const sqlite=await import(sqliteName),observer=new sqlite.DatabaseSync(path,{readOnly:true});
+    try{observer.exec("PRAGMA busy_timeout=5000");if(observer.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_platform_supervisor_state'").get())throw new PlatformSupervisorError("SUPERVISOR_MODE_REQUIRED","This catalog requires its configured supervisor topology; quiesce and recover before changing modes.");}
+    finally{observer.close();}
+  }catch(error){if((error as {code?:string}).code!=="ENOENT")throw error;}
+}
+
 async function openPlatformDatabase(path: string, masterKey: Uint8Array,
-  authentication: { concurrency: number; maxQueue: number }): Promise<PlatformDatabase> {
+  authentication: { concurrency: number; maxQueue: number },leadership?:SupervisorLease): Promise<PlatformDatabase> {
+  // Check the persisted topology marker before ordinary platform bootstrap can
+  // touch a catalog already owned by an upgraded multi-process supervisor.
+  await assertPlatformSupervisorMode(path,Boolean(leadership));
+  leadership?.assertCurrent();
   const schema = defineDatabase({});
   const database = await openSQLite(schema, { path });
   const internal = database[SQLITE_INTERNAL];
+  try{if(leadership){if(!internal.guardWrites)throw new Error("Native supervisor write authority is unavailable.");internal.guardWrites(connection=>leadership.assertCurrent(connection));}}
+  catch(error){database.close();throw error;}
+  try {assertServiceAccountProtocol(internal);} catch(error) {database.close();throw error;}
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_rate_limits (
     key_hash TEXT PRIMARY KEY,
     attempts TEXT NOT NULL CHECK (json_valid(attempts) AND json_type(attempts) = 'array'),
@@ -11755,11 +12019,11 @@ function reconcilePlatformAdminRoles(
   }
 }
 
-async function requireToken(internal: SQLiteInternal, request: Request): Promise<TokenPrincipal> {
+async function requireToken(internal: SQLiteInternal, request: Request, allowMachine=false): Promise<TokenPrincipal> {
   const authorization = request.headers.get("authorization") ?? "";
-  const matched = /^Bearer ((?:clnk|prct)_[A-Za-z0-9_-]{40,200})$/.exec(authorization);
-  if (!matched) throw new PlatformError(401, "INVALID_TOKEN", "A valid CLI access token is required.");
-  const row = internal.prepare(`SELECT t.id, t.user_id, t.organization_id, t.project_id,
+  const matched = /^Bearer ((?:clnk|prct|clsa)_[A-Za-z0-9_-]{40,200})$/.exec(authorization);
+  if (!matched || (matched[1]!.startsWith('clsa_') && !allowMachine)) throw new PlatformError(401, "INVALID_TOKEN", "A valid CLI access token is required.");
+  const row = internal.prepare(`SELECT t.id, t.user_id, t.token_hash, t.organization_id, t.project_id,
       t.permissions, t.preview_name, t.expires_at, t.revoked_at, u.email, u.disabled
     FROM clank_platform_tokens t
     JOIN clank_auth_users u ON u.id = t.user_id
@@ -11768,7 +12032,7 @@ async function requireToken(internal: SQLiteInternal, request: Request): Promise
     throw new PlatformError(401, "INVALID_TOKEN", "The CLI access token is invalid or expired.");
   }
   internal.prepare("UPDATE clank_platform_tokens SET last_used_at = ? WHERE id = ?").run(Date.now(), row.id);
-  return {
+  const principal: TokenPrincipal = {
     tokenId: String(row.id),
     sessionId: null,
     userId: String(row.user_id),
@@ -11779,15 +12043,22 @@ async function requireToken(internal: SQLiteInternal, request: Request): Promise
     previewName: row.preview_name === null ? null : String(row.preview_name),
     impersonation: null,
   };
+  admittedTokenAuthority.set(principal, tokenAuthorityFingerprint(row));
+  return principal;
 }
 
 function requireCurrentPlatformPrincipal(storage: PlatformDatabase, principal: TokenPrincipal): void {
+  principal.machine?.assertCurrent();
   if (principal.tokenId !== null) {
-    const active = storage.internal.prepare(`SELECT 1 AS active FROM clank_platform_tokens t
+    const active = storage.internal.prepare(`SELECT t.token_hash, t.organization_id, t.project_id,
+      t.permissions, t.preview_name, t.expires_at FROM clank_platform_tokens t
       JOIN clank_auth_users u ON u.id = t.user_id
       WHERE t.id = ? AND t.user_id = ? AND t.revoked_at IS NULL AND t.expires_at > ? AND u.disabled = 0`)
       .get(principal.tokenId, principal.userId, Date.now());
-    if (!active) throw new PlatformError(401, "INVALID_TOKEN", "The CLI access token is invalid or expired.");
+    const admitted = admittedTokenAuthority.get(principal);
+    if (!active || (admitted !== undefined && tokenAuthorityFingerprint(active) !== admitted)) {
+      throw new PlatformError(401, "INVALID_TOKEN", "The CLI access token is invalid or expired.");
+    }
   } else {
     const current = principal.sessionId ? storage.auth.refreshSession(principal.sessionId) : null;
     if (!current?.user || current.user.id !== principal.userId || principal.impersonation !== null) {
@@ -11796,8 +12067,16 @@ function requireCurrentPlatformPrincipal(storage: PlatformDatabase, principal: T
   }
 }
 
-async function requirePlatformPrincipal(storage: PlatformDatabase, request: Request): Promise<TokenPrincipal> {
-  if (request.headers.has("authorization")) return requireToken(storage.internal, request);
+async function requirePlatformPrincipal(storage: PlatformDatabase, request: Request, machines?:ReturnType<typeof openPlatformServiceAccounts>): Promise<TokenPrincipal> {
+  if (request.headers.has("authorization")) {
+    const header=request.headers.get('authorization')!;
+    if(header.startsWith('Bearer clsa_')) {
+      if(!machines) throw new PlatformError(401,"INVALID_TOKEN","Service account credentials are unavailable.");
+      const machine=machines.resolve(header.slice(7)),principal=await requireToken(storage.internal,request,true);
+      machine.assertCurrent();principal.machine=machine;return principal;
+    }
+    return requireToken(storage.internal,request);
+  }
   const auth = await requireBrowserAuth(storage.auth, request);
   const impersonation = resolvePlatformImpersonation(storage.internal, request, auth);
   if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
@@ -11946,7 +12225,7 @@ function accessibleProject(
   if (
     principal.projectId
     && !principal.permissions.includes(permission)
-    && !(permission === "logs" && principal.permissions.includes("read"))
+    && !(permission === "logs" && principal.permissions.includes("read") && !principal.machine)
     && !(
       scopedPreview
       && principal.permissions.includes("previews")
@@ -14774,6 +15053,10 @@ function audit(
   action: string,
   metadata: Record<string, unknown>,
 ): void {
+  if(tokenId && internal.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_platform_machine_credentials'").get()) {
+    const machine=internal.prepare('SELECT account_id,generation FROM clank_platform_machine_credentials WHERE token_id=?').get(tokenId);
+    if(machine) metadata={...metadata,principalKind:'service-account',serviceAccountId:String(machine.account_id),credentialId:tokenId,credentialGeneration:Number(machine.generation)};
+  }
   const projectOrganization = projectId === null
     ? null
     : internal.prepare("SELECT organization_id FROM clank_platform_projects WHERE id = ?").get(projectId);
@@ -16996,6 +17279,7 @@ const PLATFORM_PROJECT_SECTIONS = new Set([
   "jobs",
   "incidents",
   "settings",
+  "slo",
 ]);
 
 function canonicalPlatformConsolePath(pathname: string): string | null {
@@ -17332,6 +17616,7 @@ const PROJECT_PERMISSIONS: readonly ProjectPermission[] = [
   "jobs",
   "incidents",
   "secrets",
+  "slo",
   "tokens",
   "audit",
   "previews",

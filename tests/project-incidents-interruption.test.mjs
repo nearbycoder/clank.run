@@ -37,3 +37,19 @@ test('actual SIGKILL after incident commit and before HTTP delivery replays one 
   const current=(await f.call(endpoint+'/'+committed.id)).detail;assert.equal(current.incident.state,'resolved');assert.equal(current.incident.version,3);assert.equal(current.notes.length,1);assert.equal((await f.call(endpoint)).incidents.length,1);
   second.child.send({close:true});await second.closed;
 });
+test('actual SIGKILL after SLO commit and before HTTP delivery preserves one policy and current configuration',{timeout:30000},async t=>{
+  const f=await fixture(t),endpoint=`/api/projects/${f.development.id}/slo-policies`;let first,second;
+  t.after(async()=>{for(const entry of [first,second])if(entry&&entry.child.exitCode===null&&entry.child.signalCode===null){entry.child.kill('SIGKILL');await entry.closed;}});
+  first=await controller(f.options);
+  const configuration={name:'Interrupted objective',objective:{kind:'request-success'},targetBasisPoints:9900,windowMinutes:5,minimumRequests:100,burnThreshold:2,enabled:true};
+  const input={configuration,operationId:'slo_killed_exact_01'},headers={origin:first.url,cookie:f.owner.cookie,'x-clank-csrf':f.owner.csrf,'content-type':'application/json','x-clank-fixture-hold':'after-commit'};
+  const acknowledged=message(first.child,value=>value.committed),delivery=fetch(first.url+endpoint,{method:'POST',headers,body:JSON.stringify(input)}).then(()=>({delivered:true}),()=>({delivered:false}));
+  const committed=await acknowledged;assert.equal(committed.version,1);first.child.kill('SIGKILL');await first.closed;assert.deepEqual(await delivery,{delivered:false});
+  second=await controller(f.options);
+  const replay=async()=>{const response=await fetch(second.url+endpoint,{method:'POST',headers:{...headers,origin:second.url,'x-clank-fixture-hold':''},body:JSON.stringify(input)});assert.equal(response.status,201,second.diagnostics());return (await response.json()).policy;};
+  assert.equal((await replay()).id,committed.id);
+  await f.call(endpoint+'/'+committed.id+'/change',{configuration:{...configuration,name:'Current paused objective',enabled:false},expectedVersion:1,operationId:'slo_after_kill_pause_01'});
+  const historical=await replay();assert.equal(historical.version,1);assert.equal(historical.enabled,true);
+  const current=(await f.call(endpoint+'/'+committed.id)).assessment;assert.equal(current.policy.version,2);assert.equal(current.policy.enabled,false);assert.equal(current.evaluation.burning,null);assert.equal((await f.call(endpoint)).policies.length,1);
+  second.child.send({close:true});await second.closed;
+});

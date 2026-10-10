@@ -1,6 +1,9 @@
 export { renderAgentActivity } from "./agent-activity.ts";
 export type { AgentActivityOptions, AgentActivity, AgentActivityFilter, AgentActivitySnapshot } from "./agent-activity.ts";
 export * from "./offline.ts";
+export * from "./project-slo.ts";
+export { openMediaProcessing, MediaProcessingError } from "./media-processing.ts";
+export type { MediaProcessing, MediaProcessingInput, MediaProcessingStatus, MediaTransform, OpenMediaProcessingOptions } from "./media-processing.ts";
 export type { MutationReceiptOptions } from "./mutation-receipts.ts";
 export * from "./notifications.ts";
 export * from "./core.ts";
@@ -81,3 +84,4 @@ export * from "./openapi.ts";
 export * from "./translation-review.ts";
 
 export * from "./project-incidents.ts";
+export * from "./service-accounts.ts";

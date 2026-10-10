@@ -50,6 +50,7 @@ export const groups = [
       ["server", "docs/server.md"],
       ["durable-objects", "docs/durable-objects.md"],
       ["jobs-and-cron", "docs/jobs-and-cron.md"],
+      ["media-processing", "docs/media-processing.md"],
       ["reminders-and-delivery", "docs/reminders-and-delivery.md"],
       ["services", "docs/services.md"],
       ["object-storage", "docs/object-storage.md"],
@@ -84,6 +85,7 @@ export const groups = [
     entries: [
       ["cli", "docs/cli.md"],
       ["deployment-platform", "docs/deployment-platform.md"],
+      ["supervisor-leadership", "docs/supervisor-leadership.md"],
       ["environment-promotions", "docs/environment-promotions.md"],
       ["release-channels", "docs/release-channels.md"],
       ["release-windows", "docs/release-windows.md"],
@@ -118,6 +120,7 @@ export const groups = [
       ["security", "docs/security.md"],
       ["platform-security", "docs/platform-security.md"],
       ["organization-security", "docs/organization-security.md"],
+      ["service-accounts", "docs/service-accounts.md"],
       ["sqlite-isolation", "docs/sqlite-isolation.md"],
       ["linux-provider-isolation", "docs/linux-provider-isolation.md"],
       ["linux-host-certification", "docs/linux-host-certification.md"],
@@ -129,7 +132,8 @@ export const groups = [
       ["conformance", "docs/conformance.md"],
       ["recovery", "docs/recovery.md"],
       ["operational-recovery", "docs/operational-recovery.md"],
-      ["project-incidents", "docs/project-incidents.md"]
+      ["project-incidents", "docs/project-incidents.md"],
+      ["service-objectives", "docs/service-objectives.md"]
     ]
   },
   {

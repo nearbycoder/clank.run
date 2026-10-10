@@ -23,6 +23,8 @@ Bind independent development, staging and production projects, then promote a re
 artifact through the [environment promotion workflow](environment-promotions.md). Each target
 uses its own secrets, data and versioned migration policy.
 
+For multiple coordinators sharing one private Linux catalog, opt into [automatic supervisor leadership](supervisor-leadership.md). Dedicated standby processes take over retained desired state after the previous coordinator and tenant cleanup are fenced.
+
 ## Five-minute managed path
 
 ```sh
@@ -62,6 +64,8 @@ Create the bootstrap account at `http://127.0.0.1:4200` before approving the loc
 6. The CLI stores it in `~/.clank/config.json` with mode `0600`.
 
 Device codes expire after ten minutes by default. Access tokens expire after 90 days by default. `clank logout` revokes the current token before deleting it locally.
+
+Requests that have already authenticated a CLI token revalidate its exact credential and admitted scope at existing current-authority commit boundaries. Rotating its stored credential, narrowing its permissions, or changing its project while a body or asynchronous operation is pending invalidates that request. The request-local fingerprint is not persisted or exposed in responses or audit records. Approved durable release windows retain their separately documented delegation and current-grant checks.
 
 Self-registration defaults to `bootstrap`: only the first account can register. Operators may explicitly choose public or disabled registration.
 

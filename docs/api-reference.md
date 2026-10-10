@@ -337,13 +337,23 @@ Optional module: `@clank.run/framework/component-harness`; see [component harnes
   for initialized co-located loopback provider targets under code-only policy. Current host
   proof is required before staging and acceptance; unsupported profiles fail closed.
 
+- `openPlatform({ supervisor })`: opt-in dedicated same-host Linux coordinators with retained ownership epochs, native transaction fencing, independent process guardians and automatic standby recovery. See [Automatic supervisor leadership](supervisor-leadership.md) for configuration, failure bounds and migration. Optional `PlatformRuntime.supervisor()` returns readonly local state/epoch/expiry/responsibilities; standbys serve `503` with `Retry-After`.
 - `openPlatform(options)`: browser dashboard, workspace people/invitation administration and
   activity, transparent monthly usage, device authorization, tokens, projects, transactionally
   enforced capacity and traffic limits, ingress metrics, DNS/domain lifecycle, TLS eligibility,
   encrypted secrets, role-filtered audit, release transaction, logs, rollback, and supervision.
 - `PlatformRuntime`: Fetch `.handle`, `.publicUrl`, `.dataDirectory`, resolved `.hostingProfile`,
   `.runnerKind`, and async `.close()`.
+- `openPlatform({ serviceAccounts })`: opt-in dedicated machine accounts, expiring scoped
+  credentials and recently verified human administration. `PlatformRuntime.authenticateServiceAccount(request)`
+  returns a current server capability with `.identity` and `.assertCurrent()`; display JSON
+  cannot authenticate a caller. `createOrganizationServiceAccountClient()` exposes versioned
+  organization administration and explicit exact retries. See [service accounts](service-accounts.md).
 - Runners: dependency-free process runner or constrained Docker runner.
+- `openPlatform({ sqliteIsolation })`: `namespace` by default; `trusted-process` requires an
+  explicit `hostingProfile: "trusted"`, process runner, and non-public signup. The policy is
+  scoped to that platform's startup, requests, and background work, without changing other
+  platforms or standalone database helpers. See [SQLite worker isolation](sqlite-isolation.md).
 - `openPlatform({ invitations })`: durable, encrypted, cross-instance-leased invitation delivery
   through any `EmailService`, while retaining manual copy-once fallback.
 - Types: `ClankPlatformOptions`, `PlatformBackupOptions`, `PlatformJobOperationsOptions`,
@@ -389,6 +399,8 @@ Optional module: `@clank.run/framework/component-harness`; see [component harnes
   authenticated backup catalog and binds the repository identity/root in the control database.
 
 ## Managed buckets
+
+`openMediaProcessing({ database, auth, buckets, transforms, policyRevision, authorize })` queues declared transforms on the existing native job system. The services must share a persistent native catalog. `enqueue(currentAuth, input)` freezes exact generations and retains an owner-scoped operation ID; `get`, `cancel`, `workOnce`, `startWorker` and `close` cover its lifecycle. Publication and bounded receipts commit together, while external providers must honor the stable operation key. See [durable media processing](media-processing.md) for the complete authorization, capacity and recovery contract.
 
 - `defineBucket(input)`: freezes visibility, ownership, browser access, MIME, image, cache,
   per-object, per-owner, and total quota policy.
