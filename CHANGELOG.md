@@ -4,6 +4,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Evaluate supervisor guardian lease timestamps after the native read so a valid concurrent renewal cannot spuriously fence its coordinator. Keep strict expiry, identity, configuration and clock-regression checks.
+
 - Add opt-in same-host Linux supervisor leadership with native retained epochs, transaction fences, dedicated coordinator guardians and automatic standby recovery after verified tenant cleanup. Expose bounded CLI configuration and readonly local status; reject accidental ordinary-mode startup after enabling the topology.
 
 - Add durable declared media transforms using native jobs, current human authority, exact source/destination generations, bounded progress and atomic publication receipts. Fence immediate image transforms against replaced uploads and verify actual bucket-read bytes.
