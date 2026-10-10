@@ -155,15 +155,26 @@ test("killed backup workers clean their private staging and never publish destin
     return nativeSetTimeout(callback, delay, ...args);
   });
   let observedStaging = false;
-  const watcher = setInterval(async () => {
-    if (!expire) return;
-    if ((await readdir(root)).some((name) => name.startsWith("destination.sqlite.tmp-"))) {
-      observedStaging = true;
-      const callback = expire;
-      expire = undefined;
-      callback();
+  let stopWatching = false;
+  // Poll sequentially: overlapping async intervals could both observe expiry
+  // before readdir resolved, then the second would call a cleared callback.
+  const watcher = (async () => {
+    while (!stopWatching) {
+      await new Promise((resolve) => nativeSetTimeout(resolve, 10));
+      if (stopWatching || typeof expire !== "function") continue;
+      const names = await readdir(root);
+      if (names.some((name) => name.startsWith("destination.sqlite.tmp-"))) {
+        observedStaging = true;
+        const callback = expire;
+        expire = undefined;
+        callback();
+        return;
+      }
     }
-  }, 10);
+  })();
+  // Preserve any observer failure for the awaited cleanup without allowing a
+  // detached rejection to replace the real backup-worker assertion.
+  watcher.catch(() => undefined);
   try {
     await assert.rejects(backupSQLite(source, destination), /deadline/u);
     assert.equal(observedStaging, true);
@@ -172,7 +183,8 @@ test("killed backup workers clean their private staging and never publish destin
     assert.equal(await readFile(`${destination}-wal`, "utf8"), "existing-wal-canary");
     assert.equal(await readFile(`${destination}-shm`, "utf8"), "existing-shm-canary");
   } finally {
-    clearInterval(watcher);
+    stopWatching = true;
+    await watcher;
     context.mock.restoreAll();
     database.exec("ROLLBACK");
     database.close();

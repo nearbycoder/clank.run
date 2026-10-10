@@ -31,17 +31,43 @@ async function executeCoverageRun() {
       stdio: ["ignore", "pipe", "pipe"],
     });
     let outputTail = "";
+    // Hosted diagnostics retain a bounded tail. Keep early native TAP failures
+    // visible even when later successes and the coverage table exceed it.
+    let failureCapsule = "", pendingLine = "", capturingFailure = false, failures = 0;
+    const captureFailures = (chunk) => {
+      pendingLine += String(chunk);
+      let newline;
+      while ((newline = pendingLine.indexOf("\n")) !== -1) {
+        const line = pendingLine.slice(0, newline + 1);
+        pendingLine = pendingLine.slice(newline + 1);
+        if (/^\s*not ok \d+ - /u.test(line)) {
+          capturingFailure = failures++ < 16;
+        }
+        if (capturingFailure && failureCapsule.length < 64 * 1024) {
+          failureCapsule += line.slice(0, 64 * 1024 - failureCapsule.length);
+        }
+        if (/^\s*\.\.\.\s*$/u.test(line)) capturingFailure = false;
+      }
+      // A pathological single diagnostic line cannot accumulate unboundedly.
+      if (pendingLine.length > 64 * 1024) pendingLine = pendingLine.slice(0, 64 * 1024);
+    };
     const forward = (destination) => (chunk) => {
       outputTail = appendTail(outputTail, chunk);
+      captureFailures(chunk);
       destination.write(chunk);
     };
     child.stdout.on("data", forward(process.stdout));
     child.stderr.on("data", forward(process.stderr));
     child.once("error", reject);
-    child.once("close", (code) => resolve({
-      code: typeof code === "number" ? code : 1,
-      outputTail,
-    }));
+    child.once("close", (code) => {
+      const finish = () => resolve({ code: typeof code === "number" ? code : 1, outputTail });
+      // Drain forwarded stdout first so the diagnostic copy is really last,
+      // even when a wide coverage table applies output backpressure.
+      process.stdout.write("", () => {
+        if (code !== 0 && failureCapsule) process.stderr.write(`\nRetained native test failures (bounded diagnostic copy):\n${failureCapsule}\n`, finish);
+        else finish();
+      });
+    });
   });
 }
 
