@@ -1,0 +1,194 @@
+{
+  "maintenance": "held-platform-token-authority",
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/304",
+  "pullRequest": "https://github.com/nearbycoder/clank.run/pull/305",
+  "status": "verified-awaiting-protected-merge",
+  "roadmapFeatureIncrement": 0,
+  "contract": {
+    "trigger": "A real HTTP request authenticates headers, then waits for the remaining upload while its token grant changes.",
+    "behavior": "Current commit-boundary checks compare a request-local SHA-256 fingerprint of the admitted token hash, organization, project, permissions, preview and expiry with the current persisted grant. Rotation or narrowing rejects the held request without secret writes or audit effects.",
+    "privacy": "The fingerprint remains in a private WeakMap and is absent from serialized principals, responses and audit metadata.",
+    "compatibility": "No public API or schema changes. Browser session behavior is unchanged; persisted release-window delegation retains its separately defined current-authority checks. This does not certify every asynchronous read or distributed provider side effect."
+  },
+  "source": {
+    "head": "f4c76fcb11a7cacf60911b4a4ba61fc8c6860426",
+    "tree": "4482c6c56dc5e7d98adaa27a0b5957a6fd8f3a07",
+    "integratedMain": "b556cbe24e11ffa119bb665433831175c4071f4c",
+    "archiveSha256": "14ec964901c4e161d7abc56aafaccc30f6342346b70af96e097141aef5abd814",
+    "trackedInputs": 1074,
+    "postProofChanges": "Only this report and the implementation ledger change; 1,072 other tracked inputs remain hash-equal."
+  },
+  "validation": {
+    "completeGates": {
+      "26": {
+        "exit": 0,
+        "mainSuite": {
+          "tests": 2033,
+          "pass": 2030,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "reportedSummaries": [
+          {
+            "tests": 2033,
+            "pass": 2030,
+            "fail": 0,
+            "cancelled": 0,
+            "skipped": 3
+          }
+        ],
+        "sha256": "84c8d1e4bb72af453a531528b00f0ad9ebf9e6488458bcd58317683c59b2599c",
+        "complete": true,
+        "coverage": [
+          "# all files                              |  91.49 |    80.93 |   90.04 | "
+        ]
+      },
+      "22": {
+        "exit": 0,
+        "mainSuite": {
+          "tests": 2033,
+          "pass": 2030,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "reportedSummaries": [
+          {
+            "tests": 1,
+            "pass": 1,
+            "fail": 0,
+            "cancelled": 0,
+            "skipped": 0
+          },
+          {
+            "tests": 2033,
+            "pass": 2030,
+            "fail": 0,
+            "cancelled": 0,
+            "skipped": 3
+          }
+        ],
+        "sha256": "507bc4f3db86b6f1d1d32b411f72bf37c8111c3824ed614973f966517fc28ec5",
+        "complete": true,
+        "coverage": [
+          "# all files                              |  91.49 |    80.96 |   90.07 | "
+        ]
+      }
+    },
+    "focused": {
+      "reported": 7,
+      "passed": 7,
+      "failed": 0,
+      "actualNativeHttp": true,
+      "boundaries": [
+        "rotated hash",
+        "reduced scopes",
+        "rebound project",
+        "revoked",
+        "expired",
+        "disabled owner",
+        "unchanged control"
+      ]
+    },
+    "types": {
+      "packedFixtures": 31,
+      "existingDiagnostics": 159,
+      "newDiagnostics": 0,
+      "baselineUnchanged": 163,
+      "openApiPassed": true
+    },
+    "package": {
+      "files": 405,
+      "unpackedBytes": 6042256,
+      "ceiling": 6291456,
+      "remainingBytes": 249200,
+      "dependencies": 0
+    },
+    "documentation": "Both full release gates pass the canonical documentation audit and packed conformance. No frontend changes or new browser acceptance are claimed."
+  },
+  "retainedFailures": [
+    {
+      "source": "current-token-red-02.log",
+      "result": "Before the fix, rotated and scope-reduced held requests both returned 200 and each committed one secret and one audit.",
+      "fix": "Compare the exact admitted grant at existing current-principal fences."
+    }
+  ],
+  "evidenceIndexSha256": "18574a00d6816256472b5ff1ce6c1bdcf2c3c0df8930e9a882ea10d5abc606ed",
+  "review": {
+    "independent": false,
+    "runtimeHosted": "All six checks passed at the integrated source02 runtime head, including no new CodeQL alerts. Fresh final-head checks and current threads remain required.",
+    "remaining": "Fresh final-head checks, author COMMENT, and normal expected-head protected merge."
+  },
+  "previousSources": [
+    {
+      "source": {
+        "head": "d5a1bfd23f9a0741d9da22668992084259b90cae",
+        "tree": "4f96b8b15936033c61839acc31dbb951a853eca7",
+        "archiveSha256": "c5103c553e35623d54fc851ab698a4c2af7d23324174c75c0312ad15c4be04c5",
+        "trackedInputs": 1072,
+        "postProofChanges": "Only this report and the implementation ledger change; every other tracked input is verified hash-equal."
+      },
+      "gates": {
+        "26": {
+          "exit": 0,
+          "mainSuite": {
+            "tests": 2028,
+            "pass": 2025,
+            "fail": 0,
+            "cancelled": 0,
+            "skipped": 3
+          },
+          "reportedSummaries": [
+            {
+              "tests": 2028,
+              "pass": 2025,
+              "fail": 0,
+              "cancelled": 0,
+              "skipped": 3
+            }
+          ],
+          "sha256": "de3453b2ad73ec5eb932be4ff53112b97f75773334fcf58eb24eedc9878bf229",
+          "complete": true,
+          "coverage": [
+            "# all files                              |  91.68 |    80.91 |   90.04 | "
+          ]
+        },
+        "22": {
+          "exit": 0,
+          "mainSuite": {
+            "tests": 2028,
+            "pass": 2025,
+            "fail": 0,
+            "cancelled": 0,
+            "skipped": 3
+          },
+          "reportedSummaries": [
+            {
+              "tests": 1,
+              "pass": 1,
+              "fail": 0,
+              "cancelled": 0,
+              "skipped": 0
+            },
+            {
+              "tests": 2028,
+              "pass": 2025,
+              "fail": 0,
+              "cancelled": 0,
+              "skipped": 3
+            }
+          ],
+          "sha256": "4925c8978088da6f6b968568aa327315a667b3ff3f15e4b95ea440693328f1e1",
+          "complete": true,
+          "coverage": [
+            "# all files                              |  91.67 |    80.92 |   90.08 | "
+          ]
+        }
+      },
+      "evidenceIndexSha256": "53919d973c4635fd088777e2d22dca04842067bae62a38d3b3f840662e3ce7f5",
+      "status": "Successful original runtime proof before integrating newly accepted main PR307; retained unchanged."
+    }
+  ],
+  "finalVerificationIndexSha256": "0d39d8e30d858472b42a2cc199a6989a98ddfb8accf40a7188428cacbf05429e"
+}

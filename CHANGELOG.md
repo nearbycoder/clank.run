@@ -4,6 +4,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Revalidate the exact admitted credential and scope for held platform-token requests at current-authority boundaries.
+
 - Reduce framework release size by removing only leading indentation in known
   JavaScript code regions. Preserve comments, licenses, literals and line endings;
   ambiguous modules stay exact. Public compiler, examples and mapped builds retain
