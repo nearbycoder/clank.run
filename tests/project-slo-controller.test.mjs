@@ -4,7 +4,7 @@ import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {defineDatabase,openSQLite} from '../dist/backend.js';
-import {openProjectSlos} from '../src/platform-slo.ts';
+import {openProjectSlos} from '../dist/platform-slo.js';
 import {createManagedIngress} from '../dist/data-plane.js';
 import {createServer} from 'node:http';
 const internal=Symbol.for('clank.sqlite.internal'),project='project_slo_exact_01',other='project_slo_other_01';

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createProjectSloClient} from '../src/project-slo.ts';
+import {createProjectSloClient} from '../dist/project-slo.js';
 const configuration={name:'Checkout',objective:{kind:'request-success'},targetBasisPoints:9900,windowMinutes:5,minimumRequests:100,burnThreshold:2,enabled:true};
 test('SLO browser client binds fresh authorization and explicit exact requests to project policy paths',async()=>{
  let credential='first',csrf='first-csrf';const calls=[];

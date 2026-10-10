@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {evaluateProjectSlo,validateProjectSloConfiguration} from '../src/project-slo.ts';
+import {evaluateProjectSlo,validateProjectSloConfiguration} from '../dist/project-slo.js';
 const until=600000;
 const policy={name:'Checkout success',objective:{kind:'request-success'},targetBasisPoints:9900,windowMinutes:5,minimumRequests:100,burnThreshold:2,enabled:true};
 const sample=(index,requests=200,successful=198)=>({startedAt:until-(5-index)*60000,complete:true,requests,completed:requests,successful,latency:[0,50,100,150,175,190,requests]});
