@@ -6,6 +6,7 @@ import type {AuthenticatedServiceAccount} from "./service-accounts.js";
 import type { ManagedCanaryOptions } from "./managed-canary.js";
 import type { ReleaseAttestationPolicy } from "./release-attestation.js";
 import type { PlatformOperationsOptions } from "./operations-monitor.js";
+import type { PlatformProjectCostOptions } from "./platform-project-costs.js";
 import type { OrganizationSsoOptions } from "./organization-sso.js";
 import type { AuditExportOptions } from "./audit-export.js";
 import type { RetentionAdministrationOptions } from "./retention-administration.js";
@@ -416,6 +417,8 @@ export interface ClankPlatformOptions {
     backups?: PlatformBackupOptions;
     auditExport?: AuditExportOptions;
     operations?: PlatformOperationsOptions;
+    /** Trusted measured cost reconciliation. Retained admission policies survive disabling the collector. */
+    projectCosts?: PlatformProjectCostOptions;
     /** Poll queued exact release windows; defaults to one second. False pauses execution. */
     releaseWindows?: { intervalMs?: number | false };
     canary?: ManagedCanaryOptions;

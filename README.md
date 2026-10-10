@@ -353,6 +353,7 @@ Markdown, JSON, `llms.txt`, and a complete agent corpus.
 - [Complete fenced provider service composition](https://docs.clank.run/docs/provider-service)
 - [Isolated, expiring preview environments](https://docs.clank.run/docs/preview-environments)
 - [Transparent usage accounting and traffic limits](https://docs.clank.run/docs/usage-and-limits)
+- [Measured project costs and budgets](https://docs.clank.run/docs/project-costs)
 - [Provider-neutral hosted plans, checkout, and billing entitlements](https://docs.clank.run/docs/hosted-plans-and-billing)
 - [Managed ingress, custom domains, and external PostgreSQL](https://docs.clank.run/docs/data-plane)
 - [Chaos and failure testing](https://docs.clank.run/docs/chaos-testing)

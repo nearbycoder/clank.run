@@ -2,7 +2,7 @@ import type { SQLiteInternal } from "./sqlite-internal.ts";
 import type { RehearsalApplication, RehearsalReport } from "./rehearsal.ts";
 export interface OperationalSignal {
   key: string;
-  kind: "deployment_failed" | "application_unhealthy" | "jobs_overdue" | "backup_failed" | "backup_overdue" | "usage_warning" | "restore_drill_failed";
+  kind: "deployment_failed" | "application_unhealthy" | "jobs_overdue" | "backup_failed" | "backup_overdue" | "usage_warning" | "restore_drill_failed" | "cost_budget";
   active: boolean;
   severity: "warning" | "critical";
   resourceId: string;
@@ -56,7 +56,7 @@ export function createOperationalMonitor(internal: SQLiteInternal, options: Plat
     const seen = new Set<string>();
     for (const signal of signals) {
       if (!/^[A-Za-z0-9_.:/-]{1,250}$/.test(signal.key) || seen.has(signal.key) || !/^[A-Za-z0-9_.-]{1,128}$/.test(signal.resourceId)
-        || !["deployment_failed", "application_unhealthy", "jobs_overdue", "backup_failed", "backup_overdue", "usage_warning", "restore_drill_failed"].includes(signal.kind)
+        || !["deployment_failed", "application_unhealthy", "jobs_overdue", "backup_failed", "backup_overdue", "usage_warning", "restore_drill_failed", "cost_budget"].includes(signal.kind)
         || typeof signal.active !== "boolean" || !["warning", "critical"].includes(signal.severity)
         || typeof signal.message !== "string" || signal.message.length > 500) throw new TypeError("Invalid operational signal.");
       seen.add(signal.key);

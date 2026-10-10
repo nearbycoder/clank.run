@@ -94,6 +94,7 @@ export const groups = [
       ["release-lifecycle", "docs/release-lifecycle.md"],
       ["release-attestations", "docs/release-attestations.md"],
       ["usage-and-limits", "docs/usage-and-limits.md"],
+      ["project-costs", "docs/project-costs.md"],
       ["hosted-plans-and-billing", "docs/hosted-plans-and-billing.md"],
       ["platform-dashboard", "docs/platform-dashboard.md"],
       ["organizations", "docs/organizations.md"],

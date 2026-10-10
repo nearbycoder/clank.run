@@ -11,7 +11,7 @@ const directory = await mkdtemp(join(tmpdir(), "clank-console-navigation-"));
 test.after(() => rm(directory, { recursive: true, force: true }));
 await writeFile(join(directory, "package.json"), '{"type":"module"}\n');
 await Promise.all([
-  "platform-console", "ui-theme", "platform-console-project-sort", "platform-console-project-status",
+  "platform-console", "project-costs", "ui-theme", "platform-console-project-sort", "platform-console-project-status",
   "platform-console-project-workspace", "platform-console-activity-search", "platform-console-activity-action",
   "platform-console-log-search", "platform-console-usage-export",
 ].map(async name => {
@@ -249,4 +249,10 @@ test("039/041: mobile controls stay readable while browser zoom remains availabl
   assert.doesNotMatch(html, /maximum-scale=1|user-scalable=no/);
   assert.doesNotMatch(html, /html,body,body \*\{touch-action:pan-x pan-y\}/);
   assert.match(html, /body input,body select,body textarea\{font-size:16px!important\}/);
+});
+
+test("edited cost drafts can cancel deliberate console navigation before history changes", async () => {
+  const f=fixture(false);f.context.costView={hasPendingChanges:()=>true};let confirmations=0;f.context.confirm=()=>{confirmations++;return false;};
+  await f.context.navigate('/usage',false,false);assert.equal(confirmations,1);assert.deepEqual(f.history,[]);assert.equal(f.state.route.kind,'overview');
+  f.context.confirm=()=>true;await f.context.navigate('/usage',false,false);assert.deepEqual(f.history,[['push','/usage']]);assert.equal(f.state.route.kind,'usage');
 });

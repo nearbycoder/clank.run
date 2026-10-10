@@ -175,6 +175,10 @@ const COMMANDS = Object.freeze({
     usage: "clank billing [--json]",
     summary: "Show the account plan, billing state, and effective entitlements.",
   },
+  costs: {
+    usage: "clank costs [directory] [--month YYYY-MM] [--history] [--json]",
+    summary: "Read measured project costs, unknown coverage, and current budget status.",
+  },
   token: {
     usage: "clank token <create|list|revoke>",
     summary: "Manage scoped automation tokens.",
@@ -263,6 +267,7 @@ const VALUE_OPTIONS = Object.freeze({
   activity: ["org", "limit", "before"],
   audit: ["org", "limit", "before"],
   usage: ["org", "month"],
+  costs: ["month"],
   token: ["permissions", "expires-in", "name"],
   deploy: ["name", "slug", "org", "placement", "output", "signing-key", "builder", "build-id", "dependency-version", "dependency-check"],
   environment: ["expected-version", "migration-policy", "from", "release", "digest", "expected-active", "key", "attestation", "confirm", "dependency-version", "dependency-check"],
@@ -302,6 +307,7 @@ const BOOLEAN_OPTIONS = Object.freeze({
   audit: ["json"],
   usage: ["json"],
   billing: ["json"],
+  costs: ["history", "json"],
   deploy: ["dry-run", "json"],
   environment: ["json"],
   dependency: ["json"],
@@ -348,6 +354,7 @@ export async function run(command, args) {
       case "audit": return await activity(args);
       case "usage": return await usageCommand(args);
       case "billing": return await billingCommand(args);
+      case "costs": return await costsCommand(args);
       case "token": return await tokenCommand(args);
       case "domain": return await domainCommand(args);
       case "deploy": return await deploy(args);
@@ -1821,6 +1828,25 @@ async function usageCommand(args) {
     console.log(`History before ${new Date(payload.period.trackingStartedAt).toISOString()} may be incomplete.`);
   }
   console.log("Known transfer counts request bodies and responses that declare Content-Length; no prices or invoices are calculated.");
+}
+
+async function costsCommand(args) {
+  const paths = positionals(args), month = option(args, "month");
+  if (paths.length > 1 || (month !== undefined && !/^20[0-9]{2}-(?:0[1-9]|1[0-2])$/u.test(month))) throw new CliError(COMMANDS.costs.usage);
+  if (flag(args, "history") && month === undefined) throw new CliError("Cost history requires --month YYYY-MM.");
+  const {profile, link} = await linkedContext(resolve(paths[0] ?? "."));
+  const suffix = flag(args, "history") ? "/history" : "";
+  const query = month === undefined ? "" : `?month=${encodeURIComponent(month)}`;
+  const payload = await platformRequest(profile.server, `/api/projects/${encodeURIComponent(link.projectId)}/costs${suffix}${query}`, {token: profile.token});
+  if (flag(args, "json")) { console.log(JSON.stringify(payload, null, 2)); return; }
+  if (flag(args, "history")) {
+    for (const snapshot of payload.snapshots) console.log(`Revision ${snapshot.version}: ${snapshot.rateCard.currency} ${snapshot.amountMinor ?? "unknown"} smallest currency units · ${snapshot.reason}`);
+  } else {
+    const report = payload.report;
+    console.log(`${report.projectId} · ${report.month} · ${report.status} · admission ${report.admission}`);
+    console.log(report.snapshot ? `${report.snapshot.rateCard.currency} ${report.snapshot.amountMinor ?? "unknown"} smallest currency units · known subtotal ${report.snapshot.knownAmountMinor}` : "No reconciled measurement.");
+  }
+  console.log("Measured estimates use the operator rate card and explicit coverage; they are not invoices.");
 }
 
 async function billingCommand(args) {
@@ -3921,6 +3947,7 @@ function positionals(args) {
         "--github",
         "--no-workflows",
         "--json",
+        "--history",
       ].includes(argument)) index++;
       continue;
     }
