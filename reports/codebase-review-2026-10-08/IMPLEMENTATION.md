@@ -2,7 +2,7 @@
 
 Base: `4b990199965204f1200fcd0fb4ca2b7eb0b02bbc`, equal to freshly fetched `origin/main` on 2026-10-08.
 
-Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Twenty-six features are merged across twenty-three feature batches; fourteen remain. [Workflow compensation (20)](workflow-compensation.json) merged in [PR #297](https://github.com/nearbycoder/clank.run/pull/297) after both complete Node 26/22 release checks, all six fresh hosted checks and a protected expected-head squash. Accepted commit `d89d52514b259823b8ac28de04f95da642c905bf` exactly matches reviewed tree `0ead1fc75dc10831b5c271c8e202127c3b97e66c`; both main checkouts match it and all 23 existing local files are preserved. Non-independent author COMMENT `5476778312` is verification, not independent approval. Production Railway remains uncertified; earlier snapshots retain their original scope.
+Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Twenty-seven features are merged across twenty-four feature batches; thirteen remain. [Workflow compensation (20)](workflow-compensation.json) merged in [PR #297](https://github.com/nearbycoder/clank.run/pull/297) after both complete Node 26/22 release checks, all six fresh hosted checks and a protected expected-head squash. Accepted commit `d89d52514b259823b8ac28de04f95da642c905bf` exactly matches reviewed tree `0ead1fc75dc10831b5c271c8e202127c3b97e66c`; both main checkouts match it and all 23 existing local files are preserved. Non-independent author COMMENT `5476778312` is verification, not independent approval. Production Railway remains uncertified; earlier snapshots retain their original scope.
 
 A feature is complete only when its documented acceptance evidence exists. Proposed contracts do not count as implemented features. The review baseline remains historical evidence; this ledger records subsequent work.
 
@@ -660,7 +660,7 @@ and supported limits. Feature 01 remains in progress until reviewed PR delivery;
 | 03 | Persistent release channels | Implemented and merged | Proposal #276 / merged PR #278; [acceptance](release-channels.json). |
 | 04 | Deployment dependency gates | Implemented and merged | Proposal #279 / merged PR #281; [acceptance](deployment-dependencies.json). |
 | 05 | Scheduled release windows | Implemented and merged | Proposal #280 / merged PR #282; [acceptance and protected delivery](release-windows.json). |
-| 06 | Automatic supervisor leadership | Verified full native/hosted source gates; final-head/protected merge pending, not counted | Proposal #313; [current evidence](supervisor-leadership.json). |
+| 06 | Automatic supervisor leadership | Accepted; protected merge #314 | Proposal #313; [retained native and hosted evidence](supervisor-leadership.json). |
 | 07 | Online provider node handoff | Planned | Pending |
 | 08 | Provider managed canaries | Planned | Pending |
 | 09 | Isolated shadow traffic | Planned | Pending |
@@ -692,7 +692,7 @@ and supported limits. Feature 01 remains in progress until reviewed PR delivery;
 | 35 | Translation extraction and review workflow | Implemented | Canonical catalog extraction, locale/source/current fences, placeholder/key/plural validation and reviewed diff acceptance. Node tests, packed types and real browser keyboard/mobile checks confirm the server/browser revision matches. |
 | 36 | Project incident workspace | Draft; not counted | Proposal #300 / draft PR #301; runtime/process/types checked; current-main integration and actual native console acceptance pending. |
 | 37 | SLO and error budget policies | Draft; not counted | Proposal #302 / draft PR #303; arithmetic/process/types checked; current-main integration and actual native console acceptance pending. |
-| 38 | Project cost attribution and budgets | Planned | Pending |
+| 38 | Project cost attribution and budgets | Implemented source; native/release gates passed; real browser interaction and hosted/protected merge pending; not counted | Proposal #320; [current evidence](project-costs.json). |
 | 39 | Retention administration and holds | Implemented | Scoped inventory, exact purge receipts, restart-persistent holds, protected history admission, expired-retry fencing and competing scheduled runners; 63 focused tests, 18 packed fixtures, full release gate and actual browser controls. `retention-administration.json`. |
 | 40 | Customer status pages | Planned | Pending |
 
