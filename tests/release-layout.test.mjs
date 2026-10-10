@@ -30,6 +30,8 @@ const fixtures = {
   expressionRegex: 'export function snapshot() {\n    const value = true ? /["`]/.source : /a\\/b/.source;\n    const other = (() => /["`]/.source)();\n    return [value, other, `raw\n   preserved`];\n}\n',
   templateDivision: 'export function snapshot() {\n    return [`outer\n  ${(12) / 2 / /2/.source.length}\n  retained`];\n}\n',
   templateBraceAmbiguity: 'export function snapshot() {\n    return [`outer\n  ${(12) / ({value: 2}).value / 3}\n  unchanged`];\n}\n',
+  defaultRegex: 'export default /`/.source;\nconst first = `first\n   keep`;\nconst second = `second\n   keep`;\nexport function snapshot() {\n    return [first, second, /`/.source];\n}\n',
+  extendsRegex: 'class Value extends /`/.constructor {}\nconst first = `first\n   keep`;\nconst second = `second\n   keep`;\nexport function snapshot() {\n    return [new Value().source, first, second, /`/.source];\n}\n',
 };
 fixtures.bounded = 'export function snapshot() {\n    return [' + Array.from({length: 258}, () => '`start${').join('') + '1' + Array.from({length: 258}, () => '}end`').join('') + '];\n}\n';
 
@@ -71,7 +73,7 @@ test('actual built modules preserve executed literal, regex, comment, Unicode an
     const baseline = await import(pathToFileURL(join(root, `${name}-baseline.mjs`)).href);
     const actual = await import(pathToFileURL(join(root, 'dist', `${name}.js`)).href);
     assert.deepEqual(actual.snapshot(), baseline.snapshot(), name);
-    if (['ordinary', 'literals', 'nested', 'comments', 'division', 'unicode', 'lineSeparators', 'asi', 'privateProperty', 'expressionRegex', 'templateDivision'].includes(name)) {
+    if (['ordinary', 'literals', 'nested', 'comments', 'division', 'unicode', 'lineSeparators', 'asi', 'privateProperty', 'expressionRegex', 'templateDivision', 'defaultRegex', 'extendsRegex'].includes(name)) {
       assert.ok(built.length < expected.length, `${name}: proof exercises an actually compacted module`);
     }
     assert.deepEqual(built.match(/\r\n|[\r\n\u2028\u2029]/gu), expected.match(/\r\n|[\r\n\u2028\u2029]/gu), `${name}: line endings`);

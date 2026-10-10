@@ -54,7 +54,7 @@ function compactReleaseLayout(source) {
   const isWord = character => Boolean(character && /[\p{ID_Continue}$\u200c\u200d]/u.test(character));
   const isStart = character => Boolean(character && /[\p{ID_Start}$_]/u.test(character));
   const isLineEnd = character => /[\r\n\u2028\u2029]/u.test(character);
-  const expressionWords = new Set(["return", "throw", "case", "delete", "void", "typeof", "new", "instanceof", "in", "yield", "await", "else", "do"]);
+  const expressionWords = new Set(["return", "throw", "case", "default", "extends", "delete", "void", "typeof", "new", "instanceof", "in", "yield", "await", "else", "do"]);
 
   function quoted(start, quote) {
     for (let index = start + 1; index < source.length; index++) {
