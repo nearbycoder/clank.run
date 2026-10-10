@@ -1086,6 +1086,37 @@ test("provider canary intake captures capsule bytes before asynchronous verifica
   } finally {await opened?.service.close();await fixture.close();}
 });
 
+test("canary startup refuses replayed cleanup when its project identity has an ordinary owner", async () => {
+  const fixture=await serviceFixture("canary-replayed-cleanup");let opened,deletes=0;
+  try {
+    opened=await fixture.open({canaries:{readPaths:["/healthz"]}});
+    const primary=await fixture.runtime({generation:1,releaseId:"release_replayed_primary",mode:"initialize",snapshot:await sqliteSnapshot(fixture.root,"primary")});
+    await opened.service.reconcile(providerInput(primary,1));
+    const input={primary:await opened.service.canaries.binding("project_service_01"),controllerEpoch:2,operationId:"canary_replayed_cleanup",runtime:await fixture.runtime({generation:2,releaseId:"release_replayed_candidate",mode:"preserve"}),signal:new AbortController().signal};
+    const candidate=await opened.service.canaries.prepare(input),journalFile=join(fixture.providerRoot,"service","project_service_01.canary.json");
+    const runningJournal=await readFile(journalFile,"utf8");
+    await opened.service.canaries.stop(input);
+    const ordinary=await fixture.runtime({projectId:candidate.candidateProjectId,generation:1,releaseId:"release_replayed_ordinary",mode:"initialize",snapshot:await sqliteSnapshot(fixture.root,"ordinary")});
+    await opened.service.reconcile(providerInput(ordinary,1));
+    await opened.service.close();opened=undefined;
+    const stateFile=join(fixture.providerRoot,"service",`${candidate.candidateProjectId}.json`),state=await readFile(stateFile,"utf8"),data=await fixture.data.inspect(candidate.candidateProjectId);
+    // A stopped historical journal permits normal reuse. A partial metadata
+    // restore must not turn that same project back into disposable canary data.
+    opened=await fixture.open();await opened.service.close();opened=undefined;
+    await writeFile(journalFile,runningJournal,{mode:0o600});
+    for(const canaries of [undefined,{readPaths:["/healthz"]}]) {
+      let failure;
+      try {opened=await fixture.open({canaries,data:{...fixture.data,delete:async(...args)=>{deletes++;return fixture.data.delete(...args);}}});}
+      catch(error) {failure=error;}
+      assert.equal(deletes,0,"Replayed cleanup must not delete the newer ordinary owner's data.");
+      assert.match(failure?.message??"",/cleanup collides with ordinary/u);
+      assert.deepEqual(await fixture.data.inspect(candidate.candidateProjectId),data);
+      assert.equal(await readFile(stateFile,"utf8"),state);
+      assert.equal(await readFile(journalFile,"utf8"),runningJournal);
+    }
+  } finally {await opened?.service.close();await fixture.close();}
+});
+
 async function serviceFixture(name) {
   const root = await mkdtemp(join(tmpdir(), `clank-provider-service-${name}-`));
   const providerRoot = join(root, "provider");
