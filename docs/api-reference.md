@@ -356,6 +356,10 @@ Optional module: `@clank.run/framework/component-harness`; see [component harnes
   platforms or standalone database helpers. See [SQLite worker isolation](sqlite-isolation.md).
 - `openPlatform({ invitations })`: durable, encrypted, cross-instance-leased invitation delivery
   through any `EmailService`, while retaining manual copy-once fallback.
+- `openPlatform({ projectCosts })` adds trusted cumulative measurements, immutable rate cards,
+  version-fenced budgets, expiring overrides and private operational alerts. Public
+  `createProjectCostClient()`, `createProjectCostView()` and `createProjectCostMcpTools()`
+  share native project authorization. See [project costs](project-costs.md).
 - Types: `ClankPlatformOptions`, `PlatformBackupOptions`, `PlatformJobOperationsOptions`,
   `PlatformInvitationDeliveryOptions`, `PlatformLimits`, `PlatformHostingProfile`,
   `PlatformRunnerOptions`, `ProcessRunnerOptions`, `DockerRunnerOptions`,

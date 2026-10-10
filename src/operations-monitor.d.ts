@@ -2,7 +2,7 @@ import type { SQLiteInternal } from "./sqlite-internal.js";
 import type { RehearsalApplication, RehearsalReport } from "./rehearsal.js";
 export interface OperationalSignal {
   key: string;
-  kind: "deployment_failed" | "application_unhealthy" | "jobs_overdue" | "backup_failed" | "backup_overdue" | "usage_warning" | "restore_drill_failed";
+    kind: "deployment_failed" | "application_unhealthy" | "jobs_overdue" | "backup_failed" | "backup_overdue" | "usage_warning" | "restore_drill_failed" | "cost_budget";
   active: boolean;
   severity: "warning" | "critical";
   resourceId: string;

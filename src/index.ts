@@ -82,3 +82,5 @@ export type { ManagedCanaryStage, ManagedCanaryOptions, ManagedCanaryReport } fr
 export * from "./openapi.ts";
 export * from "./translation-review.ts";
 export * from "./service-accounts.ts";
+export * from "./project-costs.ts";
+export type { PlatformProjectCostOptions } from "./platform-project-costs.ts";

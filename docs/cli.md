@@ -326,6 +326,13 @@ clank activity --json
 
 `clank audit` is an alias. The feed is newest first and includes the event ID, action, target, actor, timestamp, and safe audit metadata. `--json` prints the complete stable response for agents and automation. Owners, administrators, and developers can read events for their current organizations; viewers cannot. A project-scoped token needs `audit` permission and receives only that project's events.
 
+## Project cost inspection
+
+`clank costs [directory] [--month YYYY-MM] [--history] [--json]` reads measured
+project cost estimates and budget status using the linked project’s current native
+credential. History requires a month. Unknown coverage remains unknown; estimates
+are not invoices. See [project costs](project-costs.md).
+
 ## Workspace usage
 
 ```sh
