@@ -47,8 +47,15 @@ test('an actual native acknowledgment transaction abort leaves one stopped reser
 
 test('current native membership loss during independent key resolution cannot publish a release or start the reserved destination',async t=>{
   const f=await setup(t);let entered,release;const lookup=new Promise(resolve=>{entered=resolve;}),held=new Promise(resolve=>{release=resolve;});f.setGate(async()=>{entered();await held;});
-  const pending=f.call(f.path+'/restores',f.input,403);await lookup;const reserved=target(f);
-  assert.equal(Number(f.native.prepare('DELETE FROM clank_platform_memberships WHERE organization_id=? AND user_id=?').run(f.project.organizationId,f.owner.user.id).changes),1);release();await pending;
+  const pending=f.call(f.path+'/restores',f.input,404);await lookup;const reserved=target(f);
+  assert.equal(Number(f.native.prepare('DELETE FROM clank_platform_memberships WHERE organization_id=? AND user_id=?').run(f.project.organizationId,f.owner.user.id).changes),1);release();assert.equal((await pending).error.code,'PROJECT_NOT_FOUND');
   assert.equal(target(f).active_release_id,null);assert.equal(target(f).runtime_policy,'suspended');assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_platform_audit WHERE action='recovery.restore.accept'").get().n,0);
   assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_platform_releases WHERE project_id=?").get(reserved.id).n,0);assert.equal(f.native.prepare("SELECT state FROM clank_platform_pitr_operations WHERE project=? AND id=?").get(f.project.id,f.input.operationId).state,'pending');
+});
+
+test('a native ignored project update cannot acknowledge an unusable restore and retains its exact stopped reservation for retry',async t=>{
+  const f=await setup(t);f.native.exec("CREATE TRIGGER ignore_recovery_selection BEFORE UPDATE OF active_release_id ON clank_platform_projects WHEN OLD.slug='recovered-point-two' BEGIN SELECT RAISE(IGNORE); END;");
+  const refused=await f.call(f.path+'/restores',f.input,409);assert.equal(refused.error.code,'RECOVERY_ACKNOWLEDGMENT_CHANGED');const reserved=target(f);assert.equal(reserved.active_release_id,null);assert.equal(reserved.runtime_policy,'suspended');
+  assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_platform_releases WHERE project_id=?").get(reserved.id).n,0);assert.equal(f.native.prepare("SELECT state FROM clank_platform_pitr_operations WHERE project=? AND id=?").get(f.project.id,f.input.operationId).state,'pending');assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_platform_audit WHERE action='recovery.restore.accept'").get().n,0);
+  f.native.exec('DROP TRIGGER ignore_recovery_selection');const accepted=(await f.call(f.path+'/restores',f.input,201)).receipt;assert.equal(accepted.destinationProjectId,reserved.id);assert.equal(target(f).active_release_id,accepted.releaseId);
 });
