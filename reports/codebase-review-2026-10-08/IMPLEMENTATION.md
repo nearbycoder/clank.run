@@ -2,11 +2,21 @@
 
 Base: `4b990199965204f1200fcd0fb4ca2b7eb0b02bbc`, equal to freshly fetched `origin/main` on 2026-10-08.
 
-Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Twenty-eight features are merged across twenty-five feature batches; twelve remain. Current synchronized main is `d673c4abb0ef8b3b41b15b1d2023908425a26501`, including provider-isolation prerequisite [PR #336](https://github.com/nearbycoder/clank.run/pull/336), protected [PostgreSQL feature 21 PR #333](https://github.com/nearbycoder/clank.run/pull/333) and maintenance merges [#330](https://github.com/nearbycoder/clank.run/pull/330) and [#332](https://github.com/nearbycoder/clank.run/pull/332). Both main checkouts match its reviewed tree and all 23 pre-existing local files are preserved. Earlier feature snapshots and their immutable evidence retain their original scope; production Railway remains uncertified.
+Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Twenty-eight features are merged across twenty-five feature batches; twelve remain. Latest verified synchronized main (2026-10-10) is `1ec192f4f7bd883f8006bdf73e31471a68e90297`, including the protected provider-controller prerequisite [PR #337](https://github.com/nearbycoder/clank.run/pull/337), provider-isolation prerequisite [PR #336](https://github.com/nearbycoder/clank.run/pull/336), protected [PostgreSQL feature 21 PR #333](https://github.com/nearbycoder/clank.run/pull/333) and maintenance merges [#330](https://github.com/nearbycoder/clank.run/pull/330) and [#332](https://github.com/nearbycoder/clank.run/pull/332). Both main checkouts match its reviewed tree and all 23 pre-existing local files are preserved. Earlier feature snapshots and their immutable evidence retain their original scope; production Railway remains uncertified.
 
 A feature is complete only when its documented acceptance evidence exists. Proposed contracts do not count as implemented features. The review baseline remains historical evidence; this ledger records subsequent work.
 
-## Provider canary controller prerequisite under verification
+## Provider canary controller prerequisite accepted
+
+Protected [PR #337](https://github.com/nearbycoder/clank.run/pull/337) merged reviewed `ab8be32bca83ddac12b03bd29780125919886980` as `1ec192f4f7bd883f8006bdf73e31471a68e90297`, with identical tree `431aea1d5e438944b01ed05bb390443c13c3afcd`. Both main checkouts were synchronized and all 23 pre-existing local files reverified unchanged. This accepts the trusted controller prerequisite, not feature 08.
+
+Both final native PostgreSQL-backed full release gates pass 2,162 reported / 2,155 passed / zero failures or cancellations / seven explicit privileged skips. Five real Docker isolation and preparation/running/stopping SIGKILL cases pass without skips on each runtime. Current service/data checks pass 29/29 on both. All eight hosted checks pass; the only analysis annotation is the Ubuntu runner migration notice. Source review completed with both reproduced ownership defects repaired; author COMMENT `5481240038` is not independent approval.
+
+The immutable final full-gate evidence index SHA-256 is `5ef480ebb836d50b76056eb977558bc4dc39c7ff0cd7fd8078d9bd11e2b9c12a`. All 1,126 tracked source inputs match the frozen snapshot. All 2,384 Node 26 and 2,383 Node 22 retained coverage profiles parse and match their archived hashes. Coverage is 91.68%/91.67% lines, 81.09%/81.11% branches and 90.20%/90.23% functions. Existing canonical documentation checks retain their scope; browser button activation and physical-host certification are not claimed. Earlier failed runs below remain failed evidence; the separate policy coverage-artifact issue remains unresolved.
+
+Durable exact retirement [PR #340](https://github.com/nearbycoder/clank.run/pull/340), authenticated remote controls and platform stage orchestration remain separate work. Feature counts stay 28 accepted / 12 remaining.
+
+## Provider canary controller verification history
 
 The opt-in trusted provider controller now prepares a separate code-only checkpoint, reserves its candidate identity, admits only approved anonymous reads and verifies complete cleanup before authoritative lifecycle changes. A native SQLite lifetime lock prevents overlapping services from running startup cleanup on the same provider root. Crash cleanup also verifies removal of the exact orphan Docker bridge and outbound policy. Five real-Docker cases now pass on Node 26 and Node 22, including controller death during preparation, serving and drain; complete release gates remain pending.
 
@@ -18,7 +28,7 @@ Protected [PR #336](https://github.com/nearbycoder/clank.run/pull/336) merged re
 
 These prerequisites enforce read-only data, deny-all outbound networking and sanitized candidate reads. They do not enable platform provider canary orchestration or accept feature 08. Current provider-controller work still requires complete process/network recovery evidence and platform stage integration. Counts remain 28 accepted / 12 remaining.
 
-## Provider canary review fixes (feature 08 still pending)
+## Provider canary review-fix history (feature 08 still pending)
 
 Independent review reproduced a delayed journal-read race at `1cb25ee`: after candidate retirement and ordinary reuse of its project ID, the old request restored ownership and blocked the replacement runtime. Journal reads are now side-effect free; ownership reconstruction happens only in serialized cleanup. The regression fails against the original implementation and passes with the service/data suites on Node 26 and 22 (28/28 each, zero skips).
 
