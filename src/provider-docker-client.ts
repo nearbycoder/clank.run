@@ -123,6 +123,8 @@ async function runCommand(
   const stderrTask = collect(child.stderr, (value) => {
     stderr += value;
   });
+  // Observe stream rejection before exit: deadline destruction can reject first.
+  const streamSettlement = Promise.allSettled([stdoutTask, stderrTask]);
   let settled = false;
   const exit = new Promise<{ code: unknown; signal: unknown; error?: unknown }>((resolve) => {
     child.once("error", (error:unknown) => {
@@ -145,7 +147,7 @@ async function runCommand(
   let timedOut = false;
   const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); child.stdout?.destroy(); child.stderr?.destroy(); }, options.timeoutMs);
   const result = await exit;
-  try { await Promise.allSettled([stdoutTask, stderrTask]); } finally { clearTimeout(timer); options.signal?.removeEventListener("abort", abort); }
+  try { await streamSettlement; } finally { clearTimeout(timer); options.signal?.removeEventListener("abort", abort); }
   throwIfAborted(options.signal);
   if (timedOut) throw new Error("Docker command deadline exceeded.");
   if (overflow) throw overflow;
