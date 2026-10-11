@@ -35,6 +35,52 @@ test('an unowned standby defers native catalog contention without creating an ep
   assert.equal(f.first.acquire(),true);assert.equal(f.first.status('leader').epoch,1);
 });
 
+test('startup enrollment waits asynchronously for a native writer without changing current ownership',{timeout:15000},async t=>{
+  const f=await fixture(t);assert.equal(f.first.acquire(),true);
+  const retained=f.observer.prepare('SELECT * FROM clank_platform_supervisor_lease').get();
+  f.observer.exec('BEGIN IMMEDIATE');let released=false;
+  const release=setTimeout(()=>{f.observer.exec('COMMIT');released=true;},700),started=performance.now();
+  try{
+    const standby=await f.open();assert.equal(released,true,'The independent writer must release before enrollment completes.');
+    assert.ok(performance.now()-started>=650,'Enrollment must outlast the 250ms native busy timeout.');
+    assert.deepEqual(f.observer.prepare('SELECT * FROM clank_platform_supervisor_lease').get(),retained);
+    assert.equal(standby.acquire(),false);assert.equal(f.first.assertCurrent(),undefined);
+  }finally{clearTimeout(release);if(!released)f.observer.exec('ROLLBACK');}
+});
+
+test('startup enrollment checks the protocol committed by a concurrent native writer',{timeout:15000},async t=>{
+  const f=await fixture(t),retained=f.observer.prepare('SELECT * FROM clank_platform_supervisor_lease').get();
+  f.observer.exec('BEGIN IMMEDIATE;UPDATE clank_platform_supervisor_state SET protocol=99');let released=false;
+  const release=setTimeout(()=>{f.observer.exec('COMMIT');released=true;},700);
+  try{
+    await assert.rejects(f.open(),error=>error.code==='SUPERVISOR_PROTOCOL');assert.equal(released,true);
+    assert.equal(f.observer.prepare('SELECT protocol FROM clank_platform_supervisor_state').get().protocol,99);
+    assert.deepEqual(f.observer.prepare('SELECT * FROM clank_platform_supervisor_lease').get(),retained);
+  }finally{clearTimeout(release);if(!released)f.observer.exec('ROLLBACK');}
+});
+
+test('startup enrollment respects the configuration revision committed by a concurrent native writer',{timeout:15000},async t=>{
+  const f=await fixture(t),retained=f.observer.prepare('SELECT * FROM clank_platform_supervisor_lease').get();
+  f.observer.exec('BEGIN IMMEDIATE;UPDATE clank_platform_supervisor_state SET configuration_revision=2');let released=false;
+  const release=setTimeout(()=>{f.observer.exec('COMMIT');released=true;},700);
+  try{
+    await assert.rejects(f.open(),error=>error.code==='SUPERVISOR_CONFIGURATION_CHANGED');assert.equal(released,true);
+    assert.equal(f.observer.prepare('SELECT configuration_revision FROM clank_platform_supervisor_state').get().configuration_revision,2);
+    assert.deepEqual(f.observer.prepare('SELECT * FROM clank_platform_supervisor_lease').get(),retained);
+  }finally{clearTimeout(release);if(!released)f.observer.exec('ROLLBACK');}
+});
+
+test('startup enrollment refuses a still-held native writer at its bounded deadline',{timeout:15000},async t=>{
+  const f=await fixture(t),retained=f.observer.prepare('SELECT * FROM clank_platform_supervisor_lease').get();
+  f.observer.exec('BEGIN IMMEDIATE');const started=performance.now();
+  try{
+    await assert.rejects(f.open(),error=>error.code==='ERR_SQLITE_ERROR'&&error.errcode===5);
+    assert.ok(performance.now()-started>=4900,'Enrollment must honor its 5-second monotonic wait budget.');
+    assert.deepEqual(f.observer.prepare('SELECT * FROM clank_platform_supervisor_lease').get(),retained);
+  }finally{f.observer.exec('ROLLBACK');}
+  const available=await f.open();assert.equal(available.acquire(),true);assert.equal(available.status('leader').epoch,1);
+});
+
 test('catalog contention never lets an existing owner silently retain or renew unchecked authority',async t=>{
   const f=await fixture(t);assert.equal(f.first.acquire(),true);
   f.observer.exec('BEGIN IMMEDIATE');

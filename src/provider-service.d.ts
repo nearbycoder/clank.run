@@ -1,3 +1,4 @@
+import type { DeploymentRuntimeCapsule } from "./runtime-placement.ts";
 import type {
   DeploymentProviderDataState,
   DeploymentProviderDataSnapshot,
@@ -48,7 +49,63 @@ export interface DeploymentProviderServiceState {
 export type DeploymentProviderServiceLifecycleRequest =
   DeploymentProviderLifecycleRequest;
 
+export interface DeploymentProviderCanaryOptions {
+  /** Exact anonymous GET/HEAD paths approved by the provider operator. */
+  readonly readPaths: readonly string[];
+  readonly maxConcurrent?: number;
+  /** Combined prepared/retired IDs per primary incarnation; exhaustion requires ordinary reconciliation. */
+  readonly maxOperations?: number;
+  readonly maximumDurationMs?: number;
+}
+
+export interface DeploymentProviderCanaryBinding {
+  readonly projectId: string;
+  readonly releaseId: string;
+  readonly generation: number;
+  readonly fence: number;
+  /** Opaque provider-issued incarnation; changes after primary reconciliation or restart. */
+  readonly incarnation: string;
+}
+
+export interface DeploymentProviderCanaryState {
+  readonly protocol: "clank-provider-canary/1";
+  readonly operationId: string;
+  readonly primary: DeploymentProviderCanaryBinding;
+  readonly controllerEpoch: number;
+  readonly candidateProjectId: string;
+  readonly releaseId: string;
+  readonly capsuleSha256: string;
+  readonly phase: "preparing" | "running" | "stopping" | "stopped";
+  readonly expiresAt: number;
+}
+
+export interface DeploymentProviderCanaryRetirement {
+  readonly protocol: "clank-provider-canary-retirement/1";
+  readonly primary: DeploymentProviderCanaryBinding;
+  readonly operationId: string;
+  /** Original prepare epoch, not the retiring coordinator's epoch. */
+  readonly controllerEpoch: number;
+  readonly releaseId: string;
+  /** Digest of the original source capsule, not the isolated checkpoint capsule. */
+  readonly capsuleSha256: string;
+  readonly candidateProjectId: string;
+  readonly retirementEpoch: number;
+  readonly phase: "retired";
+}
+
+export interface DeploymentProviderCanaryController {
+  binding(projectId: string): Promise<DeploymentProviderCanaryBinding | null>;
+  inspect(projectId: string): Promise<DeploymentProviderCanaryState | null>;
+  /** Trusted callers must fence their native coordinator lease before and after every await. */
+  prepare(input: { readonly primary: DeploymentProviderCanaryBinding; readonly controllerEpoch: number; readonly operationId: string; readonly runtime: DeploymentRuntimeCapsule; readonly signal: AbortSignal }): Promise<DeploymentProviderCanaryState & { readonly route: { readonly projectId: string; readonly releaseId: string; readonly generation: 1; readonly path: string; readonly token: string; readonly readPaths: readonly string[] } }>;
+  /** Stops and verifies exact candidate runtime/data absence; it never promotes candidate data. */
+  stop(input: { readonly primary: DeploymentProviderCanaryBinding; readonly controllerEpoch: number; readonly operationId: string }): Promise<DeploymentProviderCanaryState>;
+  /** Durably fences a possibly lost prepare before verifying absence. Epochs do not replace the caller's native lease assertions. */
+  retire(input: { readonly primary: DeploymentProviderCanaryBinding; readonly controllerEpoch: number; readonly operationId: string; readonly releaseId: string; readonly capsuleSha256: string; readonly retirementEpoch: number }): Promise<DeploymentProviderCanaryRetirement>;
+}
+
 export interface DeploymentProviderServiceOptions {
+  canaries?: DeploymentProviderCanaryOptions;
   /** Existing private provider root shared by the injected data and runtime components. */
   rootDirectory: string;
   data: DeploymentProviderDataStore;
@@ -65,6 +122,7 @@ export interface DeploymentProviderServiceOptions {
 }
 
 export interface DockerDeploymentProviderServiceOptions {
+  canaries?: DeploymentProviderCanaryOptions;
   rootDirectory: string;
   owner: string;
   image: string;
@@ -81,6 +139,8 @@ export interface DockerDeploymentProviderServiceOptions {
 }
 
 export interface DeploymentProviderService extends DeploymentProvider {
+  /** Omitted by default. Candidate data never becomes the authoritative database. */
+  readonly canaries?: DeploymentProviderCanaryController;
   readonly protocol: typeof DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL;
   /** Handles provider-private runtime ingress plus authenticated control routes. */
   handle(request: Request): Promise<Response>;
