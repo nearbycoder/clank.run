@@ -349,14 +349,14 @@ dedicated VMs or microVMs for hostile workloads.
 
 The service accepts an optional `canaries` configuration with exact anonymous `GET`/`HEAD`
 `readPaths`. `maxConcurrent` bounds simultaneous preparations (default 4, range 1–64),
-`maxOperations` bounds retained operation identities per primary incarnation (default 32,
+`maxOperations` bounds the union of prepared and explicitly retired operation identities per primary incarnation (default 32,
 range 1–64), and `maximumDurationMs` bounds preparation and candidate lifetime (default
 30 minutes, range 100 milliseconds–30 minutes). Paths exclude queries, encoded or dot
 segments, wildcards and private authenticated routes. The default service omits `canaries`.
 Capsule intake is serialized across the provider, bounded before copying and copied before
 asynchronous verification so callers cannot substitute bytes during preparation.
 
-This exposes `service.canaries.binding`, `prepare`, `inspect` and `stop` to trusted server
+This exposes `service.canaries.binding`, `prepare`, `inspect`, `stop` and `retire` to trusted server
 callers. It does not enable platform provider canary deployment stages or expose an
 unauthenticated control endpoint. Platform orchestration remains unsupported until its native
 lease fencing, measured stages and process/network failure acceptance are complete.
@@ -388,6 +388,44 @@ the authoritative writer. After the old service closes or exits, opening a repla
 including a service without canaries enabled, retires persisted candidates. A replacement cannot
 overlap a live service or its held preparation or cleanup operation.
 Unknown journal protocols and failed cleanup block admission.
+
+Use `retire` when a prepare request or its response may have been lost. Supply the exact
+original `primary`, `operationId`, `controllerEpoch`, candidate `releaseId`, and source
+`capsuleSha256`, plus the retiring coordinator's current `retirementEpoch`. The latter must
+be at least the original prepare epoch. The source digest is the submitted capsule digest,
+not the provider's derived checkpoint capsule digest. These fields are captured before any
+await. Trusted callers must still assert their actual native coordinator lease before and
+after every await; neither epoch number authorizes this operation by itself.
+
+Retirement writes a bounded tombstone and a monotonic epoch floor before acknowledging an
+absent candidate, even if preparation has not yet finished decoding its capsule. Preparation
+rechecks this state after decoding, before any journal, checkpoint, data or runtime effects.
+A retired operation and any other prepare below that primary incarnation's epoch floor
+reject. An exact current candidate is drained and removed; unrelated later candidates and
+their route credentials remain intact. Retirement verifies absence of runtime, ingress,
+provider data, orphan directories and ordinary provider state. An ownership collision or
+uncertain cleanup rejects without deleting unmatched state. A successful receipt has protocol
+`clank-provider-canary-retirement/1` and phase `retired`; it contains no route credential.
+
+Exact retirement retries retain the highest recorded retirement epoch and never lower the
+floor. Reusing an operation with a different primary, original epoch, release or digest
+rejects. The existing prepare journal retains only IDs for older operations: an ordinary
+`stop` followed by another prepare may leave no full identity for that older operation.
+Explicit retirement of such a spent, non-current ID rejects unless an exact retirement
+tombstone is retained. Controllers needing a durable absence receipt should use `retire`
+and finish unresolved retirement before admitting the next operation.
+
+The additive private `service/<project>.canary-retirements.json` file uses protocol
+`clank-provider-canary-retirements/1`. It stores one primary binding, the floor and at most
+64 exact entries within the existing 64 KiB metadata bound. A persisted `retiring` entry
+survives interrupted cleanup. Startup resumes it and verifies absence, including when
+canaries are disabled; corruption, conflicts or failed cleanup prevent readiness. Retained
+exact retries remain usable after restart or primary reconciliation until a verified new
+primary incarnation replaces the resolved retirement history. Unresolved entries cannot be
+discarded by that replacement. Back up provider metadata together; do not delete this file
+to reclaim capacity. A fresh ordinary primary reconciliation permits new operation capacity.
+Rolling back to a version without retirement support loses this receipt contract: restart
+invalidates old primary bindings, and a controller must obtain and fence a new binding.
 
 Candidate data is never promoted. After successful evaluation, stop the candidate and verify
 cleanup, then use ordinary fenced single-writer deployment with the latest primary data. A
