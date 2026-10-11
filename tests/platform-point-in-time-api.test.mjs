@@ -1,0 +1,72 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {DatabaseSync} from 'node:sqlite';import {join} from 'node:path';
+import {signedStepUp} from './fixtures/platform-recovery-fresh-auth.mjs';
+import {readFile} from 'node:fs/promises';
+import {fixture} from './fixtures/platform-environment-fixture.mjs';
+import {recoveryMcpRequest} from './fixtures/platform-recovery-mcp.mjs';
+
+async function setup(t,overrides={}){let sources=0;const f=await fixture(t,false,{...overrides,pointInTime:{source:async()=>{sources++;throw new Error('No registered captured provider in this API fixture.');}}}),native=new DatabaseSync(join(f.options.dataDirectory,'control.sqlite'));native.exec('PRAGMA busy_timeout=5000');t.after(()=>native.close());const path=`/api/projects/${f.development.id}/point-in-time`,input={operationId:'native_recovery_configuration',expectedVersion:0,enabled:false,intervalMs:60000,confirmation:'configure-recovery '+f.development.slug};return {...f,native,path,input,get sources(){return sources;}};}
+
+test('recovery is disabled by default without creating recovery protocol tables',async t=>{
+  const f=await fixture(t);await f.call(`/api/projects/${f.development.id}/point-in-time`,undefined,404);const native=new DatabaseSync(join(f.options.dataDirectory,'control.sqlite'),{readOnly:true});try{native.exec('PRAGMA busy_timeout=5000');assert.equal(native.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE name='clank_platform_pitr_state'").get().n,0);}finally{native.close();}
+});
+
+test('native platform enrollment cannot be bypassed by omitting its configuration or losing all recovery tables',async t=>{
+  const f=await setup(t),configuration=f.options.pointInTime,marker=join(f.options.dataDirectory,'point-in-time/protocol');assert.equal(await readFile(marker,'utf8'),'clank-platform-pitr/1\n');
+  delete f.options.pointInTime;await assert.rejects(f.restart(),error=>error.code==='RECOVERY_MODE_REQUIRED');assert.equal(f.native.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE name LIKE 'clank_platform_pitr_%'").get().n,5);
+  f.options.pointInTime=configuration;await f.restart();
+  for(const name of ['archives','checkpoints','operations','policies','state'])f.native.exec('DROP TABLE clank_platform_pitr_'+name);
+  delete f.options.pointInTime;await assert.rejects(f.restart(),error=>error.code==='RECOVERY_MODE_REQUIRED');assert.equal(f.native.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE name LIKE 'clank_platform_pitr_%'").get().n,0);assert.equal(await readFile(marker,'utf8'),'clank-platform-pitr/1\n');
+  f.options.pointInTime=configuration;await assert.rejects(f.restart(),/Partial platform recovery protocol/);assert.equal(f.native.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE name LIKE 'clank_platform_pitr_%'").get().n,0);
+});
+
+test('native current human policy configuration requires a real signed fresh assertion, records one audit per operation, and returns current policy beside a historical receipt',async t=>{
+  const f=await setup(t);await f.call(f.path,f.input,403,'PUT');await f.call(f.path+'/resolve',{operationId:'resolve_before_verification',pendingOperationId:'missing_pending',expectedVersion:1,confirmation:'abandon-recovery '+f.development.slug+' missing_pending'},403);assert.equal(f.native.prepare('SELECT count(*) AS n FROM clank_platform_pitr_policies').get().n,0);await signedStepUp(f,f.native);
+  const first=await f.call(f.path,f.input,200,'PUT');assert.equal(first.receipt.version,1);assert.equal(first.policy.version,1);assert.equal(first.policy.enabled,false);assert.equal(f.sources,0);
+  await f.call(f.path,{...f.input,operationId:'unsupported_source_enable',expectedVersion:1,enabled:true},409,'PUT');assert.equal(f.native.prepare('SELECT count(*) AS n FROM clank_platform_pitr_operations').get().n,1);
+  await f.call(f.path,f.input,200,'PUT');assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_platform_audit WHERE action='recovery.policy'").get().n,1);
+  await f.call(f.path,{...f.input,operationId:'native_recovery_configuration_02',expectedVersion:1,intervalMs:120000},200,'PUT');
+  const replay=await f.call(f.path,f.input,200,'PUT');assert.equal(replay.receipt.version,1);assert.equal(replay.policy.version,2);assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_platform_audit WHERE action='recovery.policy'").get().n,2);
+  await f.call(f.path,{...f.input,operationId:'native_recovery_stale_03'},409,'PUT');assert.equal(f.native.prepare('SELECT count(*) AS n FROM clank_platform_pitr_operations').get().n,2);
+  f.native.exec("CREATE TRIGGER refuse_recovery_audit BEFORE INSERT ON clank_platform_audit WHEN NEW.action='recovery.policy' BEGIN SELECT RAISE(ABORT,'owned native recovery audit failure'); END;");
+  const interrupted={...f.input,operationId:'native_recovery_audit_failure',expectedVersion:2,intervalMs:180000};await f.call(f.path,interrupted,409,'PUT');
+  assert.equal(f.native.prepare('SELECT version FROM clank_platform_pitr_policies').get().version,2);assert.equal(f.native.prepare('SELECT count(*) AS n FROM clank_platform_pitr_operations').get().n,2);
+  f.native.exec('DROP TRIGGER refuse_recovery_audit');await f.call(f.path,interrupted,200,'PUT');assert.equal(f.native.prepare('SELECT version FROM clank_platform_pitr_policies').get().version,3);
+  assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_platform_audit WHERE action='recovery.policy'").get().n,3);
+  const resolution={operationId:'resolve_missing_export',pendingOperationId:'missing_pending',expectedVersion:3,confirmation:'abandon-recovery '+f.development.slug+' missing_pending'};
+  await f.call(f.path+'/resolve',{...resolution,confirmation:'incorrect confirmation'},400);await f.call(f.path+'/resolve',resolution,409);
+  assert.equal(f.native.prepare('SELECT count(*) AS n FROM clank_platform_pitr_operations').get().n,3);assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_platform_audit WHERE action='recovery.resolve'").get().n,0);
+  const foreign=await f.account('foreign-recovery@example.test');await f.call(f.path,undefined,404,undefined,foreign);
+});
+
+test('recovery configuration revalidates native workspace membership after a held request body and leaves no receipt or audit',async t=>{
+  const f=await setup(t);await signedStepUp(f,f.native);let entered,deliver;const reading=new Promise(resolve=>{entered=resolve;}),release=new Promise(resolve=>{deliver=resolve;});
+  const body=new ReadableStream({async pull(controller){entered();await release;controller.enqueue(new TextEncoder().encode(JSON.stringify(f.input)));controller.close();}},{highWaterMark:0});
+  const pending=f.handle(new Request(f.options.publicUrl+f.path,{method:'PUT',duplex:'half',headers:{origin:f.options.publicUrl,cookie:f.owner.cookie,'x-clank-csrf':f.owner.csrf,'content-type':'application/json'},body}));
+  await reading;assert.equal(Number(f.native.prepare('DELETE FROM clank_platform_memberships WHERE organization_id=? AND user_id=?').run(f.development.organizationId,f.owner.user.id).changes),1);deliver();
+  const response=await pending;assert.ok([403,404].includes(response.status),JSON.stringify(await response.json()));assert.equal(f.native.prepare('SELECT count(*) AS n FROM clank_platform_pitr_operations').get().n,0);assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_platform_audit WHERE action='recovery.policy'").get().n,0);assert.equal(f.sources,0);
+});
+
+test('real native machine read grants inspect only their current project recovery metadata, cannot mutate it, and fail after owner revocation',async t=>{
+  const f=await setup(t,{serviceAccounts:{}});await signedStepUp(f,f.native);await f.call(f.path,f.input,200,'PUT');
+  const accounts=`/api/organizations/${f.development.organizationId}/service-accounts`,account=(await f.call(accounts,{name:'Recovery observer',ownerId:f.owner.user.id,operationId:'recovery_observer_create'},201)).account;
+  const issued=(await f.call(accounts+'/'+account.id+'/credentials',{projectId:f.development.id,permissions:['read'],expiresAt:Date.now()+600000,expectedVersion:account.version,operationId:'recovery_observer_credential'},201)).issued,origin=await f.serve();
+  const call=async(path,status,body,method=body===undefined?'GET':'POST')=>{const response=await fetch(origin+path,{method,headers:{authorization:'Bearer '+issued.accessToken,...(body===undefined?{}:{'content-type':'application/json'})},...(body===undefined?{}:{body:JSON.stringify(body)})}),value=await response.json();assert.equal(response.status,status,JSON.stringify(value));return value;};
+  const metadata=await call(f.path,200);assert.equal(metadata.policy.version,1);assert.deepEqual(metadata.checkpoints,[]);assert.deepEqual(metadata.restores,[]);assert.ok(!JSON.stringify(metadata).includes(issued.accessToken));
+  await call(`/api/projects/${f.staging.id}/point-in-time`,404);
+  await call(f.path,403,{...f.input,operationId:'machine_cannot_configure',expectedVersion:1},'PUT');await call(f.path+'/checkpoints',403,{operationId:'machine_cannot_capture',expectedVersion:1});await call(f.path+'/restores',403,{});await call(f.path+'/resolve',403,{});
+  assert.equal(f.native.prepare('SELECT count(*) AS n FROM clank_platform_pitr_operations').get().n,1);assert.equal(f.sources,0);
+  const rpc=async(method,params={},path=f.path+'/mcp')=>{const response=await fetch(recoveryMcpRequest(origin,path,method,params,{authorization:'Bearer '+issued.accessToken})),data=await response.json();assert.equal(response.status,200,JSON.stringify(data));assert.equal(response.headers.get('mcp-session-id'),null);return data;};
+  assert.equal((await rpc('server/discover')).result.cacheScope,'private');const tools=(await rpc('tools/list')).result.tools;assert.deepEqual(tools.map(tool=>tool.name),['recovery_restore_plan','recovery_status']);assert.ok(tools.every(tool=>tool.annotations.readOnlyHint&&tool.annotations.idempotentHint&&!tool.annotations.destructiveHint));
+  const read=(await rpc('tools/call',{name:'recovery_status',arguments:{}})).result;assert.equal(read.isError,false);assert.equal(read.structuredContent.policy.version,1);
+  assert.equal((await rpc('tools/call',{name:'recovery_status',arguments:{foreignProject:f.staging.id}})).result.isError,true);
+  assert.equal((await rpc('tools/call',{name:'recovery_restore_plan',arguments:{operationId:'machine_plan',checkpointId:'pitr_'+'1'.repeat(64),expectedVersion:1,throughSequence:2,name:'Plan only',slug:'plan-only'}})).result.isError,true);
+  assert.ok((await rpc('tools/call',{name:'recovery_restore',arguments:{}})).error);await call(`/api/projects/${f.staging.id}/point-in-time/mcp`,404,{});
+  assert.equal(f.native.prepare('SELECT count(*) AS n FROM clank_platform_pitr_operations').get().n,1);assert.equal(f.sources,0);
+  assert.equal(Number(f.native.prepare('DELETE FROM clank_platform_memberships WHERE organization_id=? AND user_id=?').run(f.development.organizationId,f.owner.user.id).changes),1);await call(f.path,403);
+  await call(f.path+'/mcp',403,{});
+});
+
+test('read-only native recovery MCP revalidates a browser principal after a held body and accepts no mutation',async t=>{
+  const f=await setup(t);let entered,deliver;const reading=new Promise(resolve=>{entered=resolve;}),release=new Promise(resolve=>{deliver=resolve;});const request=recoveryMcpRequest(f.options.publicUrl,f.path+'/mcp','tools/call',{name:'recovery_status',arguments:{}},{origin:f.options.publicUrl,cookie:f.owner.cookie,'x-clank-csrf':f.owner.csrf});const bytes=new Uint8Array(await request.arrayBuffer()),body=new ReadableStream({async pull(controller){entered();await release;controller.enqueue(bytes);controller.close();}},{highWaterMark:0});
+  const pending=f.handle(new Request(request.url,{method:'POST',headers:request.headers,duplex:'half',body}));await reading;f.native.prepare('DELETE FROM clank_platform_memberships WHERE organization_id=? AND user_id=?').run(f.development.organizationId,f.owner.user.id);deliver();const response=await pending;assert.ok([403,404].includes(response.status),JSON.stringify(await response.json()));assert.equal(f.native.prepare('SELECT count(*) AS n FROM clank_platform_pitr_operations').get().n,0);assert.equal(f.sources,0);
+});
