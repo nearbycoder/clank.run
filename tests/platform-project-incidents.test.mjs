@@ -179,3 +179,24 @@ test('scoped incident tokens require explicit permissions and the exact current 
     assert.equal((await pending).status,401,boundary);assert.equal(control.prepare('SELECT count(*) AS n FROM clank_platform_incidents').get().n,0);
   }
 });
+
+for(const boundary of ['permission','release'])test('grouped native HTTP detail rechecks completed job links after later held projection: '+boundary,async t=>{
+ const release='release_exact_01';
+ let resolveDiagnostic;const f=await fixture(t,false,{incidents:{diagnostics:{resolve:(projectId,reference)=>resolveDiagnostic(projectId,reference)}}});const control=new DatabaseSync(join(f.options.dataDirectory,'control.sqlite'));t.after(()=>control.close());
+ // This isolated retained release row supplies real native scope/context only; no application/runtime is launched.
+ control.prepare("INSERT INTO clank_platform_releases(id,project_id,status,digest,artifact_bytes,framework_version,node_version,config,directory,idempotency_key,created_at) VALUES(?,?,'staged',?,1,'0.24.0',?,'{}',?,'incident_native_context_01',?)").run(release,f.development.id,'a'.repeat(64),process.version,join(f.root,'retained-release-context'),Date.now());
+ const schema=defineDatabase({}),database=await openSQLite(schema,{path:join(f.root,'native-diagnostics.sqlite')}),inbox=await openErrorInbox(database),jobs=defineJobs({schema}).jobs(({job})=>({work:job({args:{value:s.string()},returns:s.string(),handler:()=> 'complete'})})),runtime=openJobs(jobs,{database});t.after(()=>{runtime.close();database.close()});
+ const jobRecords=[runtime.enqueue(jobs.jobs.work,{value:'one'}),runtime.enqueue(jobs.jobs.work,{value:'two'})];while(await runtime.workOnce());for(const job of jobRecords)assert.equal(runtime.get(job.id).state,'succeeded');
+ const fingerprint=inbox.capture(new Error('Owned error diagnostic'),{release,code:'OWNED_NATIVE_ERROR'});let held=false,entered,finish;const ready=new Promise(resolve=>entered=resolve),wait=new Promise(resolve=>finish=resolve),completed=[];t.after(()=>finish());
+ resolveDiagnostic=async(projectId,reference)=>{
+  if(reference.kind==='job'){const record=runtime.get(reference.id);completed.push(reference.id);return{projectId,reference,available:!!record,observedAt:Date.now(),state:record.state,count:runtime.events(reference.id).length}}
+  if(held){assert.deepEqual(completed,jobRecords.map(job=>job.id));entered();await wait}
+  const group=inbox.snapshot({release}).groups.find(group=>group.fingerprint===reference.id);return{projectId,reference,available:!!group,observedAt:Date.now(),state:group.state,count:group.occurrences};
+ };
+ const endpoint=`/api/projects/${f.development.id}/incidents`,incident=(await f.call(endpoint,{title:'Grouped current authority',severity:'warning',ownerId:f.owner.user.id,operationId:'incident_grouped_create_01'},201)).incident;
+ const references=[...jobRecords.map(job=>({kind:'job',id:job.id,releaseId:release})),{kind:'error',id:fingerprint,releaseId:release}];for(const [index,reference]of references.entries())await f.call(endpoint+'/'+incident.id+'/change',{expectedVersion:index+1,operationId:'incident_grouped_link_'+index,change:{kind:'link',reference}});
+ const reader=await f.account('grouped-reader@example.test'),now=Date.now();control.prepare('INSERT INTO clank_platform_memberships(organization_id,user_id,role,created_at,updated_at) VALUES(?,?,?,?,?)').run(f.development.organizationId,reader.user.id,'viewer',now,now);
+ const member=`/api/projects/${f.development.id}/members/${reader.user.id}`;await f.call(member,{permissions:['read','incidents','jobs','logs']},200,'PUT');completed.length=0;held=true;const origin=await f.serve();
+ const pending=fetch(origin+endpoint+'/'+incident.id,{headers:{cookie:reader.cookie}});await ready;if(boundary==='permission'){await f.call(member,{permissions:['read','incidents','logs']},200,'PUT');assert.deepEqual(JSON.parse(control.prepare('SELECT permissions FROM clank_platform_project_members WHERE project_id=? AND user_id=?').get(f.development.id,reader.user.id).permissions),['read','incidents','logs']);}else control.prepare('UPDATE clank_platform_releases SET artifact_available=0 WHERE id=?').run(release);finish();
+ const response=await pending,result=await response.json();const exposed=result.detail?.links.filter(link=>link.kind==='job'&&link.reference!==null)??[];if(boundary==='permission'){assert.equal(response.status,403);assert.equal(exposed.length,0);}else{assert.equal(response.status,200);assert.equal(exposed.length,2);for(const link of exposed){assert.equal(link.available,false);assert.equal(link.reason,'not-retained');assert.equal(link.diagnostic,null);assert.equal(link.releaseContext.id,release);}}
+});

@@ -5,6 +5,8 @@ import {
 import {
   applyMigrations,
   backupSQLite,
+  loadMigrations,
+  planMigrations,
   restoreSQLiteBackup,
 } from "./migrations.ts";
 import {
@@ -68,6 +70,8 @@ export interface DeploymentProviderDataApplyInput {
   readonly desired: DeploymentProviderDesiredState;
   readonly runtime: DeploymentRuntimeCapsule;
   readonly signal: AbortSignal;
+  /** Refuse pending SQL; the checkpoint must already contain the exact migration history. */
+  readonly codeOnly?: boolean;
 }
 
 export interface DeploymentProviderDataSnapshot {
@@ -455,6 +459,8 @@ export async function openDeploymentProviderDataStore(
 
   const manager: DeploymentProviderDataStore = {
     async apply(input, validate, discard) {
+      const codeOnly = input?.codeOnly;
+      if (codeOnly !== undefined && typeof codeOnly !== "boolean") throw new TypeError("codeOnly must be a boolean.");
       if (typeof validate !== "function") throw new TypeError("validate must be a function.");
       if (discard !== undefined && typeof discard !== "function") {
         throw new TypeError("discard must be a function.");
@@ -634,11 +640,14 @@ export async function openDeploymentProviderDataStore(
             stagedRelease,
             safeRelative(runtime.artifact.bundle.config.database.migrations, "migrations path"),
           );
-          const migrationPlan = await applyMigrations({
+          const migrationPlan = codeOnly === true
+            ? await planMigrations(database, await loadMigrations(migrationDirectory))
+            : await applyMigrations({
             path: database,
             directory: migrationDirectory,
             allowUnsafe: runtime.artifact.bundle.config.database.allowUnsafeMigrations,
           });
+          if (codeOnly === true && migrationPlan.pending.length > 0) throw new Error("Code-only provider candidates cannot apply pending migrations.");
           await assertDatabaseFootprint(fs, database, maxDatabaseBytes);
           await fs.rename(stagedRelease, releaseDirectory);
           await syncDirectory(fs, locations.generations);

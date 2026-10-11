@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fork } from 'node:child_process';
@@ -201,31 +201,69 @@ test('inventory pages reject changed authorized data and ignore denied resources
   } finally { await f.close(); }
 });
 
-async function worker(path, mode = 'race') {
-  const child = fork(new URL('./fixtures/retention-worker.mjs', import.meta.url), [path, mode], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
+async function worker(path, mode = 'race', exitDelayMs = 0) {
+  const child = fork(new URL('./fixtures/retention-worker.mjs', import.meta.url), [path, mode, String(exitDelayMs)], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
   let errors = ''; child.stderr.on('data', chunk => { errors += chunk; });
-  const exited = new Promise(resolve => child.once('exit', resolve));
+  const exited = new Promise(resolve => child.once('close', (code, signal) => resolve({ code, signal })));
+  const waitForExit = async () => {
+    let timer;
+    try { return await Promise.race([exited, new Promise((_, reject) => { timer = setTimeout(() => reject(Error(`Retention worker ${mode} did not exit: ${errors}`)), 10000); })]); }
+    finally { clearTimeout(timer); }
+  };
+  const dispose = async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    return await waitForExit();
+  };
   const message = () => new Promise((resolve, reject) => {
     const finish = (error, value) => { clearTimeout(timer); child.off('message', received); child.off('exit', failed); child.off('error', failed); if (error) reject(error); else resolve(value); };
     const received = value => finish(undefined, value), failed = code => finish(Error(`Retention worker exited ${code}: ${errors}`));
     const timer = setTimeout(() => finish(Error(`Retention worker timed out: ${errors}`)), 10000); child.once('message', received); child.once('exit', failed); child.once('error', failed);
   });
-  try { assert.deepEqual(await message(), { ready: true }); } catch (error) { child.kill('SIGKILL'); await exited; throw error; }
-  return { child, message, async close() { child.kill('SIGKILL'); await exited; } };
+  try { assert.deepEqual(await message(), { ready: true }); } catch (error) { await dispose(); throw error; }
+  return { child, message, dispose,
+    async close() {
+      // A result precedes service close, IPC disconnect and V8 coverage output.
+      // Successful workers must finish that lifecycle without a kill signal.
+      let exit; try { exit = await waitForExit(); } catch (error) { await dispose(); throw error; }
+      assert.deepEqual(exit, { code: 0, signal: null }, `Retention worker ${mode}: ${errors}`); return exit;
+    },
+    async crash() {
+      assert.equal(child.kill('SIGKILL'), true, 'the uncommitted worker must still be alive');
+      const exit = await waitForExit(); assert.deepEqual(exit, { code: null, signal: 'SIGKILL' }); return exit;
+    },
+  };
 }
+
+test('a completed retention worker exits naturally and finishes inherited coverage before cleanup', async t => {
+  const f = await fixture(); let child;
+  try {
+    child = await worker(f.path, 'schedule', 250);
+    const result = child.message(); child.child.send({ user: { csrf: '', cookie: '' } });
+    assert.deepEqual(await result, { result: 0 });
+    const pid = child.child.pid, exit = await child.close();
+    t.diagnostic(JSON.stringify({ pid, mode: 'schedule', exit }));
+    assert.deepEqual(exit, { code: 0, signal: null });
+    if (process.env.NODE_V8_COVERAGE) {
+      const files = (await readdir(process.env.NODE_V8_COVERAGE)).filter(name => name.startsWith(`coverage-${pid}-`) && name.endsWith('.json'));
+      assert.ok(files.length > 0, 'the naturally exited child must retain its inherited coverage profile');
+      for (const file of files) assert.ok(Array.isArray(JSON.parse(await readFile(join(process.env.NODE_V8_COVERAGE, file), 'utf8')).result));
+      t.diagnostic(JSON.stringify({ pid, parsedCoverageProfiles: files }));
+    }
+  } finally { await child?.dispose(); await f.close(); }
+});
 for (const stage of ['payload', 'receipt']) test(`SIGKILL after a real ${stage} write rolls back purge, history retirement and expired identities`, async () => {
   const f = await fixture(); let child;
   try {
     const a = await f.user(`${stage}@example.invalid`); f.operators.add(a.id); const c = f.client(a), i = f.importer(a), job = await i.uploadReviewableCsv(new Blob(['name,points\nLaunch,1\n']), columns), ref = { kind: 'import', id: job.id };
     const held = await c.hold(a.id, ref, 0, 'Crash fixture', null, 'hold'); await i.apply(await i.preview(job.id), 'apply'); await c.release(a.id, ref, held.version, 'release');
     const preview = await c.preview(purge(a.id, [ref])), history = f.native.prepare("SELECT count(*) AS n FROM clank_document_revisions WHERE table_name='durableImportChunks'").get().n;
-    child = await worker(f.path, stage); const reached = child.message(); child.child.send({ user: a, preview, operationId: 'crash' }); assert.deepEqual(await reached, { uncommitted: true }); await child.close(); child = undefined;
+    child = await worker(f.path, stage); const reached = child.message(); child.child.send({ user: a, preview, operationId: 'crash' }); assert.deepEqual(await reached, { uncommitted: true }); await child.crash(); child = undefined;
     await f.restart(); assert.equal(f.native.prepare('SELECT count(*) AS n FROM clank_durableImportChunks').get().n, 1);
     assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_document_revisions WHERE table_name='durableImportChunks'").get().n, history);
     assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_durableImportOperations WHERE json_extract(_data,'$.expired')=1").get().n, 0);
     assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_retention_receipts WHERE operation_id='crash'").get().n, 0);
     assert.ok((await c.accept(preview, 'crash')).records > 0);
-  } finally { await child?.close(); await f.close(); }
+  } finally { await child?.dispose(); await f.close(); }
 });
 
 test('independent processes accept one exact purge and recover a lost accepted response after restart', async () => {
@@ -241,7 +279,7 @@ test('independent processes accept one exact purge and recover a lost accepted r
     // Lose a real committed HTTP response, then replay through a new service.
     const lost = createRetentionAdministrationClient({ url: 'https://retention.test/__clank/retention', auth: { csrfHeader: () => ({ 'x-clank-csrf': a.csrf }) }, fetch: async (url, init) => { const response = await f.retention.handle(new Request(url, { ...init, headers: { ...init.headers, cookie: a.cookie, origin: 'https://retention.test' } })); assert.equal(response.status, 200); throw Error('Response lost'); } });
     const next = await c.preview(purge(a.id, [ref])); await assert.rejects(lost.accept(next, 'lost'), /Response lost/); await f.restart(); const result = await c.accept(next, 'lost'); assert.equal(result.records, 0);
-  } finally { for (const child of children) await child.close(); await f.close(); }
+  } finally { for (const child of children) await child.dispose(); await f.close(); }
 });
 
 test('independent schedule runners accept one due occurrence under the persisted operator policy', async () => {
@@ -255,10 +293,11 @@ test('independent schedule runners accept one due occurrence under the persisted
     children.push(await worker(f.path, 'schedule'), await worker(f.path, 'schedule'));
     const messages = children.map(child => child.message()); for (const child of children) child.child.send({ user: a });
     const values = await Promise.all(messages); assert.deepEqual(values.map(value => value.result).sort(), [0, 1]);
+    for (const child of children) await child.close(); children.length = 0;
     assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_retention_receipts WHERE operation_id LIKE 'schedule:%'").get().n, 1);
     assert.equal(f.native.prepare('SELECT count(*) AS n FROM clank_durableImportChunks').get().n, 0);
     const [rule] = await c.schedules(a.id); assert.equal(rule.version, 2); assert.ok(rule.lastReceipt.records > 0); assert.ok(rule.nextAt > Date.now());
-  } finally { for (const child of children) await child.close(); await f.close(); }
+  } finally { for (const child of children) await child.dispose(); await f.close(); }
 });
 
 test('bounds, forged previews and corrupt hold/source metadata fail without retiring evidence', async () => {

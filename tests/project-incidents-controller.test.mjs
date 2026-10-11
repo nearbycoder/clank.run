@@ -60,3 +60,49 @@ test('adapter projections reject copied payloads and wrong scopes without persis
   }
   assert.equal(f.sql.prepare('SELECT count(*) AS n FROM clank_platform_incident_links').get().n,0);assert.equal(f.sql.prepare('SELECT count(*) AS n FROM clank_platform_incident_receipts').get().n,1);
 });
+
+const incidentTables=['clank_platform_incident_state','clank_platform_incidents','clank_platform_incident_notes','clank_platform_incident_links','clank_platform_incident_receipts'];
+function retained(sql){
+  const schema=sql.prepare("SELECT type,name,tbl_name,sql FROM sqlite_schema ORDER BY type,name").all();
+  const rows=Object.fromEntries(schema.filter(row=>row.type==='table').map(row=>[row.name,sql.prepare('SELECT * FROM '+row.name).all()]));
+  return JSON.stringify({schema,rows});
+}
+for(const table of incidentTables)for(const damage of ['missing','extra-column'])test('retained incident '+table+' '+damage+' refuses live access and reopening without repairs',async t=>{
+  const f=await setup(t),incident=f.controller.create(project,f.authority,input);
+  await f.controller.change(project,incident.id,f.authority,{expectedVersion:1,operationId:'incident_retained_note_01',change:{kind:'note',text:'Retained note bytes.'}});
+  await f.controller.change(project,incident.id,f.authority,request(2,1));
+  f.sql.exec(damage==='missing'?'DROP TABLE '+table:'ALTER TABLE '+table+' ADD COLUMN unexpected TEXT');
+  const before=retained(f.sql);
+  assert.throws(()=>f.controller.create(project,f.authority,{...input,title:'Changed historical request'}),error=>error.code==='INCIDENT_STORAGE_INVALID');
+  assert.equal(retained(f.sql),before);
+  await assert.rejects(openProjectIncidents(f.sql,f.options,f.hooks),error=>error.code==='INCIDENT_STORAGE_INVALID');
+  assert.equal(retained(f.sql),before,'No catalog bootstrap, history rebinding, or surviving row mutation');
+});
+for(const corruption of ['missing-singleton','extra-singleton'])test('incident '+corruption+' refuses without resetting retained state',async t=>{
+  const f=await setup(t);f.controller.create(project,f.authority,input);
+  if(corruption==='missing-singleton')f.sql.exec('DELETE FROM clank_platform_incident_state');
+  else f.sql.exec('DROP TABLE clank_platform_incident_state;CREATE TABLE clank_platform_incident_state(singleton INTEGER PRIMARY KEY,protocol INTEGER NOT NULL);INSERT INTO clank_platform_incident_state VALUES(1,1),(2,1)');
+  const before=retained(f.sql);await assert.rejects(openProjectIncidents(f.sql,f.options,f.hooks),error=>error.code==='INCIDENT_STORAGE_INVALID');assert.equal(retained(f.sql),before);
+});
+
+for(const kind of ['receipt','note','link','assign','resolve','version','unlink'])for(const mode of ['ignored','altered'])test('native '+mode+' incident '+kind+' write rolls back effect, version, receipt and audit',async t=>{
+ const f=await setup(t);f.sql.exec('CREATE TABLE native_incident_audit(sequence INTEGER PRIMARY KEY,action TEXT,metadata TEXT)');f.authority.audit=(action,metadata)=>f.sql.prepare('INSERT INTO native_incident_audit(action,metadata) VALUES(?,?)').run(action,JSON.stringify(metadata));
+ const incident=kind==='receipt'?null:f.controller.create(project,f.authority,input);let version=1,change={kind:'note',text:'Exactly retained note.'};
+ if(kind==='link')change={kind:'link',reference:{kind:'release',id:release}};
+ if(kind==='assign')change={kind:'assign',ownerId:null};
+ if(kind==='resolve')change={kind:'resolve',resolution:'Exact resolution.'};
+ if(kind==='unlink'){await f.controller.change(project,incident.id,f.authority,{expectedVersion:1,operationId:'incident_native_link_seed',change:{kind:'link',reference:{kind:'release',id:release}}});version=2;change={kind:'unlink',sequence:Number(f.sql.prepare('SELECT sequence FROM clank_platform_incident_links').get().sequence)};}
+ const event=kind==='receipt'?'INSERT ON clank_platform_incident_receipts':kind==='note'?'INSERT ON clank_platform_incident_notes':kind==='link'?'INSERT ON clank_platform_incident_links':kind==='unlink'?'DELETE ON clank_platform_incident_links':kind==='assign'?'UPDATE OF owner_id ON clank_platform_incidents':kind==='resolve'?'UPDATE OF state ON clank_platform_incidents':'UPDATE OF version ON clank_platform_incidents';
+ const alter=kind==='receipt'?"UPDATE clank_platform_incident_receipts SET result='{}' WHERE operation_id=NEW.operation_id;":kind==='note'?"UPDATE clank_platform_incident_notes SET text='Changed native note' WHERE sequence=NEW.sequence;":kind==='link'?"UPDATE clank_platform_incident_links SET release_context=NULL WHERE sequence=NEW.sequence;":kind==='unlink'?'INSERT INTO clank_platform_incident_links(sequence,incident_id,reference,release_context) VALUES(OLD.sequence,OLD.incident_id,OLD.reference,OLD.release_context);':kind==='assign'?"UPDATE clank_platform_incidents SET owner_id='foreign_actor_01' WHERE id=NEW.id;":kind==='resolve'?"UPDATE clank_platform_incidents SET resolution='Changed resolution' WHERE id=NEW.id;":'UPDATE clank_platform_incidents SET version=NEW.version+1 WHERE id=NEW.id;';
+ f.sql.exec('CREATE TRIGGER native_incident_fault '+(mode==='ignored'?'BEFORE ':'AFTER ')+event+' BEGIN '+(mode==='ignored'?'SELECT RAISE(IGNORE);':alter)+' END');const before=retained(f.sql);
+ if(kind==='receipt')assert.throws(()=>f.controller.create(project,f.authority,input),error=>error.code==='INCIDENT_STORAGE_INVALID');else await assert.rejects(f.controller.change(project,incident.id,f.authority,{expectedVersion:version,operationId:'incident_native_fault_operation',change}),error=>error.code==='INCIDENT_STORAGE_INVALID');
+ assert.equal(retained(f.sql),before,'No mutation or audit survives failed effect/receipt verification');
+ f.sql.exec('DROP TRIGGER native_incident_fault');if(kind==='receipt')assert.equal(f.controller.create(project,f.authority,input).version,1);else assert.equal((await f.controller.change(project,incident.id,f.authority,{expectedVersion:version,operationId:'incident_native_fault_operation',change})).version,version+1);
+});
+for(const target of ['receipt','note','authority'])test('native audit-side '+target+' alteration is revalidated before incident commit',async t=>{
+ const f=await setup(t);f.sql.exec('CREATE TABLE native_incident_audit(sequence INTEGER PRIMARY KEY,action TEXT,metadata TEXT);CREATE TABLE native_incident_authority(allowed INTEGER);INSERT INTO native_incident_authority VALUES(1)');
+ f.authority.authorize=()=>{if(f.sql.prepare('SELECT allowed FROM native_incident_authority').get().allowed!==1)throw new Error('Current native authority was revoked')};f.authority.audit=(action,metadata)=>f.sql.prepare('INSERT INTO native_incident_audit(action,metadata) VALUES(?,?)').run(action,JSON.stringify(metadata));
+ const incident=f.controller.create(project,f.authority,input),body=target==='receipt'?"UPDATE clank_platform_incident_receipts SET result='{}' WHERE operation_id='incident_native_final_note';":target==='note'?"UPDATE clank_platform_incident_notes SET text='Native audit changed note';":'UPDATE native_incident_authority SET allowed=0;';
+ f.sql.exec('CREATE TRIGGER native_audit_fault AFTER INSERT ON native_incident_audit BEGIN '+body+' END');const before=retained(f.sql);
+ await assert.rejects(f.controller.change(project,incident.id,f.authority,{expectedVersion:1,operationId:'incident_native_final_note',change:{kind:'note',text:'Final exact note'}}),error=>target==='authority'?/authority was revoked/.test(error.message):error.code==='INCIDENT_STORAGE_INVALID');assert.equal(retained(f.sql),before);
+});

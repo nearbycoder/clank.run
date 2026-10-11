@@ -76,11 +76,18 @@ The privileged Docker regression is explicitly opt-in and must run on a disposab
 ```sh
 CLANK_DOCKER_INTEGRATION=1 CLANK_DISPOSABLE_TEST_HOST=1 \
   CLANK_DOCKER_TEST_IMAGE=node:24-bookworm-slim \
-  node --test tests/provider-docker-integration.test.mjs
+  node --test --test-concurrency=1 tests/provider-docker-integration.test.mjs tests/provider-canary-integration.test.mjs
 ```
 
 It creates real network namespaces and reachable positive-control endpoints inside the VM, starts an actual unprivileged application container through the provider launcher, verifies filesystem/capability/tmpfs restrictions, tests permitted and denied packets (including private, metadata and host destinations), and verifies container, network and policy cleanup. Together with the disposable XFS test this was exercised locally on Debian 13 with Docker 26.1.5. Production hosts must validate their own kernel, firewall, filesystem and namespace profiles; a passing disposable-host test does not change those host requirements.
 
 The read-only candidate case verifies native SQLite and filesystem write refusal, an unchanged checkpoint, no background containers, refusal of authoritative activation, and exact cleanup. Reachable public and host endpoints succeed in an unrestricted container first; the candidate must deny both, including a public address permitted by the operator's normal policy.
+
+The provider-controller cases use real Docker, native SQLite and private HTTP ingress. They
+kill the controller during preparation, running and a streaming-request drain, then require
+candidate container, data, bridge and nftables cleanup before the primary is readmitted.
+These cases drive the trusted service API; they do not certify platform traffic stages or the
+authenticated canary-control protocol. Run privileged profiles serially on the
+marked disposable host so their fixed network probes and port ranges cannot interfere.
 
 The ordinary Linux isolation suite requires `bubblewrap`, `util-linux`, `iproute2`, `nftables` and `procps`, plus permission to create unprivileged user, mount and network namespaces. It fails when those enforcement capabilities are missing. Containerized control planes additionally require an explicitly reviewed seccomp/AppArmor profile that permits the helper namespaces; installing `bubblewrap` alone does not override a container runtime's restrictions. Do not replace that requirement with `--privileged` or a silent unsandboxed fallback.

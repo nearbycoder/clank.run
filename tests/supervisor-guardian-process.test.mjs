@@ -70,3 +70,30 @@ test('actual SIGKILL after native lease commit before guardian or acknowledgemen
   const successor=await f.start();assert.equal(successor.status.epoch,2);const observer=f.inspect();try{assert.equal(observer.prepare('SELECT count(*) AS count FROM actual_supervisor_writes WHERE epoch=1').get().count,0);}finally{observer.close();}
   successor.child.send({kind:'stop'});assert.deepEqual(await successor.exited,{code:0,signal:null});
 });
+
+test('an already-armed guardian survives capability enrollment and still fences protocol-two owner death before restart',async t=>{
+  const f=await fixture(t),first=await f.start(),observer=f.inspect();t.after(()=>observer.close());
+  assert.equal(observer.prepare('SELECT protocol FROM clank_platform_supervisor_state').get().protocol,1);
+  const folder=join(f.root,'supervisor-guardians'),names=await readdir(folder),prior=JSON.parse(await readFile(join(folder,names[0]),'utf8'));
+  const enrolled=new Promise((resolve,reject)=>{
+    const timer=setTimeout(()=>reject(new Error('Owned capability enrollment was not acknowledged')),10000);
+    first.child.once('message',message=>{clearTimeout(timer);resolve(message);});
+    first.exited.then(result=>{clearTimeout(timer);reject(new Error('Owned coordinator exited during enrollment: '+JSON.stringify(result)));});
+  });
+  first.child.send({kind:'enroll-provider-canaries'});const acknowledgement=await enrolled;
+  assert.equal(acknowledgement.kind,'enrolled');assert.equal(acknowledgement.status.epoch,first.status.epoch);
+  assert.equal(observer.prepare('SELECT protocol FROM clank_platform_supervisor_state').get().protocol,2);
+  const count=()=>Number(observer.prepare('SELECT count(*) AS count FROM actual_supervisor_writes WHERE epoch=1').get().count),before=count();
+  await new Promise(resolve=>setTimeout(resolve,300));assert.ok(count()>before,'Same coordinator continues guarded native writes after enrollment.');
+  assert.deepEqual(JSON.parse(await readFile(join(folder,names[0]),'utf8')),prior,'The already-armed guardian retains its exact process identity.');
+  first.child.kill('SIGSTOP');let timer;
+  const result=await Promise.race([first.exited,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Protocol-two owner was not fenced')),12000);})]).finally(()=>clearTimeout(timer));
+  assert.deepEqual(result,{code:null,signal:'SIGKILL'});
+  const old=count(),second=await f.start();assert.equal(second.status.epoch,2);
+  assert.equal(observer.prepare('SELECT protocol FROM clank_platform_supervisor_state').get().protocol,2);
+  await new Promise(resolve=>setTimeout(resolve,150));assert.equal(count(),old);
+  assert.ok(Number(observer.prepare('SELECT count(*) AS count FROM actual_supervisor_writes WHERE epoch=2').get().count)>=1);
+  second.child.send({kind:'stop'});assert.deepEqual(await second.exited,{code:0,signal:null});
+  assert.equal(observer.prepare('SELECT protocol FROM clank_platform_supervisor_state').get().protocol,2);
+  assert.deepEqual(await readdir(folder),[]);
+});

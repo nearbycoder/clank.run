@@ -626,6 +626,35 @@ test("provider data fails closed on storage links and out-of-scope metadata", as
   }
 });
 
+test("code-only provider data refuses pending or removed migrations before validation and preserves the authoritative database", async () => {
+  const fixture = await providerFixture("code-only");
+  try {
+    const migrations = [["0001_init.sql", "CREATE TABLE todo (id TEXT PRIMARY KEY);\n"]];
+    const first = await fixture.runtime({generation:1,releaseId:"release_code_01",mode:"initialize",snapshot:await sqliteSnapshot(fixture.root,"primary"),migrations});
+    await fixture.store.apply(providerInput(first,1),async()=>{});
+    const before = await fixture.store.snapshot("project_data_01");
+    let validations=0;
+    const pending = await fixture.runtime({generation:2,releaseId:"release_code_02",mode:"preserve",migrations:[...migrations,["0002_write.sql","CREATE TABLE forbidden_canary_write (id TEXT);\n"]]});
+    const pendingInput={...providerInput(pending,2),codeOnly:true};
+    const applying=fixture.store.apply(pendingInput,async()=>{validations++;});
+    pendingInput.codeOnly=false;
+    await assert.rejects(applying,/cannot apply pending migrations/u);
+    assert.equal(validations,0);
+    assert.equal((await fixture.store.inspect("project_data_01")).generation,1);
+    assert.equal((await fixture.store.snapshot("project_data_01")).sha256,before.sha256);
+    const removed = await fixture.runtime({generation:2,releaseId:"release_code_removed",mode:"preserve",migrations:[]});
+    await assert.rejects(fixture.store.apply({...providerInput(removed,3),codeOnly:true},async()=>{validations++;}),/missing/u);
+    assert.equal(validations,0);
+    assert.equal((await fixture.store.snapshot("project_data_01")).sha256,before.sha256);
+    await assert.rejects(fixture.store.apply({...providerInput(first,4),codeOnly:"true"},async()=>{}),/must be a boolean/u);
+    const code = await fixture.runtime({generation:2,releaseId:"release_code_03",mode:"preserve",migrations});
+    const accepted = await fixture.store.apply({...providerInput(code,4),codeOnly:true},async prepared=>{assert.equal(prepared.migrationCount,0);validations++;});
+    assert.equal(accepted.generation,2);
+    assert.equal(validations,1);
+    assert.equal((await fixture.store.snapshot("project_data_01")).sha256,before.sha256);
+  } finally {await fixture.close();}
+});
+
 async function providerFixture(name) {
   const root = await mkdtemp(join(tmpdir(), `clank-provider-data-${name}-`));
   const providerRoot = join(root, "provider");
