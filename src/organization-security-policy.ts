@@ -272,15 +272,33 @@ export function openOrganizationSecurityPolicies(database: SQLiteDatabase<any>, 
     for (const row of rows) enrollment(organizationId, row.userId, row.membership);
     const deadline = (old: unknown, enabled: boolean) => enabled ? Math.min(Number(old ?? Infinity), at + requirements.enrollmentGraceMs) : old ?? null;
     const factorAt = deadline(prior?.factor_at, requirements.factor !== "none"), ssoAt = deadline(prior?.sso_at, requirements.ssoOnly);
-    sql.prepare(`INSERT INTO clank_organization_security_policies VALUES(?,?,?,?,?,?) ON CONFLICT(organization_id) DO UPDATE SET version=excluded.version,requirements=excluded.requirements,updated_at=excluded.updated_at,factor_at=excluded.factor_at,sso_at=excluded.sso_at`).run(organizationId, expected + 1, JSON.stringify(requirements), at, factorAt, ssoAt);
+    const enrollments = () => sql.prepare("SELECT organization_id,user_id,first_seen_at,factor_deadline,sso_deadline FROM clank_organization_security_enrollments WHERE organization_id=? ORDER BY user_id LIMIT ?").all(organizationId, bounds.enrollments + 1);
+    const beforeEnrollments = enrollments();
+    if (beforeEnrollments.length > bounds.enrollments) policyError("ORGANIZATION_POLICY_CAPACITY", "Security policy enrollment storage capacity is full.", 409);
+    const wantedEnrollments = beforeEnrollments.map(row => ({...row,
+      factor_deadline: factorAt === null ? row.factor_deadline : Math.min(Number(row.factor_deadline ?? factorAt), Number(factorAt)),
+      sso_deadline: ssoAt === null ? row.sso_deadline : Math.min(Number(row.sso_deadline ?? ssoAt), Number(ssoAt))}));
+    const wantedPolicy = {organization_id: organizationId, version: expected + 1, requirements: JSON.stringify(requirements), updated_at: at, factor_at: factorAt, sso_at: ssoAt};
+    sql.prepare(`INSERT INTO clank_organization_security_policies VALUES(?,?,?,?,?,?) ON CONFLICT(organization_id) DO UPDATE SET version=excluded.version,requirements=excluded.requirements,updated_at=excluded.updated_at,factor_at=excluded.factor_at,sso_at=excluded.sso_at`).run(organizationId, wantedPolicy.version, wantedPolicy.requirements, at, factorAt, ssoAt);
     const tighten = (column: "factor_deadline" | "sso_deadline", deadline: unknown) => {
       if (deadline !== null) sql.prepare(`UPDATE clank_organization_security_enrollments SET ${column}=min(coalesce(${column},?),?) WHERE organization_id=?`).run(deadline, deadline, organizationId);
     };
     tighten("factor_deadline", factorAt); tighten("sso_deadline", ssoAt);
-    const result = policyFor(organizationId);
-    sql.prepare("INSERT INTO clank_organization_security_receipts VALUES(?,?,?,?,?)").run(organizationId, actorId, operationId, intent, JSON.stringify(result));
+    const result: OrganizationSecurityPolicy = {organizationId, ...requirements, version: expected + 1, updatedAt: at};
+    const wantedReceipt = {organization_id: organizationId, actor_id: actorId, operation_id: operationId, intent, result: JSON.stringify(result)};
+    sql.prepare("INSERT INTO clank_organization_security_receipts VALUES(?,?,?,?,?)").run(organizationId, actorId, operationId, intent, wantedReceipt.result);
     effect(options.audit(actorId, organizationId, action, {version: result.version, requirements, ...metadata}));
-    return result;
+    // Run after all hooks and notification inventory, immediately before commit.
+    // Expectations derive from the submitted intent and pre-write native rows.
+    const assertStored = () => {
+      check();
+      const policy = rowFor(organizationId), receipt = sql.prepare("SELECT * FROM clank_organization_security_receipts WHERE organization_id=? AND actor_id=? AND operation_id=?").get(organizationId, actorId, operationId);
+      if (!policy || Object.entries(wantedPolicy).some(([key,value]) => policy[key] !== value)
+        || !receipt || Object.entries(wantedReceipt).some(([key,value]) => receipt[key] !== value)
+        || JSON.stringify(enrollments()) !== JSON.stringify(wantedEnrollments))
+        policyError("ORGANIZATION_POLICY_WRITE", "Security policy publication was not retained.", 503);
+    };
+    return {result, assertStored};
   };
   const atomic = <T>(operation: () => T): T => sql.inTransaction ? operation() : sql.transaction(operation);
   const authorizeDelegation = (organizationId: string, credentialId: string, userId: string) => atomic(() => {
@@ -306,9 +324,10 @@ export function openOrganizationSecurityPolicies(database: SQLiteDatabase<any>, 
         const current = administrator(organizationId, caller, true), actorId = current.user!.id, retry = retained(organizationId, actorId, operationId, intent);
         if (retry) return retry;
         if (!administrators(organizationId, requirements) && !options.authorizeRecovery) policyError("ORGANIZATION_POLICY_LAST_ADMIN", "Enroll an administrator or configure independent operator recovery before saving.", 409);
-        const result = publish(organizationId, actorId, operationId, intent, requirements, expected, "organization.security-policy.change", {});
+        const publication = publish(organizationId, actorId, operationId, intent, requirements, expected, "organization.security-policy.change", {});
         for (const row of inventory(organizationId)) changes.record("__auth", row.userId, row.userId);
-        return result;
+        auth.requireFreshAuthentication(administrator(organizationId, caller), 300000);
+        publication.assertStored(); return publication.result;
       });
     },
     recover(organizationId, caller, value) {
@@ -322,9 +341,12 @@ export function openOrganizationSecurityPolicies(database: SQLiteDatabase<any>, 
         if (administrators(organizationId, policyFor(organizationId))) policyError("ORGANIZATION_POLICY_RECOVERY_UNNEEDED", "A capable organization administrator must handle this policy.", 409);
         if (!capable(organizationId, ownerId, {...defaults, factor: "passkey"})) policyError("ORGANIZATION_POLICY_RECOVERY_OWNER", "Choose an enabled account with an enrolled passkey.", 409);
         effect(options.recoverOwner!(organizationId, ownerId));
-        const result = publish(organizationId, current.user!.id, operationId, intent, {...defaults, factor: "passkey"}, expected, "organization.security-policy.recover", {ownerId, reason: input.reason});
+        const publication = publish(organizationId, current.user!.id, operationId, intent, {...defaults, factor: "passkey"}, expected, "organization.security-policy.recover", {ownerId, reason: input.reason});
         for (const row of inventory(organizationId)) changes.record("__auth", row.userId, row.userId);
-        return result;
+        recovery();
+        if (member(organizationId, ownerId)?.role !== "owner" || !capable(organizationId, ownerId, publication.result))
+          policyError("ORGANIZATION_POLICY_RECOVERY_OWNER", "Recovery owner was not retained.", 409);
+        publication.assertStored(); return publication.result;
       });
     },
     authorizeAuth(organizationId, caller) {atomic(() => {check(); identifier(organizationId); if (caller && delegated.has(caller)) {const proof = delegated.get(caller)!; if (proof.organizationId !== organizationId) policyError("ORGANIZATION_POLICY_DELEGATION", "Delegation belongs to another organization.", 401); proof.assertCurrent(); return;} const current = currentSession(caller); allowed(organizationId, current);});},

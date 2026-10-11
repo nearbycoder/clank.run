@@ -119,3 +119,14 @@ test('actual held native HTTP body rejects a policy generation changed by anothe
   assert.equal(f.db.prepare('SELECT count(*) AS n FROM clank_platform_secrets WHERE name=?').get('POLICY_HELD_FIXTURE').n,0);
   assert.equal(f.db.prepare("SELECT count(*) AS n FROM clank_platform_audit WHERE action='secrets.update'").get().n,0);
 });
+
+for(const fault of ['policy','receipt'])test('actual HTTP policy '+fault+' audit corruption refuses success and permits one exact retry',async t=>{
+  const f=await setup(t),origin=await f.serve();await f.call(f.path);const input=change(0,'passkey','policy_http_final_ack_01');
+  const alteration=fault==='policy'?`UPDATE clank_organization_security_policies SET requirements='{"factor":"none","ssoOnly":false,"sessionMaxAgeMs":2592000000,"enrollmentGraceMs":0}' WHERE organization_id='${f.org}';`:`DELETE FROM clank_organization_security_receipts WHERE organization_id='${f.org}';`;
+  f.db.exec(`CREATE TRIGGER owned_http_policy_ack_fault AFTER INSERT ON clank_platform_audit WHEN NEW.action='organization.security-policy.change' BEGIN ${alteration} END;`);
+  const send=()=>fetch(origin+f.path,{method:'POST',headers:headers(f,origin),body:JSON.stringify(input),signal:AbortSignal.timeout(10000)});
+  const failed=await send(),body=await failed.json();assert.equal(failed.status,503,JSON.stringify(body));assert.equal(body.error.code,'ORGANIZATION_POLICY_WRITE');
+  assert.equal((await f.call(f.path)).policy.version,0);assert.equal(f.db.prepare('SELECT count(*) AS n FROM clank_organization_security_receipts').get().n,0);assert.equal(f.db.prepare("SELECT count(*) AS n FROM clank_platform_audit WHERE action='organization.security-policy.change'").get().n,0);
+  f.db.exec('DROP TRIGGER owned_http_policy_ack_fault');const first=await send();assert.equal(first.status,200);const accepted=await first.json();assert.equal(accepted.policy.factor,'passkey');assert.equal(accepted.policy.version,1);const retry=await send();assert.equal(retry.status,200);assert.deepEqual(await retry.json(),accepted);
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM clank_organization_security_receipts').get().n,1);assert.equal(f.db.prepare("SELECT count(*) AS n FROM clank_platform_audit WHERE action='organization.security-policy.change'").get().n,1);
+});

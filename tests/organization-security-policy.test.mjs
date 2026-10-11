@@ -72,3 +72,57 @@ test('serialized state cannot authenticate, and a server OAuth identity binding 
   f.sql.prepare('DELETE FROM policy_test_members WHERE organization=? AND user_id=?').run(company,caller.user.id);assert.throws(()=>f.controller.authorizeAuth(company,delegated),e=>e.code==='ORGANIZATION_POLICY_REQUIRED');
   f.controller.close();assert.throws(()=>f.controller.authorizeAuth(other,caller),e=>e.code==='ORGANIZATION_POLICY_CLOSED');
 });
+
+// Native trigger faults run within the same real publication transaction.
+for (const [fault,sql] of Object.entries({
+  policy: `UPDATE clank_organization_security_policies SET requirements='{"factor":"none","ssoOnly":false,"sessionMaxAgeMs":2592000000,"enrollmentGraceMs":0}' WHERE organization_id='policy_company_01';`,
+  version: "UPDATE clank_organization_security_policies SET version=version+1 WHERE organization_id='policy_company_01';",
+  deadline: "UPDATE clank_organization_security_policies SET factor_at=factor_at+60000 WHERE organization_id='policy_company_01';",
+  receipt: "UPDATE clank_organization_security_receipts SET result='{}' WHERE organization_id='policy_company_01';",
+  intent: "UPDATE clank_organization_security_receipts SET intent='{}' WHERE organization_id='policy_company_01';",
+  missingReceipt: "DELETE FROM clank_organization_security_receipts WHERE organization_id='policy_company_01';",
+  enrollment: "UPDATE clank_organization_security_enrollments SET factor_deadline=factor_deadline+60000 WHERE organization_id='policy_company_01';",
+  missingEnrollment: "DELETE FROM clank_organization_security_enrollments WHERE organization_id='policy_company_01';",
+})) test('native audit '+fault+' mutation rolls back policy, deadlines, receipt and audit before acknowledgment',async t=>{
+  const f=await fixture(t),caller=await f.step();
+  f.controller.preview(company,caller,defaults);f.grant(company,f.target,'viewer');f.now=Date.now();
+  const tables=['clank_organization_security_policies','clank_organization_security_enrollments','clank_organization_security_receipts','policy_test_audit'];
+  const snapshot=()=>tables.map(table=>f.sql.prepare('SELECT * FROM '+table+' ORDER BY rowid').all());const before=snapshot();
+  const input=change({factor:'mfa-or-passkey',sessionMaxAgeMs:300000,enrollmentGraceMs:60000},0,'policy_final_ack_'+fault);
+  f.sql.exec(`CREATE TRIGGER owned_policy_ack_fault AFTER INSERT ON policy_test_audit WHEN NEW.action='organization.security-policy.change' BEGIN ${sql} END;`);
+  assert.throws(()=>f.controller.change(company,caller,input),error=>error.code==='ORGANIZATION_POLICY_WRITE'&&error.status===503);
+  assert.deepEqual(snapshot(),before,'the complete native publication must roll back');
+  f.sql.exec('DROP TRIGGER owned_policy_ack_fault');
+  const accepted=f.controller.change(company,caller,input);assert.equal(accepted.version,1);assert.equal(accepted.sessionMaxAgeMs,300000);assert.equal(accepted.factor,'mfa-or-passkey');
+  assert.deepEqual(f.controller.read(company,caller),accepted);assert.deepEqual(f.controller.change(company,caller,input),accepted);
+  assert.equal(f.sql.prepare('SELECT count(*) AS n FROM policy_test_audit').get().n,1);
+  assert.equal(f.sql.prepare('SELECT count(*) AS n FROM clank_organization_security_receipts').get().n,1);
+});
+for(const fault of ['policy','receipt','enrollment'])test('native ignored '+fault+' write cannot publish a security policy',async t=>{
+  const f=await fixture(t),caller=await f.step();f.controller.preview(company,caller,defaults);
+  const table=fault==='policy'?'clank_organization_security_policies':fault==='receipt'?'clank_organization_security_receipts':'clank_organization_security_enrollments',event=fault==='enrollment'?'UPDATE':'INSERT';
+  f.sql.exec(`CREATE TRIGGER owned_policy_ignore_fault BEFORE ${event} ON ${table} BEGIN SELECT RAISE(IGNORE); END;`);
+  const input=change({factor:'mfa-or-passkey',enrollmentGraceMs:60000},0,'policy_ignored_'+fault);
+  assert.throws(()=>f.controller.change(company,caller,input),error=>error.code==='ORGANIZATION_POLICY_WRITE'&&error.status===503);
+  assert.equal(f.controller.read(company,caller).version,0);assert.equal(f.sql.prepare('SELECT count(*) AS n FROM clank_organization_security_receipts').get().n,0);assert.equal(f.sql.prepare('SELECT count(*) AS n FROM policy_test_audit').get().n,0);
+  f.sql.exec('DROP TRIGGER owned_policy_ignore_fault');const result=f.controller.change(company,caller,input);assert.equal(result.version,1);
+});
+
+for (const fault of ['policy','receipt']) test('native recovery audit '+fault+' mutation rolls back restored ownership and policy',async t=>{
+  const f=await fixture(t,{authorizeRecovery(current){if(current.user.role!=='operator')throw new Error('Current operator required.');},recoverOwner(organization,userId){f.sql.prepare("INSERT OR REPLACE INTO policy_test_members VALUES(?,?,'owner',?)").run(organization,userId,f.now);}}),caller=await f.step();
+  f.controller.change(company,caller,change({factor:'passkey'}));f.auth.setRole(f.operator.user.id,'operator');const operator=await f.step(f.operator);await f.passkey();
+  const tables=['clank_organization_security_policies','clank_organization_security_enrollments','clank_organization_security_receipts','policy_test_audit','policy_test_members'];const snapshot=()=>tables.map(table=>f.sql.prepare('SELECT * FROM '+table+' ORDER BY rowid').all());const before=snapshot();
+  const sql=fault==='policy'?"UPDATE clank_organization_security_policies SET version=version+1 WHERE organization_id='policy_company_01';":"DELETE FROM clank_organization_security_receipts WHERE organization_id='policy_company_01' AND operation_id='policy_final_recovery_01';";
+  f.sql.exec(`CREATE TRIGGER owned_recovery_ack_fault AFTER INSERT ON policy_test_audit WHEN NEW.action='organization.security-policy.recover' BEGIN ${sql} END;`);
+  const input={ownerId:f.target.user.id,confirmation:company,reason:'Restore the enrolled recovery administrator.',expectedVersion:1,operationId:'policy_final_recovery_01'};
+  assert.throws(()=>f.controller.recover(company,operator,input),error=>error.code==='ORGANIZATION_POLICY_WRITE'&&error.status===503);assert.deepEqual(snapshot(),before);
+  f.sql.exec('DROP TRIGGER owned_recovery_ack_fault');const accepted=f.controller.recover(company,operator,input);assert.equal(accepted.version,2);assert.equal(accepted.factor,'passkey');assert.deepEqual(f.controller.recover(company,operator,input),accepted);
+  assert.equal(f.sql.prepare("SELECT count(*) AS n FROM policy_test_audit WHERE action='organization.security-policy.recover'").get().n,1);
+});
+test('native policy audit removal of current administrator refuses and rolls back before commit',async t=>{
+  const f=await fixture(t),caller=await f.step();f.controller.preview(company,caller,defaults);
+  f.sql.exec("CREATE TRIGGER owned_policy_admin_fault AFTER INSERT ON policy_test_audit WHEN NEW.action='organization.security-policy.change' BEGIN DELETE FROM policy_test_members WHERE organization='policy_company_01'; END;");
+  const input=change({factor:'mfa-or-passkey'},0,'policy_final_authority_01');assert.throws(()=>f.controller.change(company,caller,input),error=>error.code==='ORGANIZATION_POLICY_UNAVAILABLE');
+  assert.equal(f.controller.read(company,caller).version,0);assert.equal(f.sql.prepare('SELECT count(*) AS n FROM policy_test_audit').get().n,0);
+  f.sql.exec('DROP TRIGGER owned_policy_admin_fault');assert.equal(f.controller.change(company,caller,input).version,1);
+});
