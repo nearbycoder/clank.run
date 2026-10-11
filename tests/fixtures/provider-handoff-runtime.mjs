@@ -17,7 +17,20 @@ const config=JSON.parse((await lines.next()).value);
 const report=value=>process.stdout.write(JSON.stringify(value)+'\n');
 const schema=defineDatabase({records:defineTable({value:s.string()})});
 const runtimePending=openBackend(defineBackend({schema}).functions(()=>({})),{path:config.database,agent:false,changePollIntervalMs:0});
-if(config.mode==='restart-refuse'){const runtime=await runtimePending;try{Object.defineProperty(globalThis,Symbol.for('clank.provider.source.bootstrap.v1'),{value:JSON.stringify(config.bootstrap),writable:false,enumerable:false,configurable:true});assert.throws(()=>openBackend[SQLITE_INTERNAL].initializeSourceRuntime(runtime),/pristine/);assert.throws(()=>runtime.database.transaction(()=>{}),/capture|recovery/i);report({ok:true,mode:config.mode});}finally{runtime.close();}}else{
+if(config.mode==='restart-refuse'){
+ let runtime;
+ try{runtime=await runtimePending;}catch(error){
+  assert.ok(error instanceof Error);
+  assert.equal(error.message,'This database requires point-in-time recovery capture before admitting writes.');
+  report({ok:true,mode:config.mode,refusal:'backend-open'});
+ }
+ if(runtime)try{
+  Object.defineProperty(globalThis,Symbol.for('clank.provider.source.bootstrap.v1'),{value:JSON.stringify(config.bootstrap),writable:false,enumerable:false,configurable:true});
+  assert.throws(()=>openBackend[SQLITE_INTERNAL].initializeSourceRuntime(runtime),/pristine/);
+  assert.throws(()=>runtime.database.transaction(()=>{}),/capture|recovery/i);
+  report({ok:true,mode:config.mode,refusal:'source-initialize'});
+ }finally{runtime.close();}
+}else{
 const runtime=await runtimePending;
 const anchor=openBackend[SQLITE_INTERNAL],slot=Symbol.for('clank.provider.source.bootstrap.v1');
 const cached=runtime.database[SQLITE_INTERNAL].prepare("INSERT INTO clank_meta(_key,_value) VALUES('bootstrap_escape',1)");

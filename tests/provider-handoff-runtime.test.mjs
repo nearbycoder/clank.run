@@ -121,10 +121,28 @@ test('missing native descriptor observation cannot mint source authority and ord
 });
 test('native bootstrap failure releases observed native descriptor and directory pin',async t=>{const root=await mkdtemp(join(tmpdir(),'clank-native-invalid-')),path=join(root,'source.sqlite');t.after(()=>rm(root,{recursive:true,force:true}));await writeFile(path,'not a SQLite database',{mode:0o600});await assert.rejects(openBackend(defineBackend({schema:defineDatabase({records:defineTable({value:s.string()})})}).functions(()=>({})),{path,agent:false,changePollIntervalMs:0}));const retained=fs.readdirSync('/proc/self/fd').flatMap(fd=>{try{const value=fs.readlinkSync('/proc/self/fd/'+fd);return value===root||value.startsWith(root+'/')?[value]:[];}catch{return [];}});assert.deepEqual(retained,[]);});
 
+function readonlyNativeSnapshot(path){
+ const identity=fs.statSync(path),db=new DatabaseSync(path,{readOnly:true});
+ const encode=value=>JSON.stringify(value,(_key,item)=>typeof item==='bigint'?{integer:item.toString()}:item instanceof Uint8Array?{blob:Buffer.from(item).toString('base64')}:item);
+ try{
+  db.exec('PRAGMA query_only=ON; BEGIN');
+  const schema=db.prepare('SELECT type,name,tbl_name,sql FROM sqlite_schema ORDER BY type,name,tbl_name,sql').all();
+  const tables=schema.filter(row=>row.type==='table').map(row=>{
+   const statement=db.prepare('SELECT * FROM "'+row.name.replaceAll('"','""')+'"');statement.setReadBigInts(true);
+   const rows=statement.all().map(value=>encode(Object.entries(value).sort(([a],[b])=>a<b?-1:a>b?1:0))).sort();
+   return {name:row.name,rows};
+  });
+  return {device:identity.dev,inode:identity.ino,sha256:hash(encode({schema,tables}))};
+ }finally{try{db.exec('ROLLBACK');}finally{db.close();}}
+}
+
 test('actual SIGKILL after base rename retains uncertain evidence and restart cannot reinitialize capture',async t=>{
  const f=await fixture(t),p=await child(t,f,'fault',{fault:'rename'});assert.equal((await p.next()).phase,'held');await p.kill();const directory=join(f.app,'.clank-source-recovery-'+f.bootstrap.binding.sourceIncarnation);
  const snapshot=()=>{const result={};for(const path of fs.readdirSync(directory,{recursive:true})){const full=join(directory,path),stat=fs.lstatSync(full);result[path]=stat.isDirectory()?{directory:true,mode:stat.mode}:{sha256:hash(fs.readFileSync(full)),mode:stat.mode};}return result;};const before=snapshot();assert.equal(fs.existsSync(join(directory,'epoch.json')),false);assert.equal(fs.readdirSync(join(directory,'base')).some(name=>name.startsWith('bk_')),true);
- const retry=await child(t,f,'restart-refuse');assert.equal((await retry.next()).ok,true);await retry.done();assert.deepEqual(snapshot(),before);
+ const nativeBefore={source:readonlyNativeSnapshot(f.database),catalog:readonlyNativeSnapshot(f.catalog)};
+ const retry=await child(t,f,'restart-refuse'),refusal=await retry.next();assert.equal(refusal.ok,true);assert.ok(['backend-open','source-initialize'].includes(refusal.refusal));await retry.done();assert.deepEqual(snapshot(),before);
+ assert.deepEqual({source:readonlyNativeSnapshot(f.database),catalog:readonlyNativeSnapshot(f.catalog)},nativeBefore);
+ t.diagnostic(JSON.stringify({refusal:refusal.refusal,sourceAndCatalogUnchanged:true,retainedRepositoryUnchanged:true}));
 });
 
 test('revocation while native worker admission is queued releases ownership without submitting source work',async t=>{const f=await fixture(t),p=await child(t,f,'fault',{fault:'worker-queue'}),held=await p.next();assert.equal(held.phase,'held');assert.equal(held.spawns,2);f.mutate(db=>db.exec("UPDATE clank_provider_handoff_source_grant SET state='revoked'"));p.send({});const result=await p.next();assert.equal(result.ok,true);assert.equal(result.spawns,3,'only the independent post-refusal ordinary worker was added');await p.done();const directory=join(f.app,'.clank-source-recovery-'+f.bootstrap.binding.sourceIncarnation);assert.equal(fs.existsSync(join(directory,'epoch.json')),false);assert.equal(fs.existsSync(join(directory,'head.json')),false);});
