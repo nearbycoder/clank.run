@@ -3,7 +3,9 @@ import { SQLITE_INTERNAL, type SQLiteCaptureConnection } from "./sqlite-internal
 import type { SQLiteDatabase } from "./backend.ts";
 import { openBackupManager } from "./recovery.ts";
 import { restoreSQLiteBackup } from "./migrations.ts";
+import { pinSQLiteDirectory, createPinnedSQLiteChildDirectory, assertPinnedSQLiteDirectory, type PinnedSQLiteDirectory } from "./sqlite-sandbox.ts";
 import { runSQLiteTask } from "./sqlite-task.ts";
+import { publishSQLiteReplacement } from "./migrations-worker.ts";
 
 export interface PointInTimeRecoveryOptions {
   /** Dedicated private directory. Copy this entire encrypted repository off the application volume. */
@@ -104,6 +106,7 @@ export interface PointInTimeArchiveRestoreOptions extends PointInTimeArchiveBoun
   assertCurrent?: () => void;
 }
 const archiveSources = new WeakMap<PointInTimeRecovery, (bounds: PointInTimeArchiveBounds) => Promise<PointInTimeArchive>>();
+const transferSources = new WeakMap<PointInTimeRecovery, (options: PointInTimeTransferExportOptions) => PointInTimeTransferBatch>();
 const bounded = (value: number, name: string, min: number, max: number) => {
   if (!Number.isSafeInteger(value) || value < min || value > max) throw new TypeError(`Invalid ${name}.`);
   return value;
@@ -268,7 +271,28 @@ export async function openPointInTimeRecovery(database: SQLiteDatabase<any>, opt
   };
   await flush();
   if (interval !== false) { timer = setInterval(() => { void flush().catch((error) => { try { onError?.(error); } catch {} }); }, interval); (timer as ReturnType<typeof setInterval> & { unref?: () => void }).unref?.(); }
-  const recovery: PointInTimeRecovery = Object.freeze({ status, flush, async close() { if (closed) return; if (timer) clearInterval(timer); await (flight ?? flush()); closed = true; archiveSources.delete(recovery); manager.close(); } });
+  const recovery: PointInTimeRecovery = Object.freeze({ status, flush, async close() { if (closed) return; if (timer) clearInterval(timer); await (flight ?? flush()); closed = true; archiveSources.delete(recovery); transferSources.delete(recovery); manager.close(); } });
+  transferSources.set(recovery, input => {
+    const identity = transferIdentity(input.identity), after = transferCursor(input.after), limits = transferBounds(input);
+    const through = bounded(input.throughSequence,"throughSequence",after.sequence+1,Number.MAX_SAFE_INTEGER);
+    assertSealed();if(closed)throw new Error("Recovery transfer source is closed.");
+    const retained=state();
+    const digestAt=(sequence:number)=>sequence===0?"0".repeat(64):JSON.parse(String(connection.prepare("SELECT envelope FROM clank_pitr_journal WHERE sequence=?").get(sequence)?.envelope??"null"))?.digest;
+    if(after.epoch!==retained.epoch||through>Number(retained.sequence)||through-after.sequence>limits.entries||digestAt(after.sequence)!==after.digest)throw new Error("Transfer prefix is unavailable or does not match the captured journal.");
+    const envelopes:string[]=[];let bytes=1024;
+    for(let sequence=after.sequence+1;sequence<=through;sequence++){
+      const encoded=connection.prepare("SELECT envelope FROM clank_pitr_journal WHERE sequence=?").get(sequence)?.envelope;
+      if(typeof encoded!=="string")throw new Error("Transfer journal has a missing committed entry.");
+      bytes+=(globalThis as any).Buffer.byteLength(JSON.stringify(encoded))+1;
+      if(bytes>limits.bytes)throw new Error("Transfer batch exceeds its byte bound.");
+      envelopes.push(encoded);
+    }
+    const content={protocol:"clank-pitr-transfer/1" as const,identity,keyId,baseBackupId:String(retained.base_id),after,
+      through:{epoch:after.epoch,sequence:through,digest:digestAt(through)},envelopes};
+    const batch={...content,authentication:crypto.createHmac("sha256",key).update(JSON.stringify(content)).digest("hex")};
+    if((globalThis as any).Buffer.byteLength(JSON.stringify(batch))>limits.bytes)throw new Error("Transfer batch exceeds its byte bound.");
+    assertSealed();return Object.freeze(batch);
+  });
   let exporting = false;
   archiveSources.set(recovery, async bounds => {
     const limits = archiveBounds(bounds);
@@ -420,6 +444,9 @@ export function createPointInTimeRecoveryProvider(recovery: PointInTimeRecovery,
 
 /** Validates the complete encrypted archive against an independently retained horizon. */
 export async function restorePointInTimeArchive(archive: PointInTimeArchive, options: PointInTimeArchiveRestoreOptions): Promise<PointInTimeRestoreResult> {
+  return restoreArchive(archive,options);
+}
+async function restoreArchive(archive: PointInTimeArchive, options: PointInTimeArchiveRestoreOptions, consume?: (files:Map<string,Uint8Array>,manifest:any)=>Promise<PointInTimeRestoreResult>): Promise<PointInTimeRestoreResult> {
   const current=restoreGuard(options.maxDurationMs,options.assertCurrent);current();
   const limits = archiveBounds(options), key = keyBytes(options.encryptionKey), targetPath = options.targetPath;
   const confirmation = options.confirmation, through = bounded(options.throughSequence,"throughSequence",0,Number.MAX_SAFE_INTEGER);
@@ -468,6 +495,7 @@ export async function restorePointInTimeArchive(archive: PointInTimeArchive, opt
     const required=new Set(["epoch.json","head.json",`base/${epoch.manifest.baseBackupId}/manifest.json`,`base/${epoch.manifest.baseBackupId}/database.enc`]);
     for(let sequence=1;sequence<=captured.sequence;sequence++)required.add(`${String(sequence).padStart(16,"0")}.json`);
     if(required.size!==names.size || [...required].some(name=>!names.has(name)))throw new Error("Recovery archive has a missing or foreign file.");
+    if(consume)return await consume(decoded,epoch.manifest);
     const destination=path.resolve(targetPath),parent=path.dirname(destination);
     await fs.mkdir(parent,{recursive:true,mode:0o700});current();
     const repository: string=path.join(parent,".clank-pitr-"+crypto.createHash("sha256").update(destination).digest("hex")+"-archive");
@@ -559,4 +587,209 @@ export async function restorePointInTime(options: PointInTimeRestoreOptions): Pr
     return { ...result, databasePath: path.resolve(options.targetPath) };
   } finally { manager.close(); }
   }finally{key.fill(0);await cleanup();}
+}
+
+/** A stopped same-release transfer. This identity does not grant runtime or writer authority. */
+export interface PointInTimeTransferIdentity {
+  readonly handoffId: string;
+  readonly source: PointInTimeProviderBinding;
+  readonly targetNodeId: string;
+  readonly targetGeneration: number;
+  readonly artifactSha256: string;
+}
+export interface PointInTimeTransferCursor { readonly epoch: string; readonly sequence: number; readonly digest: string; }
+export interface PointInTimeTransferBounds { maxBatchBytes?: number; maxEntries?: number; }
+export interface PointInTimeTransferExportOptions extends PointInTimeTransferBounds {
+  identity: PointInTimeTransferIdentity;
+  after: PointInTimeTransferCursor;
+  throughSequence: number;
+}
+export interface PointInTimeTransferBatch {
+  readonly protocol: "clank-pitr-transfer/1";
+  readonly identity: PointInTimeTransferIdentity;
+  readonly keyId: string;
+  readonly baseBackupId: string;
+  readonly after: PointInTimeTransferCursor;
+  readonly through: PointInTimeTransferCursor;
+  readonly envelopes: readonly string[];
+  readonly authentication: string;
+}
+export interface PointInTimeTransferAuthority {
+  /** Consult actual current native source ownership; an epoch number is not authority. */
+  assertSourceCurrent(): void;
+  /** The exact destination must remain stopped and exclusively owned through publication. */
+  assertTargetCurrent(): void;
+  maxDurationMs?: number;
+}
+export interface PointInTimeTransferStageOptions extends PointInTimeTransferAuthority {
+  identity: PointInTimeTransferIdentity;
+  encryptionKey: Uint8Array;
+  targetPath: string;
+  expectedEpoch: string;
+  expectedSequence: number;
+  expectedDigest: string;
+  operationId?: string;
+  maxArchiveBytes?: number;
+  maxEntries?: number;
+}
+export interface PointInTimeTransferApplyOptions extends PointInTimeTransferAuthority, PointInTimeTransferBounds {
+  identity: PointInTimeTransferIdentity;
+  encryptionKey: Uint8Array;
+  targetPath: string;
+  /** Independently retained predecessor. It cannot be derived from an untrusted batch. */
+  expectedCursor: PointInTimeTransferCursor;
+}
+export interface PointInTimeTransferResult {
+  readonly cursor: PointInTimeTransferCursor;
+  readonly baseBackupId: string;
+  readonly appliedEntries: number;
+  readonly replayed: boolean;
+}
+const transferHashPattern=/^[0-9a-f]{64}$/u;
+function transferIdentity(input:PointInTimeTransferIdentity):PointInTimeTransferIdentity {
+  if(!input||Object.keys(input).sort().join(",")!=="artifactSha256,handoffId,source,targetGeneration,targetNodeId"
+    ||typeof input.handoffId!=="string"||!/^[A-Za-z0-9_-]{1,128}$/u.test(input.handoffId)
+    ||typeof input.targetNodeId!=="string"||!/^[A-Za-z0-9_-]{1,128}$/u.test(input.targetNodeId)
+    ||typeof input.artifactSha256!=="string"||!transferHashPattern.test(input.artifactSha256))throw new TypeError("An exact transfer identity is required.");
+  const source=providerBinding(input.source),targetGeneration=bounded(input.targetGeneration,"targetGeneration",source.generation+1,Number.MAX_SAFE_INTEGER);
+  if(source.nodeId===input.targetNodeId)throw new TypeError("A transfer requires a different target node.");
+  return Object.freeze({handoffId:input.handoffId,source,targetNodeId:input.targetNodeId,targetGeneration,artifactSha256:input.artifactSha256});
+}
+function transferCursor(input:PointInTimeTransferCursor):PointInTimeTransferCursor {
+  if(!input||Object.keys(input).sort().join(",")!=="digest,epoch,sequence"||typeof input.epoch!=="string"||!/^[0-9a-f-]{36}$/u.test(input.epoch)
+    ||typeof input.digest!=="string"||!transferHashPattern.test(input.digest))throw new TypeError("An exact transfer cursor is required.");
+  return Object.freeze({epoch:input.epoch,sequence:bounded(input.sequence,"transfer sequence",0,Number.MAX_SAFE_INTEGER),digest:input.digest});
+}
+function transferBounds(options:PointInTimeTransferBounds){return {bytes:bounded(options.maxBatchBytes??4*1024*1024,"maxBatchBytes",4096,8*1024*1024),entries:bounded(options.maxEntries??256,"maxEntries",1,1000)};}
+function transferAuthority(options:PointInTimeTransferAuthority):()=>void {
+  const source=options.assertSourceCurrent,target=options.assertTargetCurrent;
+  if(typeof source!=="function"||typeof target!=="function")throw new TypeError("Current native source and stopped-destination ownership assertions are required.");
+  return restoreGuard(options.maxDurationMs,()=>{
+    for(const check of [source,target]){const result:unknown=check();if(result!==undefined){
+      if(result&&(typeof result==="object"||typeof result==="function")&&typeof Reflect.get(result,"then")==="function")void Promise.resolve(result).catch(()=>undefined);
+      throw new TypeError("Transfer authority assertions must complete synchronously.");
+    }}
+  });
+}
+/** Reads only the requested immutable encrypted native journal entries; never copies the base again. */
+export function exportPointInTimeTransfer(recovery:PointInTimeRecovery,options:PointInTimeTransferExportOptions):Promise<PointInTimeTransferBatch> {
+  const source=transferSources.get(recovery);
+  try{if(!source)throw new Error("A current native point-in-time capture handle is required.");return Promise.resolve(source(options));}catch(error){return Promise.reject(error);}
+}
+interface TransferWorkspace {fs:any;path:any;crypto:any;target:string;root:string;anchoredTarget:string;anchoredRoot:string;directories:readonly PinnedSQLiteDirectory[];current:()=>void;}
+async function transferWorkspace<T>(targetPath:string,authority:()=>void,work:(context:TransferWorkspace)=>Promise<T>):Promise<T>{
+  authority();const fsName="node:fs/promises",nativeName="node:fs",pathName="node:path",cryptoName="node:crypto";
+  const [fs,native,path,crypto]=await Promise.all([import(fsName),import(nativeName),import(pathName),import(cryptoName)]);authority();
+  if((globalThis as any).process.platform!=="linux")throw new Error("Pinned transfer publication requires Linux directory capabilities.");
+  if(typeof targetPath!=="string"||!targetPath||targetPath.includes("\0"))throw new TypeError("A private stopped transfer destination is required.");
+  const target=path.resolve(targetPath),parent=path.dirname(target),pinned=await pinSQLiteDirectory(parent,true);
+  let workspace:PinnedSQLiteDirectory|undefined;
+  const name=".clank-transfer-"+crypto.createHash("sha256").update(target).digest("hex"),root=path.join(parent,name),anchoredRoot=`${pinned.anchor}/${name}`,anchoredTarget=`${pinned.anchor}/${path.basename(target)}`;
+  try{
+    const identity=native.fstatSync(pinned.fd);
+    if(identity.uid!==(globalThis as any).process.geteuid()||(identity.mode&0o022)!==0)throw new Error("Transfer destination directory must be privately owned and not writable by other users.");
+    const current=()=>{
+      authority();const actual=native.lstatSync(parent);
+      if(!actual.isDirectory()||actual.dev!==identity.dev||actual.ino!==identity.ino)throw new Error("Transfer destination directory changed while pinned.");
+      if(workspace){const retained=native.fstatSync(workspace.fd),visible=native.lstatSync(anchoredRoot);if(visible.dev!==retained.dev||visible.ino!==retained.ino)throw new Error("Transfer private workspace changed while pinned.");}
+    };
+    current();workspace=await createPinnedSQLiteChildDirectory(pinned,name,current);current();
+    const result=await work({fs,path,crypto,target,root,anchoredTarget,anchoredRoot:workspace.anchor,directories:[pinned,workspace],current});current();
+    // Exact retries also complete a directory sync that a lost response may have interrupted.
+    const durable=await fs.open(pinned.anchor,"r");try{await durable.sync();current();}finally{await durable.close();}current();return result;
+  }finally{try{
+    if(workspace){
+      // Clean through the owned descriptor even if its visible name was replaced.
+      for(const entry of await fs.readdir(workspace.anchor))await fs.rm(`${workspace.anchor}/${entry}`,{recursive:true,force:true});
+      const expected=native.fstatSync(workspace.fd);let actual;try{actual=native.lstatSync(anchoredRoot);}catch(error){if((error as {code?:string}).code!=="ENOENT")throw error;}
+      if(actual?.dev===expected.dev&&actual?.ino===expected.ino)native.rmdirSync(anchoredRoot);
+    }
+  }finally{try{await workspace?.close();}finally{await pinned.close();}}}
+}
+/** Stages a base once. It retains native capture metadata and never admits an application writer. */
+export async function stagePointInTimeTransfer(archive:PointInTimeArchive,options:PointInTimeTransferStageOptions):Promise<PointInTimeTransferResult>{
+  const current=transferAuthority(options);current();
+  const identity=transferIdentity(options.identity),key=keyBytes(options.encryptionKey),targetPath=options.targetPath;
+  const expected=transferCursor({epoch:options.expectedEpoch,sequence:options.expectedSequence,digest:options.expectedDigest});
+  const maxArchiveBytes=archiveBounds(options).bytes,encoded=JSON.stringify(archive);
+  if(new TextEncoder().encode(encoded).byteLength>maxArchiveBytes)throw new Error("Transfer base exceeds its byte bound.");
+  const captured=JSON.parse(encoded) as PointInTimeArchive,operationId=options.operationId,maxEntries=options.maxEntries;
+  try{return await transferWorkspace(targetPath,current,async({fs,path,crypto,target,root,anchoredTarget,anchoredRoot,directories,current})=>{
+    const {authentication,...content}=captured;
+    if(authentication!==crypto.createHmac("sha256",key).update(JSON.stringify(content)).digest("hex")||captured.protocol!=="clank-pitr-archive/1"
+      ||captured.epoch!==expected.epoch||captured.sequence!==expected.sequence||captured.digest!==expected.digest||captured.sequence>archiveBounds({maxEntries}).entries
+      ||JSON.stringify(captured.binding)!==JSON.stringify(identity.source)||operationId!==undefined&&captured.operationId!==operationId)throw new Error("Transfer base authentication, identity or retained horizon mismatch.");
+    const archiveSha256=crypto.createHash("sha256").update(encoded).digest("hex"),binding={identity,archiveSha256,initialCursor:expected};
+    let exists=false;
+    try{const stat=await fs.lstat(anchoredTarget);current();if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1)throw new Error("Transfer destination must be a private regular file.");exists=true;}catch(error){if((error as {code?:string}).code!=="ENOENT")throw error;}
+    if(exists){const result=await runSQLiteTask<PointInTimeTransferResult>("recovery","inspectTransfer",[target,binding],directories);current();return {...result,replayed:true};}
+    const staged=path.join(root,"stage.sqlite");
+    await restoreArchive(captured,{encryptionKey:key,targetPath:staged,confirmation:"restore point in time",throughSequence:expected.sequence,
+      expectedEpoch:expected.epoch,expectedSequence:expected.sequence,expectedDigest:expected.digest,expectedBinding:identity.source,operationId,maxArchiveBytes,maxEntries,assertCurrent:current},async(files,manifest)=>{
+      const baseId=manifest.baseBackupId,envelope=files.get(`base/${baseId}/database.enc`)!,signed=JSON.parse(new TextDecoder().decode(files.get(`base/${baseId}/manifest.json`)!));
+      await fs.writeFile(`${anchoredRoot}/database.enc`,envelope,{flag:"wx",mode:0o600});current();
+      await runSQLiteTask("recovery","prepareTransferBase",[staged,path.join(root,"database.enc"),signed,Array.from(key),baseId],directories);current();
+      let replay=await runSQLiteTask<PointInTimeRestoreResult>("recovery","replayJournal",[staged,[],Array.from(key),expected.epoch,expected.sequence],directories);current();
+      for(let sequence=1;sequence<=expected.sequence;sequence++){
+        replay=await runSQLiteTask<PointInTimeRestoreResult>("recovery","replayJournal",[staged,[new TextDecoder().decode(files.get(`${String(sequence).padStart(16,"0")}.json`))],Array.from(key),expected.epoch,expected.sequence],directories);current();
+      }
+      const initialized=await runSQLiteTask<PointInTimeTransferResult>("recovery","initializeTransfer",[staged,identity,baseId,archiveSha256],directories);current();
+      if(JSON.stringify(initialized.cursor)!==JSON.stringify(expected))throw new Error("Transfer base differs from its authenticated horizon.");
+      return replay;
+    });
+    current();
+    // A link creates the destination exclusively; an existing live file cannot be replaced.
+    const source=await fs.open(`${anchoredRoot}/stage.sqlite`,"r");try{await source.sync();current();}finally{await source.close();}current();
+    await fs.link(`${anchoredRoot}/stage.sqlite`,anchoredTarget);current();await fs.unlink(`${anchoredRoot}/stage.sqlite`);current();
+    const parent=await fs.open(directories[0]!.anchor,"r");try{await parent.sync();}finally{await parent.close();}current();
+    const result=await runSQLiteTask<PointInTimeTransferResult>("recovery","inspectTransfer",[target,binding],directories);current();return result;
+  });}finally{key.fill(0);}
+}
+/** Applies to an owned stopped stage; publication is separately guarded after bounded native replay. */
+export async function applyPointInTimeTransfer(batch:PointInTimeTransferBatch,options:PointInTimeTransferApplyOptions):Promise<PointInTimeTransferResult>{
+  const current=transferAuthority(options);current();
+  const identity=transferIdentity(options.identity),expectedCursor=transferCursor(options.expectedCursor),limits=transferBounds(options),key=keyBytes(options.encryptionKey),targetPath=options.targetPath;
+  const encoded=JSON.stringify(batch);
+  if(new TextEncoder().encode(encoded).byteLength>limits.bytes)throw new Error("Transfer batch exceeds its byte bound.");
+  const captured=JSON.parse(encoded) as PointInTimeTransferBatch;
+  try{return await transferWorkspace(targetPath,current,async({path,crypto,target,root,directories,current})=>{
+    const {authentication,...content}=captured;
+    const mac=crypto.createHmac("sha256",key).update(JSON.stringify(content)).digest("hex");
+    if(typeof authentication!=="string"||!transferHashPattern.test(authentication)||authentication!==mac||captured.protocol!=="clank-pitr-transfer/1"
+      ||JSON.stringify(transferIdentity(captured.identity))!==JSON.stringify(identity)||!Array.isArray(captured.envelopes)||captured.envelopes.length<1||captured.envelopes.length>limits.entries
+      ||JSON.stringify(transferCursor(captured.after))!==JSON.stringify(expectedCursor)||captured.through.epoch!==expectedCursor.epoch
+      ||transferCursor(captured.through).sequence-expectedCursor.sequence!==captured.envelopes.length)throw new Error("Transfer batch authentication, identity or prefix mismatch.");
+    const request={identity,expectedCursor,batch:captured,batchSha256:crypto.createHash("sha256").update(encoded).digest("hex")};
+    const before=await runSQLiteTask<PointInTimeTransferResult>("recovery","inspectTransfer",[target,{identity},request],directories);current();
+    if(before.replayed)return before;
+    const staged=path.join(root,"apply.sqlite");
+    await restorePinnedSQLiteBackup(target,staged,current,directories);current();
+    const result=await runSQLiteTask<PointInTimeTransferResult>("recovery","applyTransfer",[staged,request,Array.from(key)],directories);current();
+    // Recheck the owned original before replacing it; a receipt is never inferred from rename success.
+    const original=await runSQLiteTask<PointInTimeTransferResult>("recovery","inspectTransfer",[target,{identity},request],directories);current();
+    if(original.replayed)return original;
+    await restorePinnedSQLiteBackup(staged,target,current,directories);current();
+    const acknowledged=await runSQLiteTask<PointInTimeTransferResult>("recovery","inspectTransfer",[target,{identity},request],directories);current();
+    if(!acknowledged.replayed||JSON.stringify(acknowledged.cursor)!==JSON.stringify(result.cursor))throw new Error("Transfer publication was not durably acknowledged; retry the exact batch.");
+    return {...acknowledged,replayed:false,appliedEntries:result.appliedEntries};
+  });}finally{key.fill(0);}
+}
+
+/** Internal transfer publication: both file paths remain bound to retained directories. */
+async function restorePinnedSQLiteBackup(sourcePath:string,destinationPath:string,current:()=>void,directories:readonly PinnedSQLiteDirectory[]):Promise<void>{
+  current();const pathName="node:path",fsName="node:fs/promises",constantsName="node:fs";
+  const [path,fs,{constants}]=await Promise.all([import(pathName),import(fsName),import(constantsName)]);current();
+  for(const directory of directories)assertPinnedSQLiteDirectory(directory);
+  const source=directories.find(directory=>directory.path===path.dirname(sourcePath)),destination=directories.find(directory=>directory.path===path.dirname(destinationPath));
+  if(!source||!destination)throw new Error("Transfer replacement requires retained source and destination directories.");
+  const temporary=`${destinationPath}.tmp-${globalThis.crypto.randomUUID()}`,anchoredTemporary=`${destination.anchor}/${path.basename(temporary)}`,anchoredDestination=`${destination.anchor}/${path.basename(destinationPath)}`;
+  try{
+    await runSQLiteTask("migrations","stageSQLiteRestore",[sourcePath,destinationPath,temporary],directories);current();
+    const file=await fs.open(anchoredTemporary,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
+    try{await file.sync();current();}finally{await file.close();}current();
+    await publishSQLiteReplacement(anchoredTemporary,anchoredDestination,current);current();
+    const parent=await fs.open(destination.anchor,"r");try{await parent.sync();current();}finally{await parent.close();}current();
+  }finally{
+    for(const suffix of ["","-journal","-wal","-shm"])await fs.rm(anchoredTemporary+suffix,{force:true});
+  }
 }

@@ -6,6 +6,41 @@ export interface PinnedSQLiteDirectory {
   close(): Promise<void>;
 }
 
+const pinnedDirectories = new WeakSet<PinnedSQLiteDirectory>();
+function retainedDirectory(path:string,handle:any):PinnedSQLiteDirectory {
+  const directory={path,fd:handle.fd,anchor:`/proc/self/fd/${handle.fd}`,async close(){pinnedDirectories.delete(directory);await handle.close();}};
+  pinnedDirectories.add(directory);return Object.freeze(directory);
+}
+/** Create and retain a private child without yielding to JavaScript after mkdir. */
+export async function createPinnedSQLiteChildDirectory(parent:PinnedSQLiteDirectory,name:string,assertCurrent:()=>void):Promise<PinnedSQLiteDirectory>{
+  if(!pinnedDirectories.has(parent)||!name||name==="."||name===".."||/[\\/\0]/u.test(name))throw new Error("Invalid SQLite directory capability.");
+  const fsName="node:fs",pathName="node:path";
+  const [fs,path]=await Promise.all([import(fsName),import(pathName)]);
+  assertCurrent();assertPinnedSQLiteDirectory(parent);
+  const child=`${parent.anchor}/${name}`;
+  // The parent must exclude untrusted host writers. Synchronous syscalls close
+  // the event-loop callback gap, not arbitrary same-UID mutation between syscalls.
+  fs.mkdirSync(child,{mode:0o700});
+  const created=fs.lstatSync(child);
+  let fd:number|undefined;
+  try{
+    fd=fs.openSync(child,fs.constants.O_RDONLY|fs.constants.O_DIRECTORY|fs.constants.O_NOFOLLOW);
+    const retained=fs.fstatSync(fd),visible=fs.lstatSync(child);
+    if(!created.isDirectory()||created.dev!==retained.dev||created.ino!==retained.ino
+      ||visible.dev!==retained.dev||visible.ino!==retained.ino)throw new Error("SQLite private directory changed while being retained.");
+    const descriptor=fd;let closed=false;
+    return retainedDirectory(path.join(parent.path,name),{fd:descriptor,async close(){if(!closed){fs.closeSync(descriptor);closed=true;}}});
+  }catch(error){
+    if(fd!==undefined)fs.closeSync(fd);
+    // Creation alone is insufficient cleanup authority. Preserve an uncertain
+    // pathname if open or verification failed, even when it appears empty.
+    throw error;
+  }
+}
+export function assertPinnedSQLiteDirectory(directory:PinnedSQLiteDirectory):void {
+  if(!pinnedDirectories.has(directory))throw new Error("A current SQLite directory capability is required.");
+}
+
 export async function pinSQLiteDirectory(input: string, create = false): Promise<PinnedSQLiteDirectory> {
   const fsName = "node:fs/promises", constantsName = "node:fs", pathName = "node:path";
   const [fs, { constants }, path] = await Promise.all([import(fsName), import(constantsName), import(pathName)]);
@@ -23,7 +58,7 @@ export async function pinSQLiteDirectory(input: string, create = false): Promise
       await handle.close();
       handle = next;
     }
-    return { path: resolved, fd: handle.fd, anchor: `/proc/self/fd/${handle.fd}`, close: () => handle.close() };
+    return retainedDirectory(resolved,handle);
   } catch (error) { await handle.close(); throw error; }
 }
 
@@ -42,6 +77,7 @@ export interface SQLiteSandbox {
 
 /** Only fixed worker operations may request filesystem capabilities. */
 export async function prepareSQLiteSandbox(module: string, operation: string, values: readonly unknown[], childArguments: string[], pinned: readonly PinnedSQLiteDirectory[] = []): Promise<SQLiteSandbox> {
+  for(const directory of pinned)assertPinnedSQLiteDirectory(directory);
   const pathName = "node:path", fsName = "node:fs/promises", urlName = "node:url", constantsName = "node:fs";
   const [path, fs, url, { constants }] = await Promise.all([import(pathName), import(fsName), import(urlName), import(constantsName)]);
   const process = (globalThis as any).process;
@@ -57,7 +93,7 @@ export async function prepareSQLiteSandbox(module: string, operation: string, va
     mounts.push({ path: path.dirname(result), writable: true, create });
     return result;
   };
-  if (module === "recovery" && ["replayJournal", "finishReplay"].includes(operation)) args[0] = file(args[0], true);
+  if (module === "recovery" && ["replayJournal", "finishReplay", "prepareTransferBase", "initializeTransfer", "inspectTransfer", "applyTransfer"].includes(operation)) { args[0] = file(args[0], true); if(operation==="prepareTransferBase")args[1]=file(args[1],false); }
   else if (module === "migrations" && operation === "planMigrations") args[0] = file(args[0], true, true);
   else if (module === "migrations" && operation === "applyMigrations") {
     args[0].path = file(args[0].path, true, true);
