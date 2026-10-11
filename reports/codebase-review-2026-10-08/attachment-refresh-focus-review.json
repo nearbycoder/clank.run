@@ -1,0 +1,290 @@
+{
+  "status": "Verified focus repair; final hosted checks and protected delivery required",
+  "base": "5e5121540c4927ff255639fbff1004f9883a9b84",
+  "acceptedFeatures": 29,
+  "remainingFeatures": 11,
+  "fix": "A current snapshot failure focuses the existing status only if it removes the focused row control or disables the focused Synchronize button. Focus is read at settlement, with existing generation/disposal guards. Successful recovery keeps status focus; focus outside the queue is preserved.",
+  "sourceSha256": "3536597c332fd3a8e3f2ea75a92bf394c6511fb920274b0cac69c0c60baf564b",
+  "testSha256": "41d0d61a5d8563f84b9a01ae4b37a260d5be1b205f091054b87af55d867ebde9",
+  "unchangedSourceRegression": {
+    "command": [
+      "node",
+      "--experimental-test-coverage",
+      "--test",
+      "--test-name-pattern=current refresh failure",
+      "tests/offline-attachments-ui.test.mjs"
+    ],
+    "exit": 1,
+    "counts": {
+      "tests": 4,
+      "pass": 1,
+      "fail": 3,
+      "cancelled": 0,
+      "skipped": 0
+    },
+    "log": "/tmp/clank-review-2026-10-08/attachment-refresh-focus-review-01/before-native26-02.log",
+    "sha256": "2bf11f7af1fcb48084d02378f73c64bbb796247f6d1ae6a75cf6e9ab0cabe6ef"
+  },
+  "candidateNative": [
+    {
+      "runtime": "22",
+      "command": [
+        "/tmp/node-v22.16.0-linux-x64/bin/node",
+        "--experimental-test-coverage",
+        "--test",
+        "tests/offline-attachments-ui.test.mjs"
+      ],
+      "exit": 0,
+      "counts": {
+        "tests": 20,
+        "pass": 20,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "log": "/tmp/clank-review-2026-10-08/attachment-refresh-focus-review-01/candidate-ui-native22-04.log",
+      "sha256": "ee6ddc8f5b300199f0032dd9c968cd11cff1f15a2c694b8604b19c8b49f1042c"
+    },
+    {
+      "runtime": "24",
+      "command": [
+        "/tmp/node-v24.21.0-linux-x64/bin/node",
+        "--experimental-test-coverage",
+        "--test",
+        "tests/offline-attachments-ui.test.mjs"
+      ],
+      "exit": 0,
+      "counts": {
+        "tests": 20,
+        "pass": 20,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "log": "/tmp/clank-review-2026-10-08/attachment-refresh-focus-review-01/candidate-ui-native24-04.log",
+      "sha256": "68e59995736f8427cbe32e2b25d72762baa45bd641071b8f4c1c0ea3d41a2715"
+    },
+    {
+      "runtime": "26",
+      "command": [
+        "/usr/bin/node",
+        "--experimental-test-coverage",
+        "--test",
+        "tests/offline-attachments-ui.test.mjs"
+      ],
+      "exit": 0,
+      "counts": {
+        "tests": 20,
+        "pass": 20,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "log": "/tmp/clank-review-2026-10-08/attachment-refresh-focus-review-01/candidate-ui-native26-04.log",
+      "sha256": "71be3cd015db5be5db4987f4378e6b9aa291f78d1794860795664d561dc6ac2c"
+    }
+  ],
+  "adoptedNative": [
+    {
+      "label": "ui-native22",
+      "path": "/tmp/clank-review-2026-10-08/attachment-refresh-focus-review-01/adopted-ui-native22-10.log",
+      "sha256": "5e165e52d3cd45db428f7dfbdbe8027a0684a21ec9aafa3954de5c95af50b077",
+      "exit": 0,
+      "counts": {
+        "tests": 20,
+        "pass": 20,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "label": "ui-native24",
+      "path": "/tmp/clank-review-2026-10-08/attachment-refresh-focus-review-01/adopted-ui-native24-10.log",
+      "sha256": "2c917c7c81757028968477f6652c6ce00cc795365425bad4afc7719b25e3258a",
+      "exit": 0,
+      "counts": {
+        "tests": 20,
+        "pass": 20,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "label": "ui-native26",
+      "path": "/tmp/clank-review-2026-10-08/attachment-refresh-focus-review-01/adopted-ui-native26-10.log",
+      "sha256": "d620a851cea52e64fa93dc34b4fa9cf0da72ef1ab0a721dca0412694accbaa29",
+      "exit": 0,
+      "counts": {
+        "tests": 20,
+        "pass": 20,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      }
+    }
+  ],
+  "nativeChrome": {
+    "browser": "Chrome, explicitly selected by user",
+    "tab": "2069471674",
+    "privateCandidateSourceSha256": "3536597c332fd3a8e3f2ea75a92bf394c6511fb920274b0cac69c0c60baf564b",
+    "fixture": "Actual native AuthServer HTTP, bucket/object store, SQLite, IndexedDB and compiled attachment view; one declared snapshot observation failure after real IndexedDB read.",
+    "observed": [
+      {
+        "beforeFailure": {
+          "focusedAction": "Retry for attachment offline-882453c0-f0da-42fb-8a1d-3811eccc03fd"
+        }
+      },
+      {
+        "afterFailure": {
+          "focusedRole": "status",
+          "focusedText": "Attachments unavailable for this account."
+        }
+      },
+      {
+        "afterRecovery": {
+          "focusedRole": "status",
+          "focusedText": "1 pending attachment",
+          "synchronizeDisabled": false
+        }
+      }
+    ],
+    "nativeServerState": {
+      "fixture": "read-only native counts",
+      "records": [],
+      "receipts": [],
+      "objects": []
+    },
+    "screenshot": {
+      "captured": false,
+      "reason": "Documented Page.captureScreenshot timed out; no screenshot artifact saved."
+    },
+    "qualification": "This proves the focused Retry failure/recovery path on the private fix. It is not full feature30 acceptance, discard confirmation, phone acceptance, or protected delivery."
+  },
+  "builds": {
+    "outputs": 320,
+    "node22And26Equal": true,
+    "matchesPrivateCandidate": true,
+    "changedOutputs": [
+      "dist/offline-attachments.js"
+    ],
+    "generatedExamples": {
+      "captured": 19,
+      "onlyListed19Restored": true,
+      "patchSha256": "52417e5ec8afd503449df12531c850efa35cc73750205aa9d8653a7b06c51517"
+    }
+  },
+  "types": {
+    "existingDiagnostics": 149,
+    "newDiagnostics": 0,
+    "baseline": 154,
+    "packedConsumerFixtures": 54,
+    "sha256": "a9d29fdbcd742a859fd291765c09c9e21ee9ce75835bc35ffb02782826971acc",
+    "qualification": "Initial invocation omitted required trusted TypeScript/type-root arguments and failed before compilation. Corrected command uses pinned5.9.3/26.6.4 inputs; original failed log retained."
+  },
+  "audits": [
+    {
+      "label": "docs",
+      "path": "/tmp/clank-review-2026-10-08/attachment-refresh-focus-review-01/adopted-docs-10.log",
+      "sha256": "00b37c625be4e83cbcec42c3f629f2db050ed047aa65cb0d491b18b74e69e78c",
+      "exit": 0
+    },
+    {
+      "label": "security",
+      "path": "/tmp/clank-review-2026-10-08/attachment-refresh-focus-review-01/adopted-security-10.log",
+      "sha256": "58bad00b62d4820cecf26aa17bea0665f7f087f2a956a5efc5c3da84a6b240bc",
+      "exit": 0
+    },
+    {
+      "label": "package",
+      "path": "/tmp/clank-review-2026-10-08/attachment-refresh-focus-review-01/adopted-package-10.log",
+      "sha256": "8903597ee09a455640a622765c35cb2c36a2c9c9629797e292c2c8afb98c102e",
+      "exit": 0,
+      "package": {
+        "files": 449,
+        "unpackedBytes": 6947319
+      }
+    }
+  ],
+  "collectorQualification": "All seven processes completed. The initial collector then assumed npm pack returned an array, but it returned an object keyed by package name. Original logs and failure are retained. This collector handles both shapes and does not rerun passing checks.",
+  "package": {
+    "files": 449,
+    "unpackedBytes": 6947319,
+    "maximumBytes": 8388608,
+    "dependencies": 0
+  },
+  "protectedMaintenanceDelivery": [
+    {
+      "kind": "attachmentRecovery",
+      "pullRequest": "https://github.com/nearbycoder/clank.run/pull/370",
+      "reviewedHead": "856ded41d8817b72d159b70106a87b102a4422b0",
+      "protectedMain": "3c549a6f8c8ec22454ae5cdb22aee8548409823c",
+      "identicalTree": "9fd2303efb1f023aa286782b876508ebf0ffbd08",
+      "hostedChecks": 8,
+      "allPassed": true,
+      "counts": {
+        "22": {
+          "tests": 3474,
+          "pass": 3437,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 37
+        },
+        "24": {
+          "tests": 3474,
+          "pass": 3437,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 37
+        },
+        "package": {
+          "tests": 3474,
+          "pass": 3437,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 37
+        }
+      },
+      "preservedLocalFiles": 23,
+      "qualification": "Original e0515ed head had one actual Node22 retention cadence assertion failure, retained in hosted-node22-failed-18.json. Final source/test repair was separately checked; no rerun mutation."
+    },
+    {
+      "kind": "grantRevocation",
+      "pullRequest": "https://github.com/nearbycoder/clank.run/pull/371",
+      "reviewedHead": "975df1cad1db41e1bb4e7f59a69a462727d651ff",
+      "protectedMain": "5e5121540c4927ff255639fbff1004f9883a9b84",
+      "identicalTree": "ec0c344dc8752ceb07c453306e1fee9b2f2f8e53",
+      "hostedChecks": 8,
+      "allPassed": true,
+      "counts": {
+        "22": {
+          "tests": 3509,
+          "pass": 3472,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 37
+        },
+        "24": {
+          "tests": 3509,
+          "pass": 3472,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 37
+        },
+        "package": {
+          "tests": 3509,
+          "pass": 3472,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 37
+        }
+      },
+      "preservedLocalFiles": 23,
+      "qualification": "Durable grant authority revocation, not provider-wide process stop, source eligibility, target activation or completed feature07."
+    }
+  ],
+  "remainingBrowserAcceptance": "Current-main Chrome verified actual upload/attachment, PDF rejection, Retry focus and native IndexedDB reopen. The discard dialog is no longer reported but its tab still fails page-state observation. No discard/account-switch/phone acceptance claimed. A separate Console navigation was blocked by Chrome with ERR_BLOCKED_BY_CLIENT; no bypass or Console acceptance.",
+  "guidelineSource": "https://raw.githubusercontent.com/vercel-labs/web-interface-guidelines/main/command.md",
+  "modelQualification": "Candidate/adopted20-case suites use the existing DOM/focus model with the actual compiled view. The separate native Chrome case uses real browser events, IndexedDB and HTTP."
+}
