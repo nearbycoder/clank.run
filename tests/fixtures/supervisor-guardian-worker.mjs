@@ -33,5 +33,10 @@ sql.guardWrites(connection=>lease.assertCurrent(connection));
 sql.exec('CREATE TABLE IF NOT EXISTS actual_supervisor_writes(epoch INTEGER NOT NULL,controller INTEGER NOT NULL,at INTEGER NOT NULL)');
 const write=()=>sql.prepare('INSERT INTO actual_supervisor_writes VALUES(?,?,?)').run(lease.status('leader').epoch,process.pid,Date.now());write();
 const writes=setInterval(write,100);
-process.on('message',async message=>{if(message?.kind!=='stop')return;clearInterval(writes);database.close();await guardian.stop();clearInterval(renewal);lease.release();lease.close();process.send({kind:'stopped'});process.disconnect();});
+process.on('message',async message=>{
+  if(message?.kind==='enroll-provider-canaries'){
+    lease.enrollProviderCanaries();process.send({kind:'enrolled',status:lease.status('leader')});return;
+  }
+  if(message?.kind!=='stop')return;clearInterval(writes);database.close();await guardian.stop();clearInterval(renewal);lease.release();lease.close();process.send({kind:'stopped'});process.disconnect();
+});
 process.send({kind:'ready',status:lease.status('leader')});

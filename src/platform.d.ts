@@ -419,6 +419,7 @@ export interface ClankPlatformOptions {
     operations?: PlatformOperationsOptions;
     /** Poll queued exact release windows; defaults to one second. False pauses execution. */
     releaseWindows?: { intervalMs?: number | false };
+    /** Measured stages; provider isolation requires native supervisor leadership and managed ingress. */
     canary?: ManagedCanaryOptions;
     jobs?: PlatformJobOperationsOptions;
     previews?: PlatformPreviewOptions;

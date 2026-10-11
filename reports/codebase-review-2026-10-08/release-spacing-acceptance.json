@@ -1,0 +1,42 @@
+{
+  "scope": "Accepted package maintenance; no additional roadmap feature",
+  "pullRequest": "https://github.com/nearbycoder/clank.run/pull/348",
+  "head": "7995765aec8ff76f66f3fe18783574da0127cb03",
+  "acceptedMain": "cc9ca9135fad59c9e0a6c7c6bcf9915355a44d74",
+  "tree": "c64e14737fdef872990bb00627a6092a3f4c88e3",
+  "authorComment": 5481742619,
+  "authorCommentIsIndependentApproval": false,
+  "hostedChecks": "All eight final-head checks passed; sole static-analysis notice is hosted Ubuntu image migration",
+  "fullGateSource": "52eb8e55594586e16bee73788b17ea295a5b0bdb",
+  "fullGateEach": {
+    "reported": 2273,
+    "passed": 2261,
+    "failed": 0,
+    "cancelled": 0,
+    "privilegedSkipped": 12
+  },
+  "qualification": "Native full gates ran at52eb. Final799 changed only six separately verified HTTP-fixture lines; all427 tracked product/build/docs/package inputs agree. The full gate did not execute final799 test bytes. Historical failures remain failed evidence.",
+  "package": {
+    "files": 417,
+    "unpackedBytes": 5987274,
+    "ceiling": 6291456,
+    "dependencies": 0
+  },
+  "artifacts": [
+    {
+      "path": "/tmp/clank-review-2026-10-08/release-spacing-gate03-evidence/release-spacing-full-source04-evidence-03.json",
+      "sha256": "6fd37fe6f5bb21a27ebf0283def1c57efe75786715e27c5af010fb503cfc4b08",
+      "bytes": 2413
+    },
+    {
+      "path": "/tmp/clank-review-2026-10-08/release-spacing-final-head-equivalence-01.json",
+      "sha256": "d76a0f714a1271b532c4b95fa5d980511d2db81895c1e438b58bc2f0e2a3a93f",
+      "bytes": 42507
+    },
+    {
+      "path": "/tmp/clank-review-2026-10-08/release-spacing-main-sync-01.json",
+      "sha256": "d1cb5cd7ca2bc7da698c39617d12c28373943c14262f932f5a8b34df9c97cba5",
+      "bytes": 396
+    }
+  ]
+}

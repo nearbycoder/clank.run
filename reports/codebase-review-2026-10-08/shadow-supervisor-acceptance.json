@@ -1,0 +1,49 @@
+{
+  "scope": "Accepted supervisor/schema prerequisite; Feature09 is not accepted",
+  "pullRequest": "https://github.com/nearbycoder/clank.run/pull/351",
+  "head": "4b05ab819ef945d124d18c0ca600b188c0bc3624",
+  "acceptedMain": "7c802d295b8cde99a0770101527e92db17c1c87c",
+  "tree": "dae176d1982e0401e1c09d553db4a0b1a9640b44",
+  "authorComment": 5481777491,
+  "authorCommentIsIndependentApproval": false,
+  "hostedChecks": "All eight final-head checks passed; sole static-analysis notice is hosted Ubuntu image migration",
+  "focusedEach": {
+    "reported": 35,
+    "passed": 35,
+    "failed": 0,
+    "cancelled": 0,
+    "skipped": 0
+  },
+  "packedTypeFixturesEach": 37,
+  "existingDiagnostics": 159,
+  "newDiagnostics": 0,
+  "package": {
+    "files": 419,
+    "unpackedBytes": 5993360,
+    "ceiling": 6291456,
+    "dependencies": 0
+  },
+  "qualification": "Native focused ownership/guardian/schema/process proofs and exact-head hosted gates accept this prerequisite. Complete shadow staging/controller/Docker/browser acceptance remains pending. The earlier stale417-file hosted audit remains failed evidence; reviewed419 allows only managed-shadow.js and its declaration.",
+  "artifacts": [
+    {
+      "path": "/tmp/clank-review-2026-10-08/shadow-supervisor-main-cc9ca91-01/evidence.json",
+      "sha256": "a5d4818a2cb4e3d1b13c6f6e9e2d776dc906ec66b96acedbdd40ed00ede0ac2a",
+      "bytes": 30558
+    },
+    {
+      "path": "/tmp/clank-review-2026-10-08/shadow-supervisor-security-repair-evidence-01.json",
+      "sha256": "2005570e13aef926da3d8a0f6da0a8437f8cdc092bfd24366ae0320aca8bc1d3",
+      "bytes": 1180
+    },
+    {
+      "path": "/tmp/clank-review-2026-10-08/shadow-supervisor-security-independent/review-01.json",
+      "sha256": "72045cd4bdb5657f86c7afa31112030fd06964ffdf2a6ddca749270c7e6618a2",
+      "bytes": 5519
+    },
+    {
+      "path": "/tmp/clank-review-2026-10-08/shadow-supervisor-main-sync-01.json",
+      "sha256": "b8f0cea50ae99a2e93bc028ed7f95080e9b692456f324a196eb7a0dca4a6309a",
+      "bytes": 396
+    }
+  ]
+}
