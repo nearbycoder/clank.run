@@ -474,5 +474,48 @@
       "path": "/tmp/clank-review-2026-10-08/shadow-peer-cleanup-lifetime-01/publication-boundary-07.json",
       "sha256": "f7e54c01221a61c499094a4c80101dfef18035e8842d6bb9b299ccbc80f866a2"
     }
+  },
+  "protectedMainDelivery": {
+    "mergedPR": 369,
+    "mergedCommit": "c191673aaf1aadfcb3426df768ce00adf1617315",
+    "mergedTree": "735e4661dfdbe848137b2722211414640cf67d8c",
+    "checkedHead": "01aa7eccbcd16754ec933fc9e6cf997f3ad54119",
+    "checks": {
+      "successful": 8,
+      "eachCompleteRuntimeAndConformance": {
+        "reported": 3469,
+        "passed": 3432,
+        "failed": 0,
+        "cancelled": 0,
+        "existingSkips": 37
+      }
+    },
+    "retryQualification": "Original minimumNode22 job reached25minute limit without a test summary. Same-source native isolated179provider cases pass, including native script interpreter and CI reporter/default concurrency. One targeted unchanged-job retry passed the complete3469suite. Exact original hosted stall remains unexplained; cancellation and all logs retained. No source/assertions/timeouts/profiles changed for retry.",
+    "originalPRs": 13,
+    "originalDeliveryHistoryHead": "01aa7eccbcd16754ec933fc9e6cf997f3ad54119",
+    "mainDelivery": "Normal protected squash through369; original13heads are retained in delivery history, not ancestors of linear squash main. Combined checked source tree exactly matchesmain.",
+    "synchronizedCheckouts": {
+      "/home/nearby/Sites/clank": {
+        "head": "c191673aaf1aadfcb3426df768ce00adf1617315",
+        "tree": "735e4661dfdbe848137b2722211414640cf67d8c",
+        "protectedFiles": 16,
+        "status": "?? reports/security-audit-2026-10-03/\n?? reports/security-audit-post-233-2026-09-20/\n?? verify-daily-log-oauth.mjs\n"
+      },
+      "/home/nearby/.vnc/codex-home/.codex/worktrees/d164/clank": {
+        "head": "c191673aaf1aadfcb3426df768ce00adf1617315",
+        "tree": "735e4661dfdbe848137b2722211414640cf67d8c",
+        "protectedFiles": 7,
+        "status": "?? reports/codebase-review-2026-10-08/document-review-desktop.jpg\n?? reports/codebase-review-2026-10-08/document-review-mobile.jpg\n?? reports/codebase-review-2026-10-08/hydration-desktop.png\n?? reports/codebase-review-2026-10-08/hydration-mobile.png\n?? reports/codebase-review-2026-10-08/translation-desktop.jpg\n?? reports/codebase-review-2026-10-08/translation-mobile.jpg\n?? reports/codebase-review-2026-10-08/typecheck.txt\n"
+      }
+    },
+    "remainingAcceptance": {
+      "accepted": 29,
+      "pending": 11
+    },
+    "openPRCount": 0,
+    "immutableBoundary": {
+      "path": "/tmp/clank-review-2026-10-08/feature-composition-merge-delivery-02/protected-main-delivery-final-45.json",
+      "sha256": "a0fb99fb18156d3495863ae5e4069bad8d6b6254153e0aa0ed1305f3cc68f80f"
+    }
   }
 }
