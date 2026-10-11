@@ -43,6 +43,18 @@ preparedProviderCanary.route.token satisfies string;
 preparedProviderCanary.route.token="changed";
 // @ts-expect-error approved public paths remain read-only
 preparedProviderCanary.route.readPaths.push("/private");
+void canaryService.canaries?.retire({primary:canaryPrimary,controllerEpoch:3,operationId:"canary_typed_01",releaseId:"candidate_release",capsuleSha256:providerDataInput.runtime.sha256,retirementEpoch:4});
+// @ts-expect-error retirement must include the current coordinator epoch separately from the prepare epoch
+void canaryService.canaries?.retire({primary:canaryPrimary,controllerEpoch:3,operationId:"canary_typed_01",releaseId:"candidate_release",capsuleSha256:providerDataInput.runtime.sha256});
+// @ts-expect-error retirement must bind the exact source capsule digest
+void canaryService.canaries?.retire({primary:canaryPrimary,controllerEpoch:3,operationId:"canary_typed_01",releaseId:"candidate_release",retirementEpoch:4});
+declare const retiredProviderCanary: Awaited<ReturnType<DeploymentProviderCanaryController["retire"]>>;
+retiredProviderCanary.phase satisfies "retired";
+retiredProviderCanary.retirementEpoch satisfies number;
+// @ts-expect-error an absence receipt does not grant a live route credential
+retiredProviderCanary.route.token;
+// @ts-expect-error retirement identity cannot be replaced by the caller
+retiredProviderCanary.capsuleSha256="changed";
 
 declare const preparedDockerInput: DockerDeploymentRuntimeLaunchInput;
 const isolatedDockerInput: DockerDeploymentRuntimeLaunchInput = {
