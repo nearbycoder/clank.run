@@ -27,6 +27,22 @@ export function installEnvironmentConsoleContext(context, html) {
     return source;
   }).join('\n');
   runInNewContext(channels, context);
+  // Sign-out clears the real shadow state too; do not replace its reset with a stub.
+  context.qa ??= selector => {
+    assert.equal(selector, '#shadow-sessions button');
+    const visit = node => (node.children ?? []).flatMap(child => [
+      ...((child.tagName ?? child.tag) === 'button' ? [child] : []), ...visit(child),
+    ]);
+    return visit(context.q('#shadow-sessions'));
+  };
+  const shadow = ['resetShadowView', 'shadowViewCurrent', 'shadowCanManage'].map(name => {
+    const source = html.match(new RegExp('^function ' + name + '\\([^\\n]+', 'm'))?.[0];
+    assert.ok(source, 'Shared shadow helper must be present: ' + name);
+    return source;
+  });
+  const controls = html.match(/^function syncShadowControls\(\)\{[\s\S]*?^\}/m)?.[0];
+  assert.ok(controls, 'Shared shadow controls must be present.');
+  runInNewContext([...shadow, controls].join('\n'), context);
   const reset=html.match(/^function resetEnvironmentReview\(\)[^\n]+/m)?.[0];
   const save=html.match(/^function saveEnvironmentDraft\(\)\{[\s\S]*?^\}/m)?.[0];
   assert.ok(reset&&save,'Console environment helpers must be present.');

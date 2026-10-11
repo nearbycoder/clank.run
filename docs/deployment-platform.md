@@ -272,6 +272,79 @@ Earlier binaries reject that catalog before acquiring writer duties, even after 
 been retired or the option is disabled. There is no automatic downgrade: keep a compatible binary
 for this catalog. Ordinary catalogs without provider-canary enrollment retain protocol 1.
 
+### Shadow operator controls
+
+The Console's **Deployments → Shadow traffic** panel compares bounded anonymous read traffic
+against an isolated candidate checkpoint. Shadowing never activates the candidate or promotes
+its data. Reports and exact stop controls remain available when new shadow sessions are disabled.
+Read-only support sessions can inspect reports but cannot upload, preview, start, or stop.
+
+First select an existing inactive immutable release, or use **Upload artifact only** to retain a
+validated artifact without deploying it. Create an artifact offline with
+`clank deploy --dry-run --output=/secure/path/release.clank.gz`, then select it in the Console;
+an optional release attestation uses the same format as ordinary deployment. The upload sends
+`POST /api/projects/:id/releases/stage` with the binary
+`application/vnd.clank.deploy+gzip` body, `x-clank-content-sha256`, a stable
+`x-clank-idempotency-key`, and the human session's `x-clank-csrf`. Server artifact quotas and
+attestation rules still apply. An upload-only release is labeled explicitly in the release selector.
+
+Choose a subset of the configured GET/HEAD paths and resource limits, then **Review comparison**.
+The Console sends `{ releaseId, expectedEpoch, policy }` to
+`POST /api/projects/:id/shadow/preview`. Review binds the immutable artifact digest, primary
+release and generation, policy revision, and current retained epoch. Its token expires after
+120 seconds. **Start reviewed comparison** sends only `{ reviewToken, idempotencyKey }` to
+`POST /api/projects/:id/shadow/start`; acceptance records intent and does not establish that a
+candidate is running or that its comparison passed. Field, project, session, permission, or epoch
+changes invalidate the displayed review. The acknowledgment must match the captured artifact,
+policy revision and exact normalized narrowing; neither a wider nor an unexpectedly narrower
+response becomes startable. Malformed preview or status responses remain unavailable;
+they never create a startable review or claim that no sessions exist.
+
+Human mutations require a current non-impersonating session, current deploy permission, CSRF,
+and fresh authentication even when optional general freshness settings are off. A
+fresh-authentication refusal remains visible: verify with a passkey or MFA, inspect current
+status, then explicitly repeat the intended action. The Console never automatically resends a
+mutation. A successful HTTP status alone is not acknowledgment: unreadable, truncated, or
+identity-mismatched response bodies remain uncertain. Start responses must match the reviewed
+release, digest, primary, policy and revision; stage responses must identify the same project,
+digest, byte count and available upload-only artifact. Uncertain start and upload responses retain
+the exact request identity locally for an explicit retry; upload retries retain the same bytes, digest,
+and key. Leaving the view or signing
+out discards those local retry details. Discarding them does not cancel a server operation.
+
+`GET /api/projects/:id/shadow` lists at most 20 retained sessions per page with bounded
+`limit`/`before` pagination. The Console returns the exact opaque `clankshc1` cursor (at most
+512 ASCII bytes) to the same project's list route. A stale or invalid cursor fails visibly and
+requires an explicit refresh; paging never mutates a session.
+`GET /api/projects/:id/shadow/:sessionId` reads one exact session. Status distinguishes immutable
+original `controllerEpoch` from `epoch`, the advancing retained status version. **Stop shadow
+session** and **Retry exact stop** both use
+`POST /api/projects/:id/shadow/:sessionId/stop` with exactly
+`{ operationId, controllerEpoch }` from that session. The UI does not substitute a newer epoch or
+invent a recovery endpoint. A stop acknowledgment is not proof of candidate absence: retained
+`cleanupRequired` remains visible until exact retirement is acknowledged. Failed or uncertain
+stop requests refresh status once and require an explicit retry. Late responses cannot replace
+another project's state or move focus away from a control selected while the request was pending.
+
+Reports expose only bounded transport aggregates. `reserved` counts durable attempts, `settled`
+counts completed outcome records, and `comparable` requires both bounded bodies to complete and
+both media types to be valid. `bothComplete` includes bounded EOF pairs with invalid media types.
+Status-class and media-type equal/different counts each sum to `comparable`; fixed unknown reason
+counts plus comparable sum to settled. The latency table shows cumulative counts at
+1, 5, 10, 25, 50, 100, 250, 500, 1,000, 2,500, 5,000 and 10,000 ms, plus overflow and unknown.
+Each side's population equals settled attempts, including completed observations from pairs that
+were not comparable. No percentile is inferred from the buckets. Legacy reports retain exactly
+these aggregates. Version-two reports also show the six fixed skip counters as saturating
+best-effort lower bounds, excluded from every comparison and latency denominator. Pruned
+aggregates remain unavailable while their compact immutable session identity stays visible.
+
+A verified snapshot is labeled as an isolated checkpoint with its digest, byte length, provider
+acquisition interval, and platform observation time. Elapsed time since observation is unavailable
+after restart, and cross-host wall-clock freshness is always unknown. Missing snapshots and
+incomplete reports are shown as unavailable. Transport aggregates do not establish semantic
+correctness, data freshness, or deployment approval. The read-only CLI exposes the same status
+with `clank shadow status [directory] [--session <id>] [--json]`.
+
 An unexpected worker or scheduler exit crashes and restarts the complete release group instead of
 leaving a healthy-looking web process with stale background work. Read
 [Durable jobs and cron](jobs-and-cron.md) for queue correctness and process-provider requirements.
