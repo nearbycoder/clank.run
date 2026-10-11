@@ -296,7 +296,11 @@ test('independent schedule runners accept one due occurrence under the persisted
     for (const child of children) await child.close(); children.length = 0;
     assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_retention_receipts WHERE operation_id LIKE 'schedule:%'").get().n, 1);
     assert.equal(f.native.prepare('SELECT count(*) AS n FROM clank_durableImportChunks').get().n, 0);
-    const [rule] = await c.schedules(a.id); assert.equal(rule.version, 2); assert.ok(rule.lastReceipt.records > 0); assert.ok(rule.nextAt > Date.now());
+    const [rule] = await c.schedules(a.id); assert.equal(rule.version, 2); assert.ok(rule.lastReceipt.records > 0);
+    // Advancing a due occurrence promises the next grid point after its stored
+    // execution time; process exit and the parent read may cross that grid point.
+    assert.ok(rule.nextAt > rule.lastAt);
+    assert.equal(rule.nextAt, (Math.floor(rule.lastAt / rule.everyMs) + 1) * rule.everyMs);
   } finally { for (const child of children) await child.dispose(); await f.close(); }
 });
 

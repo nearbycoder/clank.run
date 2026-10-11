@@ -131,3 +131,40 @@ test('disposed synchronization controls and late failures cannot submit or chang
   await synchronize.onclick();
   assert.deepEqual(f.calls, [['flush']]); assert.equal(f.document.activeElement, f.elsewhere); assert.equal(f.root.childNodes.length, 0);
 });
+
+async function observeRefresh(check) {
+  const deadline=Date.now()+4000;
+  while(!check()){if(Date.now()>=deadline)throw Error('Expected current refresh was not observed.');await new Promise(resolve=>setTimeout(resolve,10));}
+}
+
+test('current successful refresh restores Synchronize after a transient snapshot error without taking focus',async t=>{
+ const f=await fixture(t),synchronize=button(f.root,'Synchronize attachments');let reads=0;
+ f.queue.snapshot=async()=>{if(++reads===1)throw Error('Declared transient snapshot failure');return [failed]};f.elsewhere.focus();
+ await observeRefresh(()=>reads===1);assert.equal(synchronize.disabled,true);assert.equal(synchronize.getAttribute('aria-disabled'),'true');assert.match(f.root.textContent,/Attachments unavailable for this account/);
+ await observeRefresh(()=>reads===2);assert.match(f.root.textContent,/1 pending attachment/);assert.equal(button(f.root,'Retry').disabled,false);assert.equal(synchronize.disabled,false);assert.equal(synchronize.getAttribute('aria-disabled'),'false');assert.equal(f.document.activeElement,f.elsewhere);
+ f.queue.flush=async()=>{f.calls.push(['flush'])};await synchronize.onclick();assert.deepEqual(f.calls,[['flush']]);
+});
+
+test('recovered snapshot keeps a pending Synchronize guarded until its actual outcome',async t=>{
+ const f=await fixture(t),synchronize=button(f.root,'Synchronize attachments'),releases=[];let reads=0;
+ f.queue.flush=()=>{f.calls.push(['flush']);return new Promise(resolve=>releases.push(resolve))};const first=synchronize.onclick();
+ f.queue.snapshot=async()=>{if(++reads===1)throw Error('Declared transient snapshot failure');return [failed]};
+ await observeRefresh(()=>reads===1);assert.equal(synchronize.disabled,true);
+ await observeRefresh(()=>reads===2);assert.equal(synchronize.disabled,false);assert.equal(synchronize.getAttribute('aria-disabled'),'true');await synchronize.onclick();assert.deepEqual(f.calls,[['flush']]);
+ releases[0]();await first;assert.equal(synchronize.getAttribute('aria-disabled'),'false');const next=synchronize.onclick();releases[1]();await next;assert.deepEqual(f.calls,[['flush'],['flush']]);
+});
+
+test('late successful refresh after disposal cannot reactivate detached synchronization',async t=>{
+ const f=await fixture(t),synchronize=button(f.root,'Synchronize attachments');let reads=0,release;
+ f.queue.snapshot=async()=>{if(++reads===1)throw Error('Declared transient snapshot failure');return new Promise(resolve=>{release=resolve})};
+ await observeRefresh(()=>reads===1);assert.equal(synchronize.disabled,true);await observeRefresh(()=>reads===2);f.dispose();f.elsewhere.focus();release([failed]);await settle();
+ f.queue.flush=async()=>{f.calls.push(['flush'])};await synchronize.onclick();assert.equal(synchronize.disabled,true);assert.equal(synchronize.getAttribute('aria-disabled'),'true');assert.equal(f.root.childNodes.length,0);assert.equal(f.document.activeElement,f.elsewhere);assert.deepEqual(f.calls,[]);
+});
+
+for(const newer of ['subscription','snapshot'])test('late failed snapshot cannot replace a newer '+newer+' or steal its focus',async t=>{
+ const f=await fixture(t),synchronize=button(f.root,'Synchronize attachments');let reads=0,reject;const current={...failed,status:'pending',errorCode:undefined};
+ f.queue.snapshot=async()=>{if(++reads===1)return new Promise((resolve,fail)=>{reject=fail});return [current];};
+ await observeRefresh(()=>reads===1);if(newer==='subscription')f.emit([current]);else await observeRefresh(()=>reads===2);
+ const retry=button(f.root,'Retry');retry.focus();assert.match(f.root.textContent,/pending attachment/);assert.equal(synchronize.disabled,false);reject(Error('Declared superseded snapshot failure'));await settle();
+ assert.equal(button(f.root,'Retry'),retry);assert.equal(f.document.activeElement,retry);assert.equal(synchronize.disabled,false);assert.equal(synchronize.getAttribute('aria-disabled'),'false');assert.doesNotMatch(f.root.textContent,/unavailable/);
+});
