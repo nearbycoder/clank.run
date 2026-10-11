@@ -185,8 +185,10 @@ for (const expected of ["README.md", "SECURITY.md", "LICENSE", "dist/index.js", 
 // Proposal #339 adds exactly the private managed-shadow.js policy/report helper
 // and its declaration; the package byte ceiling remains unchanged.
 // Feature38 adds exactly project-costs.js/.d.ts and platform-project-costs.js/.d.ts.
-// Proposal #338 private ownership adds exactly provider-handoff.js and provider-docker-client.js.
-if ((packResult?.entryCount ?? 0) > 425) fail("Published package unexpectedly exceeds 425 files.");
+// Accepted staging adds exactly the private object-storage-internal.js module.
+// Proposal #338 retains private provider-handoff.js and provider-docker-client.js.
+// 422 accepted files plus four cost outputs; unchanged 6 MiB ceiling.
+if ((packResult?.entryCount ?? 0) > 426) fail("Published package unexpectedly exceeds 426 files.");
 if ((packResult?.unpackedSize ?? 0) > 6 * 1024 * 1024) fail("Published package unexpectedly exceeds 6 MiB unpacked.");
 pass(`publish allowlist contains ${packResult?.entryCount ?? 0} bounded files`);
 
