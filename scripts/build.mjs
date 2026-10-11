@@ -58,8 +58,8 @@ function compactReleaseLayout(source, preserveInteriorSpacing = false) {
   const isSeparator = character => Boolean(character && ";,:()[]{}".includes(character));
   const expressionWords = new Set(["return", "throw", "case", "default", "extends", "delete", "void", "typeof", "new", "instanceof", "in", "yield", "await", "else", "do"]);
 
-  // Native compilation has parsed this module. A regexp literal cannot cross
-  // a line terminator; without another slash on this line, division is certain.
+  // A regexp literal cannot cross a line terminator; without another slash
+  // on this line, division is certain. Declaration types have no regex literals.
   function noClosingSlash(start) {
     for (let index = start + 1; index < source.length; index++) {
       if (isLineEnd(source[index])) return true;
@@ -237,6 +237,16 @@ function compactReleaseLayout(source, preserveInteriorSpacing = false) {
   return parts.join("");
 }
 
+// Private Buffer-in/Buffer-out build/audit contract, not a package export.
+// Mapped copies and malformed UTF-8 stay byte-exact. Eligible declarations
+// retain interior spacing and every literal/comment byte.
+export function declarationReleaseLayout(source, { sourceMap = process.env.CLANK_SOURCE_MAPS === "1" } = {}) {
+  if (sourceMap) return source;
+  const text = source.toString("utf8");
+  if (!Buffer.from(text).equals(source)) return source;
+  return Buffer.from(compactReleaseLayout(text, true));
+}
+
 export async function build({ quiet = false } = {}) {
   const started = performance.now();
   const sourceRoot = join(projectRoot, "src");
@@ -248,7 +258,7 @@ export async function build({ quiet = false } = {}) {
     const output = join(outputRoot, relative(sourceRoot, path));
     if (path.endsWith(".d.ts")) {
       expectedOutputs.add(output);
-      await writeFileAtomically(output, await readFile(path));
+      await writeFileAtomically(output, declarationReleaseLayout(await readFile(path)));
     } else if (/\.tsx?$/.test(path)) {
       const javascriptOutput = output.replace(/\.tsx?$/, ".js");
       expectedOutputs.add(javascriptOutput);
