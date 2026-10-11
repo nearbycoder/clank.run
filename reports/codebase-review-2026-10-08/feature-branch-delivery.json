@@ -119,5 +119,28 @@
       "path": "/tmp/clank-review-2026-10-08/shadow-observer-ci-deadline-01/publication-test-fix-05.json",
       "sha256": "60e307687fa78f4b2adaa0c7e4d408ccf548efe58c9a304476d0b2c7c904ab01"
     }
+  },
+  "hostedCapacityCorrection": {
+    "priorHead": "f7d393afe41e9a29a5fe25e0dbbfb29521128f93",
+    "testSHA256": "6ad0151f930b62905d342281b6c6b0d35a3e1d152d484a22705a8ca151479126",
+    "workflowSHA256": "c4fbeae19bdf0821cac4905d1c14aeea4c83c1237dec34e41dfa8e45e867b74e",
+    "unchangedAssertions": 178,
+    "unchangedOutputs": 320,
+    "qualification": "Five selected modules pass 101/101 on both runtimes with actual coverage, zero failures/cancellations/skips. Original first-batch 6s completion fault and 350ms secondary admission pacing fail before and pass after. The first after04 probe also delayed the unrelated fresh seventeenth request and failed its separate observation; it is retained and qualified in probe-scope-correction-05.json. Production limits/source, exported types, package/dependencies and main protections unchanged. Runtime/conformance job limits increase from15 to25 minutes; native PostgreSQL/type limits remain10. No feature acceptance increment.",
+    "evidence": {
+      "path": "/tmp/clank-review-2026-10-08/shadow-observer-capacity-01/publication-capacity-fix-06.json",
+      "sha256": "f384c80b8d76a96430912ef7256b36a766d750f7f8fc841d1ad55440c9c533f3"
+    },
+    "hostedBefore": {
+      "head": "f7d393afe41e9a29a5fe25e0dbbfb29521128f93",
+      "successful": 5,
+      "runtimeCancelledAt15Minutes": 2,
+      "packageConclusion": "failure",
+      "packageFailures": [
+        "Timed out: all real candidates completed",
+        "secondary native cancellations16!==15"
+      ],
+      "qualification": "Package tests completed in approximately13minutes; Node24 was still progressing when its15minute limit expired; Node22 stalled at an unbounded cancellation marker."
+    }
   }
 }
