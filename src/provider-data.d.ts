@@ -56,6 +56,8 @@ export interface DeploymentProviderDataApplyInput {
   readonly desired: DeploymentProviderDesiredState;
   readonly runtime: DeploymentRuntimeCapsule;
   readonly signal: AbortSignal;
+  /** Refuse pending SQL; the checkpoint must already contain the exact migration history. */
+  readonly codeOnly?: boolean;
 }
 
 export interface DeploymentProviderDataSnapshot {

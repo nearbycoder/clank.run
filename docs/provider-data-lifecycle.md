@@ -172,6 +172,14 @@ state and the operation fails closed. After the launcher removes the process, a 
 `inspect`, `apply`, or snapshot safely completes journal recovery. Background workers should be
 deferred until after apply commits; the complete provider service enforces both rules.
 
+For an isolated code-only candidate, pass `codeOnly: true` in the apply input. The native
+migration worker checks the restored checkpoint's complete immutable migration history and
+refuses any pending SQL before execution or runtime validation. Removed or edited applied
+migrations also reject. The option is a strict boolean; omitting it preserves normal migration
+behavior. This guard does not make an authoritative database read-only: the caller must use an
+isolated checkpoint, enforce the candidate's filesystem/network policy, and stop the candidate
+before deleting its data. The optional provider-service canary controller composes those steps.
+
 The journal makes the filesystem transaction restart-safe:
 
 - before metadata commits, recovery restores the safety snapshot and removes the candidate;

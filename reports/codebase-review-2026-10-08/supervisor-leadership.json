@@ -1,7 +1,7 @@
 {
   "feature": 6,
   "proposal": "https://github.com/nearbycoder/clank.run/issues/313",
-  "status": "accepted",
+  "status": "accepted-protected-merge",
   "counted": true,
   "base": "0729abca3ed24743b2af1a25089071e7107a81f7",
   "implemented": [
@@ -316,13 +316,35 @@
   "protectedAcceptance": {
     "pullRequest": "https://github.com/nearbycoder/clank.run/pull/314",
     "head": "730a464ebeb9ef539efd4d39dd71a63e54d2cc59",
-    "merge": "7bdb73efc3bf297c566d63814223306b047b2792",
+    "merged": "7bdb73efc3bf297c566d63814223306b047b2792",
     "tree": "dc38208285eb0c9299facad74249aa9552ec8737",
     "normalExpectedHeadSquash": true,
-    "allSixFinalChecks": "success",
-    "authorComment": 5478557857,
+    "mergeResult": {
+      "content": [
+        {
+          "type": "text",
+          "text": "Action completed."
+        }
+      ],
+      "structuredContent": {
+        "sha": "7bdb73efc3bf297c566d63814223306b047b2792",
+        "merged": true,
+        "message": "Pull Request successfully merged"
+      },
+      "isError": false
+    },
+    "authorCommentReviewId": 5478557857,
     "independentApprovalClaim": false,
-    "originalLocalFilesPreserved": 23,
-    "proofSha256": "1fd3ae7b9e57ac266c7d69c3ce208001c1f5a80200f0524d2287825edf9e4f5d"
-  }
+    "hostedFinalSha256": "198622638d98e1c52a0122abc8351671a70e3623afae5d9d3ecd1dfad4827059",
+    "bindingSha256": "ef800272fec0027241772156151d97043e8cd4d46e1e5b7989e6e7344c490b93",
+    "original95FileIndex": "cde1856375a32dcc284c2e68f224d08377b28afd8f6380f297ccada30f337847",
+    "additional31FileIndex": "783a3916d178a5813e6de593c787c807b839a95c0362e0717ca2ad92d950da82",
+    "originalFilesPreserved": 23,
+    "primaryCheckout": "7bdb73efc3bf297c566d63814223306b047b2792",
+    "originalCheckout": "7bdb73efc3bf297c566d63814223306b047b2792",
+    "acceptedFeatures": 27,
+    "acceptedBatches": 24,
+    "remainingFeatures": 13
+  },
+  "protectedAcceptanceSha256": "1fd3ae7b9e57ac266c7d69c3ce208001c1f5a80200f0524d2287825edf9e4f5d"
 }

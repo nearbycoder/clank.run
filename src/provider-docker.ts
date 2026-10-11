@@ -426,6 +426,35 @@ export async function openDockerDeploymentRuntimeLauncher(
     }
   };
 
+  const inspectIsolationNetwork = async (plan: LinuxDockerNetworkPlan, projectId: string) => {
+    const inspected = await docker(["network", "inspect", plan.network], { allowFailure: true });
+    if (inspected.code !== 0) {
+      const names = await docker(["network", "ls", "--format", "{{.Name}}"]);
+      if (names.stdout.split(/\r?\n/).includes(plan.network)) throw new Error("Cannot verify isolated Docker network absence; policy retained.");
+      return undefined;
+    }
+    const states = JSON.parse(inspected.stdout), state = states?.[0];
+    if (!Array.isArray(states) || states.length !== 1 || state?.Name !== plan.network || !/^[a-f0-9]{64}$/u.test(state?.Id ?? "")
+      || state.Driver !== "bridge" || state.Options?.["com.docker.network.bridge.name"] !== plan.bridge
+      || state.Labels?.["run.clank.owner"] !== owner || state.Labels?.["run.clank.project"] !== projectId
+      || !state.Containers || typeof state.Containers !== "object" || Array.isArray(state.Containers) || Object.keys(state.Containers).length) {
+      throw new Error("Refusing isolated Docker network cleanup without matching empty project ownership.");
+    }
+    return state.Id as string;
+  };
+
+  const removeIsolationNetwork = async (projectId: string, plan: LinuxDockerNetworkPlan, nftExecutable?: string) => {
+    const containers = await listContainers(docker, ["label=run.clank.managed=provider-runtime", `label=run.clank.owner=${owner}`, `label=run.clank.project=${projectId}`]);
+    if (containers.length) throw new Error("Refusing isolated Docker network cleanup while project containers remain.");
+    const networkId = await inspectIsolationNetwork(plan, projectId);
+    if (networkId) {
+      // Remove the inspected identity, never a replacement that reuses its name.
+      await docker(["network", "rm", networkId], { allowFailure: true });
+      if (await inspectIsolationNetwork(plan, projectId)) throw new Error("Isolated Docker network cleanup did not converge; policy retained.");
+    }
+    await removeLinuxDockerNetworkPolicy(plan, nftExecutable);
+  };
+
   const removeRecord = async (record: RuntimeRecord, force = false): Promise<void> => {
     record.pendingBackground = null;
     if (!record.controller.signal.aborted) {
@@ -457,12 +486,7 @@ export async function openDockerDeploymentRuntimeLauncher(
       waitForChildExit(process.child, 2_000)));
     if (record.isolationNetwork) {
       const { plan, executable } = record.isolationNetwork;
-      const removed = await docker(["network", "rm", plan.network], { allowFailure: true });
-      if (removed.code !== 0) {
-        const names = await docker(["network", "ls", "--format", "{{.Name}}"]);
-        if (names.stdout.split(/\r?\n/).includes(plan.network)) throw new Error("Isolated Docker network cleanup did not converge; policy retained.");
-      }
-      await removeLinuxDockerNetworkPolicy(plan, executable);
+      await removeIsolationNetwork(record.candidate.projectId, plan, executable);
       record.isolationNetwork = undefined;
     }
     const current = records.get(record.candidate.projectId);
@@ -1013,7 +1037,16 @@ export async function openDockerDeploymentRuntimeLauncher(
         : integer(generationInput, "generation", 1, Number.MAX_SAFE_INTEGER);
       return exclusive(projectId, async () => {
         const record = records.get(projectId);
-        if (!record || (generation !== undefined && record.candidate.generation !== generation)) {
+        if (!record) {
+          if (generation !== undefined && highWater.has(projectId) && highWater.get(projectId)!.generation !== generation) return false;
+          if (options.outboundNetwork) {
+            const policy = typeof options.outboundNetwork === "function" ? options.outboundNetwork(projectId) : options.outboundNetwork;
+            const plan = await createLinuxDockerNetworkPlan(owner, projectId, { allowCidrs: [] });
+            await removeIsolationNetwork(projectId, plan, policy.nftExecutable);
+          }
+          return false;
+        }
+        if (generation !== undefined && record.candidate.generation !== generation) {
           return false;
         }
         await removeRecord(record);
