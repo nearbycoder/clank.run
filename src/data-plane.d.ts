@@ -75,6 +75,19 @@ export type IngressAdmissionDecision = {
     retryAfterSeconds: number;
 };
 export type IngressAdmissionPolicy = (request: Readonly<IngressAdmissionRequest>) => IngressAdmissionDecision | void | Promise<IngressAdmissionDecision | void>;
+export interface IngressShadowMetadata {
+    readonly statusClass: 1 | 2 | 3 | 4 | 5 | null;
+    readonly mediaType: string | null;
+    readonly headersElapsedMs: number;
+    readonly bodyExpected: boolean;
+}
+export interface IngressShadowTap {
+    chunk(byteLength: number): undefined;
+    finish(kind: "complete" | "cancelled" | "error", elapsedMs: number): undefined;
+}
+export interface IngressShadowObserver {
+    observe(request: Request, primary: Readonly<IngressRoute>, metadata: Readonly<IngressShadowMetadata>): IngressShadowTap | undefined;
+}
 export declare function createManagedIngress(options: {
     routes: IngressRouteStore | (() => readonly IngressRoute[] | Promise<readonly IngressRoute[]>);
     fetch?: typeof fetch;
@@ -94,6 +107,8 @@ export declare function createManagedIngress(options: {
     prepareRoute?: (route: Readonly<IngressRoute>) => void | Promise<void>;
     /** Synchronously checks native ownership of the primary route and its selected canary before effects and across response awaits. */
     assertCanaryCurrent?: (route: Readonly<IngressRoute>) => undefined;
+    /** Bounded metadata/byte-count observation of primary responses; failures never affect traffic. */
+    shadow?: IngressShadowObserver;
     onRequest?: (metric: IngressRequestMetric) => void | Promise<void>;
 }): ManagedIngress;
 export interface DomainChallenge {

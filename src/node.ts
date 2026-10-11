@@ -1,4 +1,4 @@
-import { setTrustedClientAddress } from "./security.ts";
+import { captureExactRequest, setTrustedClientAddress, takeRequestHandoff } from "./security.ts";
 
 export interface FetchApplication {
   handle(request: Request): Response | Promise<Response>;
@@ -35,6 +35,7 @@ interface IncomingRequest extends AsyncIterable<Uint8Array> {
   method?: string;
   url?: string;
   headers: Record<string, string | string[] | undefined>;
+  rawHeaders: string[];
   socket: { encrypted?: boolean; remoteAddress?: string };
   once(event: "aborted", listener: () => void): void;
 }
@@ -73,6 +74,9 @@ class NodeRequestError extends Error {
 export async function serve(app: FetchApplication | ((request: Request) => Response | Promise<Response>), options: ServeOptions = {}): Promise<ServerHandle> {
   const moduleName = "node:http";
   const { createServer } = await import(moduleName) as unknown as HttpModule;
+  const cryptoName = "node:crypto", timersName = "node:timers";
+  const [crypto, timers] = await Promise.all([import(cryptoName), import(timersName)]);
+  const digest = (value: string): string => crypto.createHash("sha256").update(value).digest("hex");
   const hostname = options.hostname ?? "127.0.0.1";
   const requestedPort = options.port ?? 3000;
   const handler = typeof app === "function" ? app : (request: Request) => app.handle(request);
@@ -96,7 +100,7 @@ export async function serve(app: FetchApplication | ((request: Request) => Respo
     requestTimeout: options.requestTimeout ?? 30_000,
     keepAliveTimeout: options.keepAliveTimeout ?? 5_000,
   }, (incoming, outgoing) => {
-    void dispatch(incoming, outgoing, handler, effectiveOptions).catch((error) => {
+    void dispatch(incoming, outgoing, handler, effectiveOptions, digest, timers.setImmediate).catch((error) => {
       try { void Promise.resolve(effectiveOptions.onError?.(error)).catch(() => undefined); }
       catch { /* Private logging must not prevent a response from reaching the socket. */ }
       try {
@@ -234,7 +238,10 @@ async function dispatch(
   outgoing: OutgoingResponse,
   handler: (request: Request) => Response | Promise<Response>,
   options: ServeOptions,
+  digest: (value: string) => string,
+  afterWrite: (callback: () => void) => unknown,
 ): Promise<void> {
+  const attachExact = captureExactRequest(incoming.method, incoming.url, incoming.rawHeaders, options.trustProxy === true, digest);
   const headers = new Headers();
   for (const [name, value] of Object.entries(incoming.headers)) {
     if (Array.isArray(value)) for (const entry of value) headers.append(name, entry);
@@ -280,6 +287,13 @@ async function dispatch(
     ...init,
   });
   setTrustedClientAddress(request, forwardedFor || incoming.socket.remoteAddress || "unknown");
+  attachExact?.(request);
+  let handedOff = false;
+  const handoff = (): void => {
+    if (handedOff || responseClosed) return; handedOff = true;
+    const callback = takeRequestHandoff(request);
+    if (callback) afterWrite(callback);
+  };
   const response = await handler(request);
   // If an application translated the stream error into its own response, the
   // transport limit still wins. Otherwise a chunked upload could turn a 413
@@ -303,6 +317,7 @@ async function dispatch(
   if (!response.body || method === "HEAD") {
     await response.body?.cancel("HEAD response has no body").catch(() => undefined);
     outgoing.end();
+    handoff();
     return;
   }
   const reader = response.body.getReader();
@@ -312,7 +327,9 @@ async function dispatch(
     while (!responseClosed) {
       const { done, value } = await reader.read();
       if (done || responseClosed) break;
-      if (!outgoing.write(value)) {
+      const writable = outgoing.write(value);
+      handoff();
+      if (!writable) {
         await new Promise<void>((resolve) => {
           const resume = () => {
             outgoing.removeListener("drain", resume);
@@ -326,6 +343,7 @@ async function dispatch(
       }
     }
     outgoing.end();
+    handoff();
   } finally {
     outgoing.removeListener("close", cancelResponse);
     reader.releaseLock();

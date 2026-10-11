@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 import { compile } from '../scripts/compiler.mjs';
 
 const execute = promisify(execFile);
+const declarationFixture = "/** IDE documentation keeps  every byte.\n * Including indentation and `templates`. */\nexport interface Contract {\n    readonly value?: Readonly<Record<string, `key-${string}`>>;\n}\nexport declare const value: number;\n";
 const fixtures = {
   ordinary: 'export function snapshot() {\n    const first = 7;\n    const second = 9;\n    return [first + second, "a  b", /a  b/u.source];\n}\n',
   literals: 'export function snapshot() {\n    const sql = `SELECT  title,  owner\n  FROM  records\n   \n\t WHERE title = \'a  b\';`;\n    const raw = String.raw`first\\n\n  second\\t\n   `;\n    const escaped = "first\\\n    second";\n    return [sql, raw, escaped, "🧪  café  Ελληνικά", /["\'`/]/u.source];\n}\n',
@@ -37,6 +38,16 @@ const fixtures = {
   defaultRegex: 'export default /`/.source;\nconst first = `first\n   keep`;\nconst second = `second\n   keep`;\nexport function snapshot() {\n    return [first, second, /`/.source];\n}\n',
   extendsRegex: 'class Value extends /`/.constructor {}\nconst first = `first\n   keep`;\nconst second = `second\n   keep`;\nexport function snapshot() {\n    return [new Value().source, first, second, /`/.source];\n}\n',
 };
+// Separator spacing must preserve native grammar and every literal byte.
+Object.assign(fixtures, {
+  jobs: 'export function snapshot() {\n    const output = (context) => context.results;\n    return Function.prototype.toString.call(output);\n}\n',
+  separators: "function sum ( first : number , ... rest : number [ ] ) : number { return rest.reduce ( ( total , value ) => total + value , first ) ; }\nexport function snapshot ( ) { const object = { first : 2 , second : [ 3 , 4 ] } ; const { first , second : [ ... rest ] } = object ; const nested = ( ( value ) => ( { value } ) ) ( sum ( first , ... rest ) ) ; return [ nested.value , Object.keys ( object ) ] ; }\n",
+  operatorBoundaries: "export function snapshot ( ) { let first = 2 ; let second = 4 ; const plus = first + ++ second ; const minus = second - -- first ; const number = 1 .toString ( ) ; const doubleDot = 2..toString ( ) ; const fraction = true ? .1 : .2 ; const object = { method ( value ) { return value + 1 ; } } ; const nil = null ; return [ plus , minus , first , second , number , doubleDot , fraction , object ?. method ?. ( 3 ) , object ?. [ \"method\" ] ( 4 ) , nil ?? ( 9 ) , typeof first , first instanceof Number ] ; }\n",
+  separatorRegex: "export function snapshot ( ) { const quotient = ( 24 ) / 2 ; const expression = /[(){}:;, ]+/u ; const comment = ( 12 ) /* comment ( : { } , ) */ / 3 ; return [ quotient , expression.source , expression.test ( \" ( ) , \" ) , comment , ( /x/ ) .test ( \"x\" ) ] ; }\n",
+  keywordBoundaries: "async function resolve ( value ) { return await ( value ) ; }\nfunction * values ( ) { yield ( 2 ) ; yield * [ 3 , 4 ] ; }\nexport async function snapshot ( ) { const object = { key : 1 } ; const removed = delete ( object.key ) ; let message ; try { throw ( new Error ( \"kept\" ) ) ; } catch ( error ) { message = error.message ; } return [ await resolve ( 7 ) , [ ... values ( ) ] , removed , message , typeof ( object ) , void ( 3 ) ?? \"none\" ] ; }\n",
+  separatorASI: "function returned ( ) { return\n  { value : 9 } ; }\nexport function snapshot ( ) { let value = 1\n  value ++\n  ; [ 2 ].forEach ( item => { value += item ; } )\n  const object = { method ( ) { return value ; } }\n  const result = object\n    ?. method ( )\n  return [ returned ( ) ?? \"undefined\" , value , result ]\n}\n",
+  separatorLiterals: "export function snapshot ( ) { const value = 3 ; const raw = String.raw`raw ( : [ ] )\n  ${ ( value ) }\n  exact` ; const tag = ( parts , item ) => [ parts [ 0 ] , item , parts.raw [ 1 ] ] ; const tagged = tag`before\n   ${ ( value ) }\n  after` ; return [ raw , tagged , \"a ( ) : [ ]  b\" , `SELECT  ( value )\n  FROM  rows;` ] ; }\n",
+});
 // Beyond the release scanner's stricter bound, but accepted by the minimum
 // Node22 native parser. A 258-level fixture crashes that older parser before
 // our build pass runs, so it cannot demonstrate scanner fallback there.
@@ -51,7 +62,7 @@ async function releaseBuild(t, mapped = false) {
   }
   await writeFile(join(root, 'docs', 'getting-started.md'), '# Setup\n\n## Set up with an agent\n\n```text\nUse the canonical setup prompt.\n```\n');
   for (const [name, source] of Object.entries(fixtures)) await writeFile(join(root, 'src', `${name}.ts`), source);
-  await writeFile(join(root, 'src', 'contract.d.ts'), 'export declare const value: number;\n');
+  await writeFile(join(root, 'src', 'contract.d.ts'), declarationFixture);
   await writeFile(join(root, 'examples', 'ordinary.ts'), fixtures.ordinary);
   const env = {...process.env};
   if (mapped) env.CLANK_SOURCE_MAPS = '1'; else delete env.CLANK_SOURCE_MAPS;
@@ -64,9 +75,9 @@ test('framework release build removes substantial code indentation while public 
   const expected = compile(fixtures.ordinary, {filename: join(root, 'src', 'ordinary.ts'), sourceMap: false});
   const built = await readFile(join(root, 'dist', 'ordinary.js'), 'utf8');
   assert.ok(Buffer.byteLength(expected) - Buffer.byteLength(built) >= 12);
-  assert.equal(built.replace(/^[ \t]+/gmu, ''), expected.replace(/^[ \t]+/gmu, ''));
+  assert.equal(built, 'export function snapshot(){\nconst first = 7;\nconst second = 9;\nreturn[first + second,"a  b",/a  b/u.source];\n}\n');
   assert.equal(await readFile(join(root, 'examples', 'ordinary.js'), 'utf8'), expected);
-  assert.equal(await readFile(join(root, 'dist', 'contract.d.ts'), 'utf8'), 'export declare const value: number;\n');
+  assert.equal(await readFile(join(root, 'dist', 'contract.d.ts'), 'utf8'), declarationFixture);
   assert.equal(compile(fixtures.ordinary, {filename: join(root, 'src', 'ordinary.ts'), sourceMap: false}), expected);
 });
 
@@ -79,7 +90,7 @@ test('actual built modules preserve executed literal, regex, comment, Unicode an
     await writeFile(join(root, `${name}-baseline.mjs`), expected);
     const baseline = await import(pathToFileURL(join(root, `${name}-baseline.mjs`)).href);
     const actual = await import(pathToFileURL(join(root, 'dist', `${name}.js`)).href);
-    assert.deepEqual(actual.snapshot(), baseline.snapshot(), name);
+    assert.deepEqual(await actual.snapshot(), await baseline.snapshot(), name);
     if (['ordinary', 'literals', 'nested', 'comments', 'division', 'singleDivision', 'singleDivisionAssign', 'singleDivisionLines', 'singleTemplateDivision', 'unicode', 'lineSeparators', 'asi', 'privateProperty', 'expressionRegex', 'templateDivision', 'defaultRegex', 'extendsRegex'].includes(name)) {
       assert.ok(built.length < expected.length, `${name}: proof exercises an actually compacted module`);
     }
@@ -106,4 +117,48 @@ test('mapped framework release builds retain exact ordinary compiler output', as
     const filename = join(root, 'src', `${name}.ts`);
     assert.equal(await readFile(join(root, 'dist', `${name}.js`), 'utf8'), compile(source, {filename, jsxImportSource: './index.js', sourceMap: true}), name);
   }
+});
+
+// This assertion fails under indentation-only output, so savings cannot be
+// claimed from semantic comparisons which also pass an unchanged build.
+test('release output removes separator spaces while retaining hazardous operator and numeric boundaries', async t => {
+  const root = await releaseBuild(t);
+  const ordinary = await readFile(join(root, 'dist', 'separators.js'), 'utf8');
+  assert.ok(ordinary.includes('function sum(first,... rest)'));
+  assert.ok(ordinary.includes('{first:2,second:[3,4]}'));
+  assert.ok(ordinary.includes('sum(first,... rest)'));
+  const ambiguous = await readFile(join(root, 'dist', 'separatorRegex.js'), 'utf8');
+  assert.ok(ambiguous.includes('/[(){}:;, ]+/u'));
+  assert.ok(ambiguous.includes('snapshot ( )')); // Ambiguity discards earlier interior edits too.
+  const boundary = await readFile(join(root, 'dist', 'operatorBoundaries.js'), 'utf8');
+  for (const retained of ['first + ++ second', 'second - -- first', '1 .toString()', '2..toString()', 'true ? .1:.2', 'object ?. method ?.(', 'nil ??(9)', 'typeof first', 'first instanceof Number']) {
+    assert.ok(boundary.includes(retained), retained);
+  }
+  for (const name of ['separators', 'operatorBoundaries', 'keywordBoundaries', 'separatorASI', 'separatorLiterals']) {
+    const expected = compile(fixtures[name], {filename: join(root, 'src', `${name}.ts`), sourceMap: false});
+    const built = await readFile(join(root, 'dist', `${name}.js`), 'utf8');
+    assert.ok(built.length < expected.replace(/^[ \t]+/gmu, '').length, `${name}: removes interior spacing beyond indentation`);
+  }
+  assert.equal(await readFile(join(root, 'dist', 'contract.d.ts'), 'utf8'), declarationFixture);
+});
+
+test('framework callbacks used in persisted workflow revisions retain accepted indentation-only source', async t => {
+  const root = await releaseBuild(t);
+  const expected = compile(fixtures.jobs, {filename: join(root, 'src', 'jobs.ts'), sourceMap: false});
+  const built = await readFile(join(root, 'dist', 'jobs.js'), 'utf8');
+  assert.equal(built, expected.replace(/^[ \t]+/gmu, ''));
+  assert.equal((await import(pathToFileURL(join(root, 'dist', 'jobs.js')).href)).snapshot(), '(context) => context.results');
+});
+
+test('rebuilding emitted JavaScript is idempotent and retains declarations exactly', async t => {
+  const root = await releaseBuild(t), first = new Map();
+  for (const name of Object.keys(fixtures)) {
+    const output = await readFile(join(root, 'dist', `${name}.js`), 'utf8');
+    first.set(name, output);
+    await writeFile(join(root, 'src', `${name}.ts`), output);
+  }
+  const env = {...process.env}; delete env.CLANK_SOURCE_MAPS;
+  await execute(process.execPath, ['--disable-warning=ExperimentalWarning', join(root, 'scripts', 'build.mjs')], {env, timeout: 15000});
+  for (const [name, output] of first) assert.equal(await readFile(join(root, 'dist', `${name}.js`), 'utf8'), output, name);
+  assert.equal(await readFile(join(root, 'dist', 'contract.d.ts'), 'utf8'), declarationFixture);
 });
