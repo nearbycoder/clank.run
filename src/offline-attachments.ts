@@ -184,13 +184,31 @@ export function mountOfflineAttachmentQueue(container: HTMLElement, queue: Offli
   const document = container.ownerDocument, section = document.createElement("section"), heading=document.createElement("h2"), status = document.createElement("p"), list = document.createElement("ol"), synchronize=document.createElement("button");
   section.setAttribute("aria-label","Pending attachments");section.style.minWidth="0";heading.textContent="Pending attachments";status.setAttribute("role","status");status.tabIndex=-1;synchronize.type="button";synchronize.textContent="Synchronize attachments";section.append(heading,status,synchronize,list);container.append(section);
   let closed = false, generation = 0, previous: string | undefined;
+  const pending = new Set<string>(), controls = new Map<string, HTMLButtonElement[]>();
+  const updatePending = (id: string) => { for (const button of controls.get(id) ?? []) button.setAttribute("aria-disabled", String(button.disabled || pending.has(id))); };
   synchronize.onclick=async()=>{synchronize.disabled=true;try{await queue.flush();}catch{if(!closed){list.replaceChildren();previous=undefined;status.textContent="Attachments unavailable. Check the current account before synchronizing.";status.focus();}}finally{if(!closed)synchronize.disabled=false;}};
-  const render = (items: readonly OfflineAttachment[]) => { generation++;const serialized=JSON.stringify(items);if(serialized===previous)return;previous=serialized;
-    const focused=document.activeElement as HTMLElement|null,tag=focused?.dataset.attachmentAction,identity=focused?.dataset.attachmentId;let restored:HTMLButtonElement|undefined;
-    list.replaceChildren(); status.textContent = `${new Intl.NumberFormat().format(items.length)} pending attachment${items.length === 1 ? "" : "s"}`;
-    for (const item of items) { const row=document.createElement("li"), copy=document.createElement("span");row.style.overflowWrap="anywhere";copy.textContent=`${item.path} · ${new Intl.NumberFormat().format(item.size)} bytes · ${item.status}${item.errorCode ? " · "+item.errorCode : ""}`;row.append(copy);
+  const render = (items: readonly OfflineAttachment[]) => { if(closed)return;generation++;const serialized=JSON.stringify(items);if(serialized===previous)return;previous=serialized;
+    const focused=(list.contains(document.activeElement) ? document.activeElement : null) as HTMLElement|null,tag=focused?.dataset.attachmentAction,identity=focused?.dataset.attachmentId;let restored:HTMLButtonElement|undefined;
+    controls.clear();list.replaceChildren(); status.textContent = `${new Intl.NumberFormat().format(items.length)} pending attachment${items.length === 1 ? "" : "s"}`;
+    for (const item of items) { const row=document.createElement("li"), copy=document.createElement("span"), buttons:HTMLButtonElement[]=[];controls.set(item.id,buttons);row.style.overflowWrap="anywhere";copy.textContent=`${item.path} · ${new Intl.NumberFormat().format(item.size)} bytes · ${item.status}${item.errorCode ? " · "+item.errorCode : ""}`;row.append(copy);
       for (const [label,action] of [["Retry",() => queue.retry(item.id)],["Discard local copy",() => queue.discard(item.id)]] as const) { const button=document.createElement("button");button.type="button";button.textContent=label;button.setAttribute("aria-label",`${label} for attachment ${item.key}`);button.style.touchAction="manipulation";button.dataset.attachmentAction=label;button.dataset.attachmentId=item.id;button.disabled=item.status==="uploading"||item.status==="attaching";if(identity===item.id&&tag===label)restored=button;
-        button.onclick=async()=>{if(label==="Discard local copy"&&!document.defaultView?.confirm("Discard this device’s pending copy? An uploaded file or an unknown attachment acknowledgment may already exist on the server."))return;button.disabled=true;try{await action();}catch{if(!closed){status.textContent="Could not change pending attachment. Refresh its state.";status.focus();}}finally{if(!closed)button.disabled=false;}};row.append(button); }list.append(row);
+        button.onclick=async()=>{
+          if(closed||!button.isConnected||button.disabled||pending.has(item.id))return;
+          if(label==="Discard local copy"&&!document.defaultView?.confirm("Discard this device’s pending copy? An uploaded file or an unknown attachment acknowledgment may already exist on the server."))return;
+          if(closed||!button.isConnected||pending.has(item.id))return;
+          // Native disabling blurs a focused button before an awaited queue update can preserve it.
+          // Keep it focusable, with a row-wide guard that survives replacement controls on redraw.
+          pending.add(item.id);updatePending(item.id);
+          try{await action();}
+          catch{if(!closed){
+            const active=document.activeElement as HTMLElement|null;
+            const stillFocused=list.contains(active)&&active?.dataset.attachmentId===item.id&&active.dataset.attachmentAction===label;
+            status.textContent="Could not change pending attachment. Refresh its state.";
+            if(stillFocused)status.focus();
+          }}
+          finally{pending.delete(item.id);if(!closed)updatePending(item.id);}
+        };buttons.push(button);row.append(button);
+      }updatePending(item.id);list.append(row);
     }
     if(identity&&tag){if(restored&&!restored.disabled)restored.focus();else status.focus();}
   };
