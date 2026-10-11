@@ -221,3 +221,33 @@ for(const fault of ['open-failure-empty','open-failure-sentinel','identity-misma
  else assert.deepEqual(await readdir(workspace),[]);
  if(descriptor!==undefined)assert.throws(()=>nativeFS.fstatSync(descriptor),{code:'EBADF'});
 }));
+
+
+const retainedTransferState=path=>inspect(path,db=>({
+ enrollment:db.prepare('SELECT * FROM clank_pitr_transfer_state').all(),
+ capture:db.prepare('SELECT * FROM clank_pitr_state').all(),
+ receipts:db.prepare('SELECT * FROM clank_pitr_transfer_receipts ORDER BY sequence').all(),
+ rows:db.prepare('SELECT * FROM clank_records ORDER BY _id').all(),
+}));
+const retainedMetadataFaults={
+ 'archive':"UPDATE clank_pitr_transfer_state SET archive_sha256='"+'f'.repeat(64)+"' WHERE id=1;",
+ 'initial-cursor':"UPDATE clank_pitr_transfer_state SET initial_cursor=json_set(initial_cursor,'$.digest','"+'f'.repeat(64)+"') WHERE id=1;",
+ 'delete-prior-receipt':"DELETE FROM clank_pitr_transfer_receipts WHERE sequence<NEW.sequence;",
+ 'alter-prior-receipt':"UPDATE clank_pitr_transfer_receipts SET fingerprint='"+'f'.repeat(64)+"' WHERE sequence<NEW.sequence;",
+ 'inject-prior-receipt':"INSERT INTO clank_pitr_transfer_receipts VALUES(0,'injected','{}','{}');",
+ 'capture-time':"UPDATE clank_pitr_state SET committed_at=committed_at+1 WHERE id=1;",
+};
+for(const [kind,sql] of Object.entries(retainedMetadataFaults))test(`native retained ${kind} alteration rolls back before transfer publication`,t=>native(t,async f=>{
+ await f.stage();f.write('first committed value');const first=await f.batch(f.initial);await f.apply(first);
+ f.write('second committed value');const second=await f.batch(first.through);
+ inspect(f.target,db=>db.exec('CREATE TRIGGER clank_pitr_retained_metadata_fault AFTER INSERT ON clank_pitr_transfer_receipts BEGIN '+sql+' END;'));
+ const before=retainedTransferState(f.target);
+ await assert.rejects(async()=>{const result=await f.apply(second);t.diagnostic(JSON.stringify({unexpectedAcknowledgment:result,nativeRetainedState:retainedTransferState(f.target)}));return result;},/retained|metadata|enrollment|receipt|capture/i);
+ assert.deepEqual(retainedTransferState(f.target),before,'the original stopped destination must remain intact');
+ inspect(f.target,db=>db.exec('DROP TRIGGER clank_pitr_retained_metadata_fault'));
+ const accepted=await f.apply(second);assert.equal(accepted.appliedEntries,1);assert.equal(accepted.replayed,false);
+ assert.equal((await f.apply(second)).replayed,true);assert.equal((await f.apply(first)).replayed,true);
+ const final=retainedTransferState(f.target);assert.equal(final.receipts.length,2);assert.equal(final.capture[0].sequence,2);
+ assert.equal(final.enrollment[0].archive_sha256,before.enrollment[0].archive_sha256);assert.equal(final.enrollment[0].initial_cursor,before.enrollment[0].initial_cursor);
+ assert.deepEqual(state(f.target).rows,inspect(f.source,db=>db.prepare('SELECT _data FROM clank_records ORDER BY _id').all()));
+}));
