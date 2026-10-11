@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {createServer} from 'node:http';
+import {once} from 'node:events';
 import {runInNewContext} from 'node:vm';
 import {setImmediate as immediate} from 'node:timers/promises';
 import {platformConsolePage} from '../dist/platform-console.js';
@@ -21,7 +23,7 @@ function fixture(){
   runInNewContext(fragment+'\n'+navigate+'\nglobalThis.ui={loadIncidents,readIncident,mutateIncident,retryIncident,resetIncidentWorkspace,navigate,finishIncidentConfirmation};',context);
   return {context,initial,state,q,calls,ui:context.ui,document};
 }
-const detail=(version=1,state='open')=>({incident:{id,projectId:project,title:'Recovery',severity:'critical',state,ownerId:null,version,updatedAt:1000,noteCount:1,linkCount:0},notes:[{sequence:1,authorId:'operator_exact_01',createdAt:1000,text:'Current recovery note.'}],nextNotes:null,links:[],nextLinks:null});
+const detail=(version=1,state='open')=>({incident:{id,projectId:project,sequence:1,createdAt:1000,resolvedAt:state==='resolved'?1000:null,resolution:state==='resolved'?'Verified resolution.':null,title:'Recovery',severity:'critical',state,ownerId:null,version,updatedAt:1000,noteCount:1,linkCount:0},notes:[{sequence:1,authorId:'operator_exact_01',createdAt:1000,text:'Current recovery note.'}],nextNotes:null,links:[],nextLinks:null});
 
 test('the emitted incident console refuses late detail responses after an account or project boundary',async()=>{
   const f=fixture(),pending=f.ui.readIncident(id,true);await immediate();assert.equal(f.calls.length,1);
@@ -50,4 +52,24 @@ test('lost-response retries keep exact emitted request identity and read current
   const list=f.calls.find(call=>call.url.endsWith('incidents?limit=25')),owners=f.calls.find(call=>call.url.endsWith('incidents/owners'));assert.ok(list&&owners);list.resolve(Response.json({ok:true,incidents:[detail(3,'resolved').incident],next:null}));owners.resolve(Response.json({ok:true,owners:[]}));await immediate();
   const refresh=f.calls.at(-1);assert.match(refresh.url,/incident_exact_01$/);refresh.resolve(Response.json({ok:true,detail:detail(3,'resolved')}));await retry;
   assert.equal(f.state.incidentDetail.incident.version,3);assert.equal(f.state.incidentDetail.incident.state,'resolved');assert.equal(f.state.incidentPending,null);assert.equal(f.q('#incident-retry-panel').hidden,true);assert.equal(f.q('#incident-status').textContent,'Incident saved. Current state is shown.');
+});
+
+async function host(t,reply){const calls=[],errors=[],server=createServer(async(request,response)=>{try{let raw='';for await(const part of request)raw+=part;const call={method:request.method,url:request.url,raw};calls.push(call);const value=await reply(call);response.writeHead(200,{'content-type':'application/json'});response.end(typeof value==='string'?value:JSON.stringify(value));}catch(error){errors.push(error);response.writeHead(500);response.end('{}')}});server.listen(0,'127.0.0.1');await once(server,'listening');t.after(async()=>{await new Promise(resolve=>{server.close(resolve);server.closeAllConnections()});assert.deepEqual(errors,[])});return{origin:'http://127.0.0.1:'+server.address().port,calls}}
+for(const kind of ['create','change'])for(const mode of ['malformed','missing','mismatched'])test('actual HTTP Console '+kind+' retains exact pending intent after '+mode+' success',async t=>{
+ const f=fixture();f.state.incidentDetail=detail();f.q('#incident-note').value='Retained exact recovery draft';const server=await host(t,call=>{
+  if(call.method==='POST')return mode==='malformed'?'{':mode==='missing'?{ok:true}:{ok:true,incident:{...detail(99).incident,projectId:'foreign_project_01'}};
+  if(call.url.endsWith('/owners'))return{ok:true,owners:[]};if(call.url.includes('?limit='))return{ok:true,incidents:[detail(2).incident],next:null};return{ok:true,detail:detail(2)};
+ });f.context.fetch=(path,input)=>fetch(server.origin+path,input);
+ await f.ui.mutateIncident(kind==='change'?{kind:'note',text:'Retained exact recovery draft'}:null,kind==='create'?{title:'Original reviewed incident',severity:'warning',ownerId:null}:undefined);
+ t.diagnostic(JSON.stringify({kind,mode,posts:server.calls.filter(call=>call.method==='POST').length,pending:f.state.incidentPending,note:f.q('#incident-note').value,status:f.q('#incident-status').textContent,error:f.q('#incident-error').textContent}));assert.equal(server.calls.filter(call=>call.method==='POST').length,1);assert.ok(f.state.incidentPending,'An invalid successful receipt must not discard the exact request.');assert.equal(JSON.stringify(f.state.incidentPending.input),server.calls.find(call=>call.method==='POST').raw,'Pending intent is exactly the submitted JSON, including the original operation ID.');assert.equal(f.q('#incident-note').value,'Retained exact recovery draft');f.ui.resetIncidentWorkspace();
+});
+
+test('native HTTP Console uncertain mutation preserves captured bytes on explicit retry and refuses late account results',async t=>{
+ const f=fixture();f.state.incidentDetail=detail();const input={kind:'note',text:'Exact original text'};let mode='uncertain';
+ const server=await host(t,call=>call.method==='POST'?mode==='uncertain'?{ok:true}:{ok:true,incident:detail(2).incident}:call.url.endsWith('/owners')?{ok:true,owners:[]}:call.url.includes('?limit=')?{ok:true,incidents:[detail(3).incident],next:null}:{ok:true,detail:detail(3)});
+ f.context.fetch=(path,options)=>fetch(server.origin+path,options);
+ const first=f.ui.mutateIncident(input);input.text='Changed caller object';await first;assert.ok(f.state.incidentPending);assert.equal(f.state.incidentPending.input.change.text,'Exact original text');assert.equal(server.calls.length,1);
+ mode='valid';await f.ui.retryIncident();const posts=server.calls.filter(call=>call.method==='POST');assert.equal(posts.length,2);assert.equal(posts[1].raw,posts[0].raw);assert.equal(f.state.incidentPending,null);assert.equal(f.state.incidentDetail.incident.version,3);
+ let entered,release;const gate=new Promise(resolve=>release=resolve),ready=new Promise(resolve=>entered=resolve);const held=await host(t,async()=>{entered();await gate;return{ok:true,incident:detail(4).incident}});t.after(()=>release());f.context.fetch=(path,options)=>fetch(held.origin+path,options);
+ const pending=f.ui.mutateIncident({kind:'note',text:'Old account request'});await ready;f.initial.email='different@example.test';f.ui.resetIncidentWorkspace();release();await pending;assert.equal(f.state.incidentDetail,null);assert.equal(f.q('#incident-status').textContent,'');assert.equal(held.calls.length,1);
 });

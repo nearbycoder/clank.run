@@ -1,5 +1,5 @@
 import type { Migration, MigrationPlan, MigrationRecord } from "./migrations.ts";
-import { readResponseBytes, ResponseBodyLimitError } from "./security.ts";
+import { readResponseBytes, ResponseBodyLimitError, exactRequest, requestHandoffActive, cancelRequestHandoff } from "./security.ts";
 
 export interface IngressRuntimeRoute {
   readonly protocol: "clank-runtime/1";
@@ -85,6 +85,34 @@ export type IngressAdmissionPolicy = (
   request: Readonly<IngressAdmissionRequest>,
 ) => IngressAdmissionDecision | void | Promise<IngressAdmissionDecision | void>;
 
+export interface IngressShadowMetadata {
+  readonly statusClass: 1 | 2 | 3 | 4 | 5 | null;
+  readonly mediaType: string | null;
+  readonly headersElapsedMs: number;
+  readonly bodyExpected: boolean;
+}
+export interface IngressShadowTap {
+  chunk(byteLength: number): undefined;
+  finish(kind: "complete" | "cancelled" | "error", elapsedMs: number): undefined;
+}
+export interface IngressShadowObserver {
+  observe(request: Request, primary: Readonly<IngressRoute>, metadata: Readonly<IngressShadowMetadata>): IngressShadowTap | undefined;
+}
+
+function shadowThenable(value: unknown): boolean {
+  if (!value || typeof value !== "object" && typeof value !== "function") return false;
+  const then = (value as { then?: unknown }).then;
+  if (typeof then !== "function") return false;
+  void new Promise((resolve, reject) => then.call(value, resolve, reject)).catch(() => undefined);
+  return true;
+}
+
+function shadowMediaType(value: string | null): string | null {
+  if (!value || value.length > 1024) return null;
+  const normalized = value.split(";", 1)[0]!.trim().toLowerCase();
+  return normalized.length <= 255 && /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/u.test(normalized) ? normalized : null;
+}
+
 export function createManagedIngress(options: {
   routes: IngressRouteStore | (() => readonly IngressRoute[] | Promise<readonly IngressRoute[]>);
   fetch?: typeof fetch;
@@ -102,10 +130,21 @@ export function createManagedIngress(options: {
   admitRequest?: IngressAdmissionPolicy;
   /** Starts or otherwise prepares an inactive route before the request is proxied. */
   prepareRoute?: (route: Readonly<IngressRoute>) => void | Promise<void>;
+  /** Synchronously checks native ownership of the primary route and its selected canary before effects and across response awaits. */
+  assertCanaryCurrent?: (route: Readonly<IngressRoute>) => undefined;
+  /** Bounded metadata/byte-count observation of primary responses; failures never affect traffic. */
+  shadow?: IngressShadowObserver;
   onRequest?: (metric: IngressRequestMetric) => void | Promise<void>;
 }): ManagedIngress {
   const fetcher = options.fetch ?? globalThis.fetch;
   if (!fetcher) throw new Error("fetch is not available.");
+  const canaryAssertion = options.assertCanaryCurrent;
+  let shadowObserver: IngressShadowObserver | undefined, observeShadow: IngressShadowObserver["observe"] | undefined;
+  try {
+    const candidate = options.shadow;
+    if (candidate && !shadowThenable(candidate)) { const observe = candidate.observe; if (typeof observe === "function") { shadowObserver = candidate; observeShadow = observe; } }
+  } catch { /* Invalid observers disable only shadowing. */ }
+  if (canaryAssertion !== undefined && typeof canaryAssertion !== "function") throw new TypeError("Canary authority must be a synchronous assertion.");
   const timeoutMs = integerRange(options.timeoutMs ?? 30_000, "timeoutMs", 100, 5 * 60_000);
   const maxBodyBytes = integerRange(options.maxBodyBytes ?? 25 * 1024 * 1024, "maxBodyBytes", 1, Number.MAX_SAFE_INTEGER);
   const retries = integerRange(options.retries ?? 1, "retries", 0, 3);
@@ -221,6 +260,17 @@ export function createManagedIngress(options: {
       let responseBytes = 0;
       let metricSent = false;
       let selectedUpstream: string | undefined, selectedReleaseId: string | undefined;
+      let selectedCanaryRoute: Readonly<IngressRoute> | undefined, canaryAuthorityFailed = false;
+      const assertCanaryCurrent = (): void => {
+        if (!selectedCanaryRoute || !canaryAssertion) return;
+        try {
+          const result: unknown = canaryAssertion(selectedCanaryRoute);
+          if (result !== undefined) {
+            void Promise.resolve(result).catch(() => undefined);
+            throw new TypeError("Canary authority assertions must synchronously return undefined.");
+          }
+        } catch (error) { canaryAuthorityFailed = true; throw error; }
+      };
       const report = (responseOutcome: IngressRequestMetric["responseOutcome"]): void => {
         if (metricSent) return;
         metricSent = true;
@@ -237,9 +287,48 @@ export function createManagedIngress(options: {
         } catch { /* Observability must never affect application traffic. */ }
       };
       const observed = (response: Response): Response => { statusCode = response.status; return response; };
-      const finish = (response: Response, _trackBody = false): Response => {
+      const finish = (response: Response, trackBody = false): Response => {
+        let tap: IngressShadowTap | undefined, chunkTap: IngressShadowTap["chunk"] | undefined, finishTap: IngressShadowTap["finish"] | undefined;
+        let shadowBytes = 0, shadowEnded = false;
+        const detach = (): void => { tap = undefined; chunkTap = undefined; finishTap = undefined; };
+        const disable = (): void => { detach(); cancelRequestHandoff(request); };
+        if (trackBody && !selectedCanaryRoute && observeShadow && exactRequest(request)) {
+          try {
+            const primary = Object.freeze({ id: route!.id, projectId: route!.projectId, hosts: Object.freeze([...route!.hosts]), upstream: route!.upstream, active: route!.active,
+              ...(route!.releaseId ? { releaseId: route!.releaseId } : {}), ...(route!.runtime ? { runtime: Object.freeze({ ...route!.runtime }) } : {}) });
+            const statusClass = Math.floor(response.status / 100);
+            const metadata: Readonly<IngressShadowMetadata> = Object.freeze({ statusClass: statusClass >= 1 && statusClass <= 5 ? statusClass as 1 | 2 | 3 | 4 | 5 : null,
+              mediaType: shadowMediaType(response.headers.get("content-type")), headersElapsedMs: Math.max(0, performance.now() - startedAt),
+              bodyExpected: Boolean(response.body) && request.method !== "HEAD" && response.status !== 204 && response.status !== 304 });
+            const result = observeShadow.call(shadowObserver, request, primary, metadata);
+            if (!result || shadowThenable(result)) disable();
+            else {
+              const chunk = result.chunk, finish = result.finish;
+              if (typeof chunk !== "function" || typeof finish !== "function" || !exactRequest(request) || !requestHandoffActive(request, detach)) disable();
+              else { tap = result; chunkTap = chunk; finishTap = finish; }
+            }
+          } catch { disable(); }
+        }
+        const shadowChunk = (length: number): void => {
+          if (!chunkTap || shadowEnded) return;
+          try {
+            const result: unknown = chunkTap.call(tap, length);
+            shadowBytes += length;
+            if (result !== undefined) { shadowThenable(result); disable(); }
+            else if (shadowBytes > 64 * 1024) disable();
+          } catch { disable(); }
+        };
+        const shadowFinish = (kind: "complete" | "cancelled" | "error"): void => {
+          if (shadowEnded) return; shadowEnded = true;
+          try {
+            const result: unknown = finishTap?.call(tap, kind, Math.max(0, performance.now() - startedAt));
+            if (result !== undefined) { shadowThenable(result); disable(); }
+          } catch { disable(); }
+          detach(); if (kind !== "complete") cancelRequestHandoff(request);
+        };
         if (!response.body || request.method === "HEAD" || response.status === 204 || response.status === 304) {
           void response.body?.cancel().catch(() => undefined);
+          shadowFinish("complete");
           report("complete"); release();
           return response.body ? new Response(null, { status: response.status, statusText: response.statusText, headers: response.headers }) : response;
         }
@@ -250,6 +339,7 @@ export function createManagedIngress(options: {
           if (ended) return;
           ended = true;
           request.signal.removeEventListener("abort", abort);
+          shadowFinish(outcome);
           report(outcome); release();
         };
         const abort = (): void => {
@@ -266,14 +356,23 @@ export function createManagedIngress(options: {
           },
           async pull(controller) {
             try {
+              if (trackBody) assertCanaryCurrent();
               const chunk = await reader.read();
               if (ended) return;
+              if (trackBody) assertCanaryCurrent();
               if (chunk.done) { settle("complete"); controller.close(); }
               else {
                 responseBytes = Math.min(Number.MAX_SAFE_INTEGER, responseBytes + chunk.value.byteLength);
+                shadowChunk(chunk.value.byteLength);
                 controller.enqueue(chunk.value);
               }
-            } catch (error) { if (!ended) { settle("error"); controller.error(error); } }
+            } catch (error) {
+              if (!ended) {
+                settle("error");
+                void reader.cancel(error).catch(() => undefined);
+                controller.error(error);
+              }
+            }
           },
           async cancel(reason) {
             settle("cancelled");
@@ -374,6 +473,9 @@ export function createManagedIngress(options: {
         const ordinal = trafficOrdinals.get(route.id) ?? 0;
         trafficOrdinals.set(route.id, (ordinal + 1) % 100);
         if (ordinal < canary.trafficPercent) {
+          // Preserve the normalized primary identity before candidate routing
+          // replaces its project/release/runtime fields.
+          selectedCanaryRoute = Object.freeze({ ...route });
           selectedProviderCanary = Boolean(canary.runtime);
           route = { ...route, upstream: canary.upstream, releaseId: canary.releaseId, canary: undefined,
             ...(canary.runtime ? { projectId: canary.projectId, runtime: canary.runtime } : {}) };
@@ -410,19 +512,24 @@ export function createManagedIngress(options: {
       for (let attempt = 0; attempt < attempts; attempt++) {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), timeoutMs);
+        let response: Response | undefined;
         try {
-          const response = await fetcher(target, {
+          assertCanaryCurrent();
+          response = await fetcher(target, {
             method: request.method,
             headers,
             body,
             signal: AbortSignal.any([controller.signal, request.signal]),
             redirect: "manual",
           });
+          assertCanaryCurrent();
           if (response.status >= 500) {
             recordCircuitFailure(circuitKey, targetIdentity);
             if (attempt + 1 < attempts) {
               await response.body?.cancel().catch(() => undefined);
+              assertCanaryCurrent();
               await backoff(attempt);
+              assertCanaryCurrent();
               continue;
             }
           } else {
@@ -440,6 +547,15 @@ export function createManagedIngress(options: {
           })), true);
         } catch (error) {
           lastError = error;
+          // Rejected fetches also cross an asynchronous ownership boundary.
+          if (!canaryAuthorityFailed) {
+            try { assertCanaryCurrent(); } catch (authorityError) { lastError = authorityError; }
+          }
+          if (canaryAuthorityFailed) {
+            controller.abort(lastError);
+            void response?.body?.cancel(lastError).catch(() => undefined);
+            return finish(observed(ingressProblem(503, "CANARY_UNAVAILABLE", "Canary ownership is no longer current.")));
+          }
           if (request.signal.aborted) break;
           recordCircuitFailure(circuitKey, targetIdentity);
           if (attempt + 1 < attempts) await backoff(attempt);
