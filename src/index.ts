@@ -2,6 +2,7 @@ export { renderAgentActivity } from "./agent-activity.ts";
 export type { AgentActivityOptions, AgentActivity, AgentActivityFilter, AgentActivitySnapshot } from "./agent-activity.ts";
 export * from "./offline.ts";
 export * from "./project-slo.ts";
+export * from "./customer-status.ts";
 export { openMediaProcessing, MediaProcessingError } from "./media-processing.ts";
 export type { MediaProcessing, MediaProcessingInput, MediaProcessingStatus, MediaTransform, OpenMediaProcessingOptions } from "./media-processing.ts";
 export type { MutationReceiptOptions } from "./mutation-receipts.ts";

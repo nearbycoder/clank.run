@@ -4,6 +4,7 @@ export { renderAgentActivity } from "./agent-activity.js";
 export type { AgentActivityOptions, AgentActivity, AgentActivityFilter, AgentActivitySnapshot } from "./agent-activity.js";
 export * from "./offline.js";
 export * from "./project-slo.js";
+export * from "./customer-status.js";
 export { openMediaProcessing, MediaProcessingError } from "./media-processing.js";
 export type { MediaProcessing, MediaProcessingInput, MediaProcessingStatus, MediaTransform, OpenMediaProcessingOptions } from "./media-processing.js";
 export type { MutationReceiptOptions } from "./mutation-receipts.js";
