@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {runInNewContext} from 'node:vm';
+import {createServer} from 'node:http';
+import {once} from 'node:events';
 import {platformConsolePage} from '../dist/platform-console.js';
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return{promise,resolve,reject}};
@@ -17,7 +19,7 @@ async function fixture(handler){
 function restoreFields(f){f.q('#recovery-sequence').value='2';f.q('#recovery-name').value='Recovered ledger';f.q('#recovery-slug').value='recovered-ledger'}
 
 test('console review freezes the exact stopped-project restore and retries an unknown acknowledgment once per explicit click',async()=>{
-  let tries=0;const f=await fixture(async(path,options)=>{if(!options)return metadata();if(!tries++)throw new Error('Owned response lost');return{restore:{sequence:2,destinationProjectId:'reserved'}}});restoreFields(f);f.reviewRecovery('restore');assert.equal(f.calls.filter(c=>c.options).length,0);assert.match(f.q('#recovery-review').textContent,/sequence 2.*suspended project/);assert.equal(f.document.activeElement,f.q('#recovery-clear'));
+  let tries=0;const f=await fixture(async(path,options)=>{if(!options)return metadata();if(!tries++)throw new Error('Owned response lost');return{ok:true,receipt:{state:'accepted',operationId:options.body.operationId,checkpointId:options.body.checkpointId,sequence:2,destinationProjectId:'reserved'}}});restoreFields(f);f.reviewRecovery('restore');assert.equal(f.calls.filter(c=>c.options).length,0);assert.match(f.q('#recovery-review').textContent,/sequence 2.*suspended project/);assert.equal(f.document.activeElement,f.q('#recovery-clear'));
   await f.applyRecovery();assert.equal(f.calls.filter(c=>c.options).length,0);f.q('#recovery-confirmation').value='restore-recovery source-app '+checkpoint.id+' 2 recovered-ledger';await f.applyRecovery();assert.match(f.q('#recovery-error').textContent,/Acknowledgment unknown/);assert.equal(f.q('#recovery-name').disabled,true);assert.equal(f.q('#recovery-apply').textContent,'Retry exact recovery request');const first=f.calls.find(c=>c.options);assert.equal(first.options.body.expectedVersion,4);
   await f.applyRecovery();const mutations=f.calls.filter(c=>c.options);assert.equal(mutations.length,2);assert.deepEqual(mutations[0],mutations[1]);assert.equal(f.q('#recovery-review-panel').hidden,true);assert.equal(f.q('#recovery-request').textContent,'');assert.equal(f.document.activeElement,f.q('#recovery-refresh'));
 });
@@ -43,4 +45,32 @@ test('reader and support views expose recovery metadata with disabled mutation c
   const f=await fixture();f.state.projectData.detail.access.role='viewer';await f.loadRecovery();assert.equal(f.q('#recovery-checkpoints').children.length,1);assert.equal(f.q('#recovery-restore').disabled,true);f.reviewRecovery('checkpoint');assert.equal(f.q('#recovery-review-panel').hidden,true);
   f.initial.impersonation={id:'support-session'};await f.loadRecovery();assert.equal(f.q('#recovery-checkpoints').children.length,1);assert.equal(f.q('#recovery-passkey-verify').disabled,true);assert.equal(f.q('#recovery-configure').disabled,true);
   assert.match(f.html,/id="recovery-sequence" name="sequence" autocomplete="off" type="number" min="0" step="1" required aria-describedby="recovery-horizon"/);assert.match(f.html,/id="recovery-error" role="status" tabindex="-1"/);
+});
+
+test('actual malformed HTTP2xx cannot clear the exact retained recovery review',async t=>{
+ const requests=[],server=createServer(async(req,res)=>{let body='';for await(const chunk of req)body+=chunk;requests.push({method:req.method,path:req.url,body:JSON.parse(body)});res.writeHead(200,{'content-type':'application/json'});res.end('{"restore":');});
+ server.listen(0,'127.0.0.1');await once(server,'listening');t.after(()=>new Promise(resolve=>{server.close(resolve);server.closeAllConnections();}));
+ const origin='http://127.0.0.1:'+server.address().port,html=await platformConsolePage('http://localhost',{user:null,csrfToken:null},'',false,false).text();
+ const parser={initial:{csrfToken:'owned-fixture',impersonation:null},fetch:(path,options)=>fetch(origin+path,options),Error,AbortController,setTimeout,clearTimeout};
+ runInNewContext(html.match(/^async function api\([^\n]+/m)[0],parser);
+ const f=await fixture((path,options)=>options?parser.api(path,options):metadata());restoreFields(f);f.reviewRecovery('restore');f.q('#recovery-confirmation').value=JSON.parse(f.q('#recovery-request').textContent).confirmation;
+ const exact=f.q('#recovery-request').textContent;await f.applyRecovery();
+ assert.deepEqual(requests[0].body,JSON.parse(exact));
+ assert.equal(f.q('#recovery-request').textContent,exact);assert.equal(f.q('#recovery-review-panel').hidden,false);assert.match(f.q('#recovery-error').textContent,/Acknowledgment unknown/);assert.equal(requests.length,1);
+});
+
+function recoveryReceipt(kind,body){
+  if(kind==='configure')return{ok:true,receipt:{projectId:'source',version:body.expectedVersion+1,enabled:body.enabled,intervalMs:body.intervalMs}};
+  if(kind==='resolve')return{ok:true,receipt:{projectId:'source',version:body.expectedVersion+1,operationId:body.operationId,pendingOperationId:body.pendingOperationId,state:'abandoned'}};
+  if(kind==='checkpoint')return{ok:true,checkpoint:{...checkpoint,projectId:'source',operationId:body.operationId}};
+  return{ok:true,receipt:{state:'accepted',operationId:body.operationId,checkpointId:body.checkpointId,sequence:body.throughSequence,destinationProjectId:'destination'}};
+}
+for(const kind of ['configure','checkpoint','restore','resolve'])test('recovery '+kind+' retains malformed or mismatched acknowledgments until exact explicit retry',async()=>{
+  let response;const f=await fixture((path,options)=>options?response:kind==='resolve'?{...metadata(),policy:{...metadata().policy,enabled:false,pendingOperationId:'retained_export'}}:metadata());
+  if(kind==='restore')restoreFields(f);f.reviewRecovery(kind);const exact=f.q('#recovery-request').textContent,body=JSON.parse(exact);if(body.confirmation)f.q('#recovery-confirmation').value=body.confirmation;
+  const valid=recoveryReceipt(kind,body),mismatched=JSON.parse(JSON.stringify(valid)),receipt=mismatched.receipt||mismatched.checkpoint;
+  if(kind==='configure')receipt.version++;else receipt.operationId='different_operation';
+  for(response of [{},null,{ok:true},mismatched]){await f.applyRecovery();assert.equal(f.q('#recovery-request').textContent,exact);assert.equal(f.q('#recovery-review-panel').hidden,false);assert.match(f.q('#recovery-error').textContent,/Acknowledgment unknown/);}
+  assert.equal(f.calls.filter(call=>call.options).length,4);response=valid;await f.applyRecovery();assert.equal(f.q('#recovery-review-panel').hidden,true);assert.equal(f.q('#recovery-request').textContent,'');
+  const sent=f.calls.filter(call=>call.options);assert.equal(sent.length,5);for(const call of sent)assert.deepEqual(call.options.body,body);
 });

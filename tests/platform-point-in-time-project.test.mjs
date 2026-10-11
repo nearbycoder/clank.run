@@ -128,3 +128,16 @@ test('actual SIGKILL during project key resolution retains one native stopped de
   assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_platform_audit WHERE action='recovery.restore.reserve'").get().n,1);assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_platform_audit WHERE action='recovery.restore.accept'").get().n,1);
   t.diagnostic(JSON.stringify({controllerSIGKILL:true,sourceVolumeDeleted:true,nativeLeaseDurationMs:120000,nativeLeaseTimestampsUnchanged:true,resumedOriginalDestination:true,restoredSequence:2,acceptedRestoreAudits:1}));
 });
+
+for(const loss of ['deletion','replacement'])test(`destination native lease ${loss} during restore acknowledgment cannot publish a receipt`,async t=>{
+  const f=await setup(t);
+  const mutation=loss==='deletion'?"DELETE FROM clank_distributed_leases WHERE resource='project:'||NEW.project_id":"UPDATE clank_distributed_leases SET owner='replacement_recovery_owner',fence=fence+1,token_hash='"+'0'.repeat(64)+"' WHERE resource='project:'||NEW.project_id";
+  f.native.exec("CREATE TABLE owned_destination_lease_fault(marker TEXT); CREATE TRIGGER lose_destination_lease AFTER INSERT ON clank_platform_releases WHEN NEW.idempotency_key='recovery_restore_native_point_two' BEGIN INSERT INTO owned_destination_lease_fault VALUES('trigger-ran'); "+mutation+"; END;");
+  const origin=f.options.publicUrl,response=await f.handle(new Request(origin+f.path+'/restores',{method:'POST',headers:{origin,cookie:f.owner.cookie,'x-clank-csrf':f.owner.csrf,'content-type':'application/json'},body:JSON.stringify(f.input)})),body=await response.json(),destination=target(f);
+  const operation=f.native.prepare("SELECT state FROM clank_platform_pitr_operations WHERE project=? AND id=?").get(f.project.id,f.input.operationId),accepted=f.native.prepare("SELECT count(*) n FROM clank_platform_audit WHERE action='recovery.restore.accept'").get().n;
+  t.diagnostic(JSON.stringify({loss,status:response.status,error:body.error?.code,operationState:operation.state,activeRelease:destination.active_release_id,acceptedAuditRows:accepted,triggerEffects:f.native.prepare('SELECT count(*) n FROM owned_destination_lease_fault').get().n}));
+  assert.equal(response.status,409,'Native destination lease loss during finalization must refuse acceptance.');
+  assert.equal(body.error.code,'PROJECT_LEASE_LOST');assert.equal(operation.state,'pending');assert.equal(destination.active_release_id,null);assert.equal(accepted,0);
+  assert.equal(f.native.prepare('SELECT count(*) n FROM clank_platform_releases WHERE project_id=?').get(destination.id).n,0);
+  assert.equal(f.native.prepare('SELECT count(*) n FROM owned_destination_lease_fault').get().n,0,'The losing transaction must roll back its trigger effects.');
+});
