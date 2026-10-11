@@ -160,3 +160,11 @@ test('late successful refresh after disposal cannot reactivate detached synchron
  await observeRefresh(()=>reads===1);assert.equal(synchronize.disabled,true);await observeRefresh(()=>reads===2);f.dispose();f.elsewhere.focus();release([failed]);await settle();
  f.queue.flush=async()=>{f.calls.push(['flush'])};await synchronize.onclick();assert.equal(synchronize.disabled,true);assert.equal(synchronize.getAttribute('aria-disabled'),'true');assert.equal(f.root.childNodes.length,0);assert.equal(f.document.activeElement,f.elsewhere);assert.deepEqual(f.calls,[]);
 });
+
+for(const newer of ['subscription','snapshot'])test('late failed snapshot cannot replace a newer '+newer+' or steal its focus',async t=>{
+ const f=await fixture(t),synchronize=button(f.root,'Synchronize attachments');let reads=0,reject;const current={...failed,status:'pending',errorCode:undefined};
+ f.queue.snapshot=async()=>{if(++reads===1)return new Promise((resolve,fail)=>{reject=fail});return [current];};
+ await observeRefresh(()=>reads===1);if(newer==='subscription')f.emit([current]);else await observeRefresh(()=>reads===2);
+ const retry=button(f.root,'Retry');retry.focus();assert.match(f.root.textContent,/pending attachment/);assert.equal(synchronize.disabled,false);reject(Error('Declared superseded snapshot failure'));await settle();
+ assert.equal(button(f.root,'Retry'),retry);assert.equal(f.document.activeElement,retry);assert.equal(synchronize.disabled,false);assert.equal(synchronize.getAttribute('aria-disabled'),'false');assert.doesNotMatch(f.root.textContent,/unavailable/);
+});

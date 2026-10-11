@@ -1,0 +1,42 @@
+{
+  "baseHead": "e0515ed5182e20402a705f4ea4ca6ff1a90846c9",
+  "hostedFirstAttempt": {
+    "successfulChecks": 7,
+    "failedCheck": "Node22.16",
+    "reported": 3472,
+    "passed": 3434,
+    "failed": 1,
+    "cancelled": 0,
+    "skipped": 37,
+    "failedAssertion": "rule.nextAt > Date.now()",
+    "otherFullSuites": {
+      "reported": 3472,
+      "passed": 3435,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 37
+    }
+  },
+  "finding": "A next cadence point after the stored execution time may already be due when the parent reads it after child exit. The test compared against that later wall-clock observation.",
+  "repair": "Verify native lastAt-to-nextAt ordering and the exact first grid point after lastAt for the original zero-anchor schedule. Preserve one accepted occurrence, independent child natural exit, one receipt, payload retirement, version and receipt assertions.",
+  "controllerSourceUnchanged": true,
+  "nativeDeclaredFault": "Parent waits on the real clock until the saved next occurrence becomes due, after both actual children exit naturally. Before1failure and after1pass on each Node22/24/26, with zero cancellations or skips. EveryMs remains60000; no clock mock, timeout, host-profile or quota change.",
+  "fullModuleEachRuntime": {
+    "reported": 18,
+    "passed": 18,
+    "failed": 0,
+    "cancelled": 0,
+    "skipped": 0,
+    "coverage": true
+  },
+  "privateBoundary": {
+    "path": "/tmp/clank-review-2026-10-08/retention-schedule-grid-review-01/candidate-boundary-05.json",
+    "sha256": "17fb10ade487101f03d75a3a96e6ece9564b515daaf7f4a539fd5733dfb58fd5"
+  },
+  "qualifications": "Exact hosted crossing time is not established by its buffered log. The first private full module copy lacked brand fixtures and failed2platform initialization cases per runtime; failed logs are retained. The original brand assets restore the complete18-case module.",
+  "remainingDelivery": "Fresh hosted checks and protected merge are required at the new source head.",
+  "featureAcceptance": {
+    "accepted": 29,
+    "pending": 11
+  }
+}

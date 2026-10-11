@@ -68,12 +68,78 @@
       "path": "/tmp/clank-review-2026-10-08/offline-attachment-refresh-review-01/adopted-audits-09.json",
       "sha256": "d09987849849492eea8260d5b7e5146bdd43e6ed56524fda5b91d27e7237e3a4"
     },
-    "delivery": "Fresh hosted checks and protected merge remain required for this source change."
+    "delivery": "Fresh hosted checks and protected merge remain required for this source change.",
+    "headScope": "Initial PR370head e0515ed; later follow-up is recorded separately."
   },
   "remainingAcceptance": {
     "accepted": 29,
     "pending": 11
   },
-  "sourceSHA256": "8ed368af007c433898a41321b0c30ce0b4cd47446ae8f342fafdffbf1e998c17",
-  "testsSHA256": "38b9bb057e6d4e12a2ee5a3ac2bcd325bd3b90372e0522cf1958b81a168f89b0"
+  "sourceSHA256": "af2f8244a66173759c5b0ad87e4bc43b34ffe4d56f6303ba1af19a1369cb9c1e",
+  "testsSHA256": "38b9bb057e6d4e12a2ee5a3ac2bcd325bd3b90372e0522cf1958b81a168f89b0",
+  "priorSourceSHA256": "8ed368af007c433898a41321b0c30ce0b4cd47446ae8f342fafdffbf1e998c17",
+  "followUp": {
+    "finding": "A rejected superseded snapshot clears newer subscribed/snapshotted rows and removes focused controls.",
+    "fix": "Apply the existing current-generation and closed guard to snapshot failure effects.",
+    "privateBoundary": {
+      "path": "/tmp/clank-review-2026-10-08/attachment-stale-refresh-review-01/candidate-boundary-03.json",
+      "sha256": "7d411bbd5919bc28b5cf59a7104295f32b10dfc4589f57e9a9c267d463663955"
+    },
+    "beforeNative26": {
+      "reported": 2,
+      "passed": 0,
+      "failed": 2,
+      "cancelled": 0,
+      "skipped": 0
+    },
+    "uiCasesEachRuntime": {
+      "reported": 16,
+      "passed": 16,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "runtimes": [
+        "22.16",
+        "24.21",
+        "26.10"
+      ],
+      "coverage": true
+    },
+    "adoptedUIAndRetentionEachRuntime": {
+      "reported": 34,
+      "passed": 34,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "coverage": true
+    },
+    "pairedBuild": {
+      "identicalFiles": 320,
+      "runtimes": [
+        "22.16",
+        "26.10"
+      ],
+      "changedFromInitialPR370": [
+        "dist/offline-attachments.js"
+      ],
+      "reviewCandidateModuleMatches": true
+    },
+    "audits": {
+      "types": "54consumer fixtures;149inherited/0new diagnostics, baseline154",
+      "docs": "109Markdown/375links/104guides/146declarations/162exports",
+      "security": "passed",
+      "package": {
+        "files": 449,
+        "unpackedBytes": 6941860,
+        "ceilingBytes": 8388608,
+        "dependencies": 0
+      },
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/attachment-stale-refresh-review-01/adopted-audits-07.json",
+        "sha256": "e92dcfd670509e60bde2d4b2b3d25d7b5b9efe901f7e122fd828579c359944fc"
+      }
+    },
+    "qualifications": "Existing DOM/focus model with actual compiled view; not native browser acceptance. Initial paired-build record collector used incorrect prior metadata keys after both builds and comparison succeeded. Failure and19generated example diffs retained; corrected collector records a fresh paired build and excludes only those19paths.",
+    "delivery": "Fresh hosted checks and protected merge required."
+  }
 }

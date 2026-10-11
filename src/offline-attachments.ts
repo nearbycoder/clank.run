@@ -222,7 +222,7 @@ export function mountOfflineAttachmentQueue(container: HTMLElement, queue: Offli
     }
     if(identity&&tag){if(restored&&!restored.disabled)restored.focus();else status.focus();}
   };
-  const refresh = async () => {const expected=++generation;try{const items=await queue.snapshot();if(!closed&&expected===generation){synchronize.disabled=false;synchronize.setAttribute("aria-disabled",String(synchronizing));render(items);}}catch{if(!closed){generation++;previous=undefined;list.replaceChildren();synchronize.disabled=true;synchronize.setAttribute("aria-disabled","true");status.textContent="Attachments unavailable for this account.";}}};
+  const refresh = async () => {const expected=++generation;try{const items=await queue.snapshot();if(!closed&&expected===generation){synchronize.disabled=false;synchronize.setAttribute("aria-disabled",String(synchronizing));render(items);}}catch{if(!closed&&expected===generation){generation++;previous=undefined;list.replaceChildren();synchronize.disabled=true;synchronize.setAttribute("aria-disabled","true");status.textContent="Attachments unavailable for this account.";}}};
   const unsubscribe = queue.subscribe(render), timer=setInterval(()=>{void refresh();},1000); void refresh();
   return () => {closed=true;generation++;clearInterval(timer);unsubscribe();section.remove();};
 }
