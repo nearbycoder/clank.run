@@ -33,6 +33,6 @@ export declare function applyMigrations(options: ApplyMigrationsOptions): Promis
 /** Creates a transactionally consistent SQLite backup using Node's built-in backup API. */
 export declare function backupSQLite(sourcePath: string, destinationPath: string): Promise<void>;
 /** Replaces a stopped application's database with a prior SQLite backup. */
-export declare function restoreSQLiteBackup(sourcePath: string, destinationPath: string): Promise<void>;
+export declare function restoreSQLiteBackup(sourcePath: string, destinationPath: string, assertCurrent?: () => void): Promise<void>;
 /** Rejects SQL that can escape the application database or break the outer transaction. */
 export declare function assertSafeMigrationSql(sql: string, id?: string): void;

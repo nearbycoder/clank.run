@@ -1,5 +1,7 @@
 import type {PlatformStatusPagesOptions} from "./platform-status-pages.js";
 import type { LinuxHostCertificationOptions } from "./host-certification.js";
+import type { PlatformPointInTimeOptions } from "./platform-point-in-time.js";
+export type { PlatformPointInTimeOptions, PlatformPointInTimePolicy, PlatformPointInTimeCheckpoint, PlatformPointInTimeResolution } from "./platform-point-in-time.js";
 import type { PlatformSupervisorOptions, PlatformSupervisorStatus } from "./platform-supervisor.js";
 export type { PlatformSupervisorOptions, PlatformSupervisorStatus } from "./platform-supervisor.js";
 import type {PlatformServiceAccountOptions} from "./platform-service-accounts.js";
@@ -349,6 +351,8 @@ export interface ClankPlatformOptions {
   incidents?: import("./platform-incidents.js").PlatformIncidentOptions;
   /** Bounded native-ingress completion objectives and durable burn metadata. */
   slos?: import("./platform-slo.js").PlatformSloOptions;
+  /** Opt-in bounded encrypted checkpoints from registered, explicitly captured provider applications. */
+  pointInTime?: PlatformPointInTimeOptions;
     /** Same-host Linux coordinators; each occupies a dedicated process terminated after leadership loss. */
     supervisor?: PlatformSupervisorOptions;
   serviceAccounts?: PlatformServiceAccountOptions;
