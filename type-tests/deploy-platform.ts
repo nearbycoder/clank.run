@@ -19,6 +19,7 @@ import type {
 } from "@clank.run/framework/provider-docker";
 import type { DeploymentProviderDataApplyInput } from "@clank.run/framework/provider-data";
 import type { DeploymentProviderCanaryBinding, DeploymentProviderCanaryController, DeploymentProviderCanaryOptions, DeploymentProviderService } from "@clank.run/framework/provider-service";
+import { deploymentProviderCanaryPath, DEPLOYMENT_PROVIDER_CANARY_CONTROL_PROTOCOL, DEPLOYMENT_PROVIDER_CANARY_CONTROL_MEDIA_TYPE } from "@clank.run/framework/provider-service";
 
 declare const canaryPrimary: DeploymentProviderCanaryBinding;
 declare const providerDataInput: DeploymentProviderDataApplyInput;
@@ -31,8 +32,16 @@ const invalidCodeOnlyProviderInput: DeploymentProviderDataApplyInput = {
   codeOnly:"true",
 };
 void invalidCodeOnlyProviderInput;
-const providerCanaryOptions: DeploymentProviderCanaryOptions = {readPaths:["/healthz"],maxConcurrent:2,maxOperations:8,maximumDurationMs:60_000};
+const providerCanaryOptions: DeploymentProviderCanaryOptions = {readPaths:["/healthz"],maxConcurrent:2,maxOperations:8,maximumDurationMs:60_000,controlTimeoutMs:30_000};
 void providerCanaryOptions;
+deploymentProviderCanaryPath("project_typed", "retire") satisfies string;
+DEPLOYMENT_PROVIDER_CANARY_CONTROL_PROTOCOL satisfies "clank-provider-canary-control/1";
+DEPLOYMENT_PROVIDER_CANARY_CONTROL_MEDIA_TYPE satisfies "application/vnd.clank.provider-canary-control+json";
+// @ts-expect-error controls do not provide promotion or implicit acceptance
+deploymentProviderCanaryPath("project_typed", "promote");
+// @ts-expect-error HTTP deadlines are bounded numeric milliseconds
+const invalidCanaryTimeout: DeploymentProviderCanaryOptions={readPaths:["/healthz"],controlTimeoutMs:"60000"};
+void invalidCanaryTimeout;
 void canaryService.canaries?.prepare({primary:canaryPrimary,controllerEpoch:3,operationId:"canary_typed_01",runtime:providerDataInput.runtime,signal:providerDataInput.signal});
 // @ts-expect-error an admitted canary must have an explicit abort signal
 void canaryService.canaries?.prepare({primary:canaryPrimary,controllerEpoch:3,operationId:"canary_typed_02",runtime:providerDataInput.runtime});
