@@ -118,12 +118,26 @@ const CATALOG_CONTENT_TYPE = "application/vnd.clank.backup-catalog+json";
 const MAX_CATALOG_BYTES = 32 * 1024 * 1024;
 
 /** Opens an encrypted local or object-backed backup repository for one SQLite database. */
-export async function openBackupManager(options: BackupManagerOptions): Promise<BackupManager> {
-  if (!options.objects) return openLocalBackupManager(options);
-  return openObjectBackupManager(options);
+export function openBackupManager(options: BackupManagerOptions): Promise<BackupManager>;
+// The implementation-only authority argument covers platform deletion cleanup,
+// including retention side effects of its restore safety backup.
+// Keep the public overload/declaration at one argument; it is not a backup option.
+export async function openBackupManager(options: BackupManagerOptions, assertCurrent: (() => undefined) | undefined = undefined): Promise<BackupManager> {
+  if (assertCurrent !== undefined && typeof assertCurrent !== "function") throw new TypeError("Backup deletion authority must be a function.");
+  const current = assertCurrent && (() => {
+    const value = assertCurrent();
+    if (value !== undefined) {
+      void Promise.resolve(value).catch(() => undefined);
+      throw new TypeError("Backup deletion authority must synchronously return undefined.");
+    }
+    return undefined;
+  });
+  current?.();
+  const manager = await (options.objects ? openObjectBackupManager(options, current) : openLocalBackupManager(options, current));
+  try { current?.(); return manager; } catch (error) { manager.close(); throw error; }
 }
 
-async function openLocalBackupManager(options: BackupManagerOptions): Promise<BackupManager> {
+async function openLocalBackupManager(options: BackupManagerOptions, assertCurrent?: () => undefined): Promise<BackupManager> {
   const fs = await nodeFs();
   const path = await nodePath();
   const source = options.databasePath ? path.resolve(options.databasePath) : null;
@@ -219,13 +233,17 @@ async function openLocalBackupManager(options: BackupManagerOptions): Promise<Ba
   };
 
   const prune = async (protectedIds: ReadonlySet<string> = new Set()): Promise<void> => {
+    assertCurrent?.();
     const manifests = await manager.list();
+    assertCurrent?.();
     const cutoff = Date.now() - maxAgeMs;
     for (let index = 0; index < manifests.length; index++) {
       const manifest = manifests[index]!;
       if (protectedIds.has(manifest.id)) continue;
       if (index < maxBackups && (manifest.createdAt >= cutoff || index === 0)) continue;
+      assertCurrent?.();
       await fs.rm(pathsFor(manifest.id).directory, { recursive: true, force: true });
+      assertCurrent?.();
       emit({ type: "deleted", backupId: manifest.id });
     }
   };
@@ -437,15 +455,20 @@ async function openLocalBackupManager(options: BackupManagerOptions): Promise<Ba
     },
     async delete(id) {
       if (closed) throw new Error("Backup manager is closed.");
+      assertCurrent?.();
       const directory = pathsFor(id).directory;
       try {
         const stats = await fs.lstat(directory);
+        assertCurrent?.();
         if (!stats.isDirectory() || stats.isSymbolicLink()) throw new Error("Backup path is not a regular directory.");
       } catch (error) {
+        assertCurrent?.();
         if (nodeCode(error) === "ENOENT") return false;
         throw error;
       }
+      assertCurrent?.();
       await fs.rm(directory, { recursive: true, force: true });
+      assertCurrent?.();
       emit({ type: "deleted", backupId: id });
       return true;
     },
@@ -454,8 +477,12 @@ async function openLocalBackupManager(options: BackupManagerOptions): Promise<Ba
       if (purgeOptions?.confirmation !== "delete all backups") {
         throw new Error('Backup purge confirmation must equal "delete all backups".');
       }
+      assertCurrent?.();
       const manifests = await manager.list();
-      for (const manifest of manifests) await manager.delete(manifest.id);
+      assertCurrent?.();
+      for (const manifest of manifests) {
+        assertCurrent?.(); await manager.delete(manifest.id); assertCurrent?.();
+      }
       return manifests.length;
     },
     start(intervalMs) {
@@ -506,7 +533,7 @@ interface ObjectBackupCatalog {
   entries: readonly ObjectBackupEntry[];
 }
 
-async function openObjectBackupManager(options: BackupManagerOptions): Promise<BackupManager> {
+async function openObjectBackupManager(options: BackupManagerOptions, assertCurrent?: () => undefined): Promise<BackupManager> {
   const fs = await nodeFs();
   const path = await nodePath();
   const source = options.databasePath ? path.resolve(options.databasePath) : null;
@@ -539,7 +566,7 @@ async function openObjectBackupManager(options: BackupManagerOptions): Promise<B
     maxBackups: 10_000,
     maxAgeMs: Number.MAX_SAFE_INTEGER,
     onEvent: undefined,
-  });
+  }, assertCurrent);
   let timer: ReturnType<typeof setInterval> | undefined;
   let creating = false;
   let closed = false;
@@ -607,7 +634,9 @@ async function openObjectBackupManager(options: BackupManagerOptions): Promise<B
   const writeCatalog = async (
     previous: ObjectBackupCatalog,
     entries: readonly ObjectBackupEntry[],
+    current?: () => undefined,
   ): Promise<ObjectBackupCatalog> => {
+    current?.();
     const catalog: ObjectBackupCatalog = {
       protocol: OBJECT_CATALOG_PROTOCOL,
       namespace: configured.namespace,
@@ -623,27 +652,32 @@ async function openObjectBackupManager(options: BackupManagerOptions): Promise<B
     if (bytes.byteLength > MAX_CATALOG_BYTES) {
       throw new Error(`Object backup catalog exceeds ${MAX_CATALOG_BYTES} bytes.`);
     }
+    current?.();
     const metadata = await configured.store.put(catalogKey, bytes, {
       contentType: CATALOG_CONTENT_TYPE,
     });
+    current?.();
     await assertWrittenObject(metadata, catalogKey, bytes, CATALOG_CONTENT_TYPE);
+    current?.();
     return catalog;
   };
 
   const replaceEntry = async (
     catalog: ObjectBackupCatalog,
     entry: ObjectBackupEntry,
+    current?: () => undefined,
   ): Promise<ObjectBackupCatalog> => {
     const entries = catalog.entries.filter((candidate) => candidate.id !== entry.id);
     entries.push(entry);
-    return writeCatalog(catalog, entries);
+    return writeCatalog(catalog, entries, current);
   };
 
   const removeEntry = async (
     catalog: ObjectBackupCatalog,
     id: string,
+    current?: () => undefined,
   ): Promise<ObjectBackupCatalog> => {
-    return writeCatalog(catalog, catalog.entries.filter((entry) => entry.id !== id));
+    return writeCatalog(catalog, catalog.entries.filter((entry) => entry.id !== id), current);
   };
 
   const localLocations = (id: string) => {
@@ -793,17 +827,25 @@ async function openObjectBackupManager(options: BackupManagerOptions): Promise<B
     startingCatalog: ObjectBackupCatalog,
     startingEntry: ObjectBackupEntry,
   ): Promise<ObjectBackupCatalog> => {
+    assertCurrent?.();
     let catalog = startingCatalog;
     let entry = startingEntry;
     if (entry.state !== "deleting") {
       entry = { ...entry, state: "deleting", updatedAt: Date.now() };
-      catalog = await replaceEntry(catalog, entry);
+      catalog = await replaceEntry(catalog, entry, assertCurrent);
+      assertCurrent?.();
     }
-    for (const chunk of entry.chunks) await configured.store.delete(chunk.key);
+    for (const chunk of entry.chunks) {
+      assertCurrent?.(); await configured.store.delete(chunk.key); assertCurrent?.();
+    }
     try {
-      return await removeEntry(catalog, entry.id);
+      assertCurrent?.();
+      const removed = await removeEntry(catalog, entry.id, assertCurrent);
+      assertCurrent?.(); return removed;
     } catch (error) {
+      assertCurrent?.();
       const observed = await readCatalog().catch(() => null);
+      assertCurrent?.();
       if (observed && !observed.entries.some((candidate) => candidate.id === entry.id)) return observed;
       throw error;
     }
@@ -884,12 +926,16 @@ async function openObjectBackupManager(options: BackupManagerOptions): Promise<B
   };
 
   const synchronizeLocal = async (): Promise<void> => {
+    assertCurrent?.();
     let catalog = await readCatalog();
+    assertCurrent?.();
     for (const entry of [...catalog.entries]) {
       if (entry.state !== "deleting") continue;
       catalog = await deleteRemoteEntry(catalog, entry);
+      assertCurrent?.();
     }
     const localBackups = await local.list();
+    assertCurrent?.();
     const localIds = new Set(localBackups.map((manifest) => manifest.id));
     const staleBefore = Date.now() - 60 * 60_000;
     for (const entry of [...catalog.entries]) {
@@ -898,8 +944,12 @@ async function openObjectBackupManager(options: BackupManagerOptions): Promise<B
         || localIds.has(entry.id)
         || entry.updatedAt >= staleBefore
       ) continue;
-      for (const chunk of entry.chunks) await configured.store.delete(chunk.key);
-      catalog = await removeEntry(catalog, entry.id);
+      for (const chunk of entry.chunks) {
+        assertCurrent?.(); await configured.store.delete(chunk.key); assertCurrent?.();
+      }
+      assertCurrent?.();
+      catalog = await removeEntry(catalog, entry.id, assertCurrent);
+      assertCurrent?.();
     }
     for (const manifest of localBackups) await publishLocal(manifest);
   };
@@ -922,15 +972,20 @@ async function openObjectBackupManager(options: BackupManagerOptions): Promise<B
   };
 
   const deleteInternal = async (idInput: string): Promise<boolean> => {
+    assertCurrent?.();
     const id = backupId(idInput);
     let removed = false;
     let catalog = await readCatalog();
+    assertCurrent?.();
     const remote = catalog.entries.find((entry) => entry.id === id);
     if (remote) {
       catalog = await deleteRemoteEntry(catalog, remote);
+      assertCurrent?.();
       removed = true;
     }
+    assertCurrent?.();
     if (await local.delete(id)) removed = true;
+    assertCurrent?.();
     return removed;
   };
 
@@ -1081,8 +1136,11 @@ async function openObjectBackupManager(options: BackupManagerOptions): Promise<B
     },
     async delete(id) {
       if (closed) throw new Error("Backup manager is closed.");
+      assertCurrent?.();
       return mutate(async () => {
+        assertCurrent?.();
         const removed = await deleteInternal(id);
+        assertCurrent?.();
         if (removed) emit({ type: "deleted", backupId: id });
         return removed;
       });
@@ -1092,18 +1150,28 @@ async function openObjectBackupManager(options: BackupManagerOptions): Promise<B
       if (purgeOptions?.confirmation !== "delete all backups") {
         throw new Error('Backup purge confirmation must equal "delete all backups".');
       }
+      assertCurrent?.();
       return mutate(async () => {
+        assertCurrent?.();
         const catalog = await readCatalog();
+        assertCurrent?.();
         const localBackups = await local.list();
+        assertCurrent?.();
         const ids = new Set([
           ...catalog.entries.map((entry) => entry.id),
           ...localBackups.map((manifest) => manifest.id),
         ]);
         for (const entry of catalog.entries) {
-          for (const chunk of entry.chunks) await configured.store.delete(chunk.key);
+          for (const chunk of entry.chunks) {
+            assertCurrent?.(); await configured.store.delete(chunk.key); assertCurrent?.();
+          }
         }
-        for (const manifest of localBackups) await local.delete(manifest.id);
+        for (const manifest of localBackups) {
+          assertCurrent?.(); await local.delete(manifest.id); assertCurrent?.();
+        }
+        assertCurrent?.();
         await configured.store.delete(catalogKey);
+        assertCurrent?.();
         for (const id of ids) emit({ type: "deleted", backupId: id });
         return ids.size;
       });

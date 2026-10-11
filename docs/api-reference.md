@@ -338,6 +338,7 @@ Optional module: `@clank.run/framework/component-harness`; see [component harnes
   proof is required before staging and acceptance; unsupported profiles fail closed.
 
 - `openPlatform({ supervisor })`: opt-in dedicated same-host Linux coordinators with retained ownership epochs, native transaction fencing, independent process guardians and automatic standby recovery. See [Automatic supervisor leadership](supervisor-leadership.md) for configuration, failure bounds and migration. Optional `PlatformRuntime.supervisor()` returns readonly local state/epoch/expiry/responsibilities; standbys serve `503` with `Retry-After`.
+- `openPlatform({ canary: { provider, stages, ... } })`: opt-in isolated provider candidates with exact anonymous read paths, measured traffic stages and durable retirement before ordinary activation. Requires native supervisor and project ownership; enabling it permanently enrolls supervisor protocol 2. `GET /api/projects/:id/canary` includes non-secret retained status. `POST /api/projects/:id/canary/recover` accepts exact `{ operationId, expectedEpoch }` and only retries cleanup. See [provider canary configuration and recovery](deployment-platform.md#isolated-provider-canaries).
 - `openPlatform(options)`: browser dashboard, workspace people/invitation administration and
   activity, transparent monthly usage, device authorization, tokens, projects, transactionally
   enforced capacity and traffic limits, ingress metrics, DNS/domain lifecycle, TLS eligibility,
@@ -553,6 +554,13 @@ for host admission, fixed faults, operator reservations, proof limits and interr
 - `deploymentProviderDiagnosticsPath(projectId)`: exact provider-private path for current
   generation logs and resource attribution. It uses the separate memory-only control token and
   returns `DEPLOYMENT_PROVIDER_DIAGNOSTICS_MEDIA_TYPE`.
+- `deploymentProviderCanaryPath(projectId, "binding" | "prepare" | "inspect" | "stop" | "retire")`:
+  exact authenticated provider canary controls. Binding issuance persists a private credential
+  digest receipt; old credentials grant only exact retained cleanup. Responses use
+  `DEPLOYMENT_PROVIDER_CANARY_CONTROL_PROTOCOL` and `DEPLOYMENT_PROVIDER_CANARY_CONTROL_MEDIA_TYPE`.
+  Only exact prepare returns a private candidate route token. `canaries.controlTimeoutMs`
+  bounds HTTP handling; an uncertain timeout requires durable retirement retry. See
+  [the HTTP contract and restart limits](provider-service.md#authenticated-provider-canary-controls).
 - `inspect(projectId)`, `snapshot(projectId)`, `diagnostics(projectId, logLimit?)`, and `close()`:
   serialized non-secret durable progress, consistent backup input, bounded runtime visibility, and
   revoke/drain/verified-stop shutdown.

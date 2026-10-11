@@ -211,6 +211,10 @@ const COMMANDS = Object.freeze({
     usage: "clank channel <list|get|pin|history|actions|promote|rollback|retire> [name] [directory] [--expected-version <n>] [--from <environment>] [--release <id>] [--digest <sha256>] [--to <environment>] [--environment-version <n>] [--expected-active <id|none>] [--from-version <n>] [--key <id>] [--attestation <file>] [--confirm <phrase>] [--version <n>] [--dependency-version <n>] [--dependency-check <id>] [--json]",
     summary: "Pin immutable channel history and explicitly promote or roll back an exact retained artifact.",
   },
+  canary: {
+    usage: "clank canary <status|recover> [operation-id] [directory] [--expected-epoch <n>] [--json]",
+    summary: "Inspect canary measurements or retry cleanup for an exact provider candidate.",
+  },
   status: {
     usage: "clank status",
     summary: "Show the linked project and active release.",
@@ -273,6 +277,7 @@ const VALUE_OPTIONS = Object.freeze({
   environment: ["expected-version", "migration-policy", "from", "release", "digest", "expected-active", "key", "attestation", "confirm", "dependency-version", "dependency-check"],
   dependency: ["config", "expected-version", "confirm"],
   "release-window": ["request", "expected-version", "confirm", "attestation"],
+  canary: ["expected-epoch"],
   channel: ["expected-version", "from", "release", "digest", "to", "environment-version", "expected-active", "from-version", "key", "attestation", "confirm", "version", "dependency-version", "dependency-check"],
   preview: [
     "fixture",
@@ -312,6 +317,7 @@ const BOOLEAN_OPTIONS = Object.freeze({
   environment: ["json"],
   dependency: ["json"],
   "release-window": ["json"],
+  canary: ["json"],
   channel: ["json"],
   preview: [
     "json",
@@ -363,6 +369,7 @@ export async function run(command, args) {
       case "dependency": return await dependencyCommand(args);
       case "release-window": return await releaseWindowCommand(args);
       case "channel": return await channelCommand(args);
+      case "canary": return await canaryCommand(args);
       case "status": return await status(args);
       case "releases": return await releases(args);
       case "logs": return await logs(args);
@@ -609,6 +616,8 @@ Platform:
   clank domain list                     List custom domains
   clank domain verify <domain-id>       Verify the published TXT record
   clank domain remove <domain-id>       Remove a custom domain
+  clank canary status [directory]      Inspect measured stages and candidate cleanup
+  clank canary recover <operation-id> --expected-epoch <n>
   clank status                         Show the linked project and active release
   clank releases                       List release history
   clank releases delete <release-id> --confirm="delete-release <slug> <id>"
@@ -3247,6 +3256,39 @@ async function inspectWorkflowParents(root, path, create) {
 
 function shellSingleQuote(value) {
   return `'${String(value).replaceAll("'", "'\"'\"'")}'`;
+}
+
+async function canaryCommand(args) {
+  const action = args.shift(), values = positionals(args);
+  const allowed = { status: ["json"], recover: ["json", "expected-epoch"] }[action];
+  if (!allowed) throw new CliError(COMMANDS.canary.usage);
+  for (const argument of optionArguments(args)) {
+    if (argument.startsWith("--") && !allowed.includes(argument.slice(2).split("=", 1)[0])) {
+      throw new CliError(`Option ${argument.split("=", 1)[0]} does not apply to canary ${action}.`);
+    }
+  }
+  let body;
+  if (action === "recover") {
+    const operationId = values.shift(), epoch = option(args, "expected-epoch");
+    if (typeof operationId !== "string" || !/^canary_[A-Za-z0-9_-]{1,121}$/.test(operationId)) throw new CliError("Pass the exact operation ID from canary status.");
+    if (typeof epoch !== "string" || !/^[1-9]\d*$/.test(epoch) || !Number.isSafeInteger(Number(epoch))) throw new CliError("Pass the exact --expected-epoch from canary status.");
+    body = { operationId, expectedEpoch: Number(epoch) };
+  }
+  if (values.length > 1) throw new CliError(COMMANDS.canary.usage);
+  const { profile, link } = await linkedContext(resolve(values[0] ?? "."));
+  const payload = await platformRequest(profile.server, `/api/projects/${encodeURIComponent(link.projectId)}/canary${body ? "/recover" : ""}`, {
+    token: profile.token, ...(body ? { method: "POST", body, timeoutMs: PLATFORM_DEPLOY_TIMEOUT_MS } : {}),
+  });
+  if (flag(args, "json")) { console.log(JSON.stringify(payload, null, 2)); return; }
+  if (action === "status") console.log(`Measurement policy: ${payload.enabled ? "enabled" : "disabled"}.`);
+  if (payload.provider) {
+    const row = payload.provider;
+    console.log(`${row.operationId}  epoch ${row.controllerEpoch}  ${row.phase}${row.outcome ? " · " + row.outcome : ""}`);
+    console.log(`Release: ${row.releaseId}. Cleanup: ${row.cleanupRequired ? "required" : "acknowledged"}.`);
+    if (row.reason) console.log(row.reason);
+  } else console.log("No provider canary operation retained.");
+  for (const row of payload.canaries ?? []) console.log(`${row.releaseId}  ${row.state}  stage ${row.stage + 1}  ${row.trafficPercent}% traffic  ${row.samples} samples  ${(row.errorRate * 100).toFixed(2)}% errors  p95 ${row.p95Ms}ms${row.reason ? " · " + row.reason : ""}`);
+  if (action === "recover") console.log("Cleanup was requested for the exact candidate; this command does not promote a release. Inspect status before another action.");
 }
 
 async function status() {
