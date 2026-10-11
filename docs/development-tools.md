@@ -48,11 +48,15 @@ minifier dependency. Unmapped output columns and artifact digests change
 after rebuilding; existing verified artifacts retain their original bytes and identity. Reverting
 this build optimization restores the previous padding without a data migration.
 
-The framework's own release build additionally removes leading spaces/tabs in known
-JavaScript code regions when source maps are disabled. It preserves every token,
+The framework's own release build additionally removes leading spaces/tabs and
+horizontal spacing beside the standalone separators `; , : ( ) [ ] { }` in known
+JavaScript code regions when source maps are disabled. Other token-boundary spacing,
+including numeric dots and adjacent operator characters, remains. It preserves every token,
 newline, comment/license and string, template, SQL and regexp byte. Ambiguous lexical
 contexts, escaped identifiers, nested Unicode regexp classes and excessive template
-nesting leave the entire module unchanged. This private build step does not change
+nesting leave the entire module unchanged. A single-line division/regexp ambiguity
+that the indentation scan can safely skip disables all interior-spacing removal
+for that module, including earlier queued edits. This private build step does not change
 public `compile()` output, example compilation, declarations or mapped/debug builds.
 Built framework columns, digests and reflective `Function.toString()` formatting can
 change. Exact-source workflow revisions remain conservative across releases: use the
