@@ -29,6 +29,7 @@ The console uses normal, refresh-safe URLs rather than keeping navigation only i
 | `/projects/<project-slug>/logs` | Redacted runtime logs |
 | `/projects/<project-slug>/jobs` | Private queue health, cron schedules, cancellation, and retry |
 | `/projects/<project-slug>/incidents` | Incident ownership, diagnostic references, recovery notes and resolution |
+| `/projects/<project-slug>/slo` | Service objectives, measurement coverage, request budgets and retained burn alerts |
 | `/projects/<project-slug>/settings` | Administrative and destructive project controls |
 
 Links update browser history, Back/Forward restores the matching view, and every listed URL can be

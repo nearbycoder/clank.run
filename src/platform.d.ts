@@ -343,6 +343,8 @@ export interface ClankPlatformOptions {
   /** Current-human grants for a new isolated preview; requires organization security. */
   temporaryAccess?: {readonly maxGrants?: number; readonly maxReceipts?: number};
   incidents?: import("./platform-incidents.js").PlatformIncidentOptions;
+  /** Bounded native-ingress completion objectives and durable burn metadata. */
+  slos?: import("./platform-slo.js").PlatformSloOptions;
     /** Same-host Linux coordinators; each occupies a dedicated process terminated after leadership loss. */
     supervisor?: PlatformSupervisorOptions;
   serviceAccounts?: PlatformServiceAccountOptions;

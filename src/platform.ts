@@ -1,5 +1,6 @@
 import { openNodeEvacuations, type NodeEvacuationPlan, type EvacuationProject, type NodeEvacuationHooks } from "./node-evacuation.ts";
 import { openProjectIncidents, ProjectIncidentError, type PlatformIncidentOptions, type IncidentAuthority } from "./platform-incidents.ts";
+import { openProjectSlos, ProjectSloError, type PlatformSloOptions, type SloAuthority } from "./platform-slo.ts";
 import { assertProviderShadowSchema, shadowSchemaIdentity } from "./managed-shadow.ts";
 import { createManagedCanary, validateManagedCanary, type ManagedCanaryOptions } from "./managed-canary.ts";
 import { decodeReleaseAttestation, verifyReleaseAttestation, type ReleaseAttestation, type ReleaseAttestationPolicy } from "./release-attestation.ts";
@@ -613,6 +614,8 @@ export interface ClankPlatformOptions {
   temporaryAccess?: {readonly maxGrants?: number; readonly maxReceipts?: number};
   /** Bounded project incident workspace and optional scoped readonly diagnostic adapter. */
   incidents?: PlatformIncidentOptions;
+  /** Bounded native-ingress completion objectives and durable burn metadata. */
+  slos?: PlatformSloOptions;
   /** Same-host Linux coordinators; each must occupy a dedicated process. Lost leadership terminates that process. */
   supervisor?: PlatformSupervisorOptions;
   /** Opt-in dedicated organization machine identities with project-scoped credentials. */
@@ -992,6 +995,7 @@ type ProjectPermission =
   | "rollback"
   | "jobs"
   | "incidents"
+  | "slo"
   | "secrets"
   | "tokens"
   | "audit"
@@ -1605,6 +1609,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
   }) : undefined;
   const secretRotations = await openSecretRotations(storage.internal, { encrypt: value => encryptSecret(value, masterKey), decrypt: value => decryptSecret(value, masterKey), validate: options.validateSecret });
   let projectIncidents: Awaited<ReturnType<typeof openProjectIncidents>>;
+  let projectSlos: ReturnType<typeof openProjectSlos>;
+  let closeProjectSlos: (() => void) | undefined;
   let serviceAccounts: ReturnType<typeof openPlatformServiceAccounts> | undefined;
   let organizationSecurity: OrganizationSecurityPolicyController | undefined;
   let temporaryAccess: ReturnType<typeof openPlatformTemporaryAccess> | undefined;
@@ -1652,11 +1658,14 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       audit(actorId,projectId,action,metadata) {audit(storage.internal,actorId,null,projectId,action,{...metadata},true);},
     });
     projectIncidents = await openProjectIncidents(storage.internal, options.incidents ?? {}, {
+      // The SLO store is opened below before any reference can be requested.
       release(projectId, releaseId) {
         const row = storage.internal.prepare("SELECT id,digest,created_at,artifact_available FROM clank_platform_releases WHERE project_id=? AND id=?").get(projectId, releaseId);
         return row ? {id: String(row.id), digest: String(row.digest), createdAt: Number(row.created_at), available: Number(row.artifact_available ?? 1) === 1} : null;
       },
       alert(projectId, id) {
+        const slo = projectSlos.alert(projectId, id);
+        if (slo) return {state: slo.state === "open" || slo.state === "resolved" ? slo.state : "unknown", observedAt: slo.observedAt};
         if (!storage.internal.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_operational_incidents'").get()) return null;
         const row = storage.internal.prepare("SELECT signal,active,updated_at FROM clank_operational_incidents WHERE key=?").get(id);
         if (!row) return null;
@@ -1673,6 +1682,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     },
   }) : undefined;
     if (options.auditExport) auditExporter = await openAuditExporter(storage.internal, options.auditExport);
+    projectSlos = openProjectSlos(storage.internal, options.slos ?? {}, {collecting: ingressEnabled, onError: options.onError});
+    closeProjectSlos = () => projectSlos.close();
     if (options.retention) retentionController = await createRetentionController({ ...options.retention, native: storage.internal, kinds: ["audit"],
       refresh(userId, sessionId) { const auth = storage.auth.refreshSession(sessionId); return auth?.user?.id === userId ? auth : null; },
       scope(_context, resource) { return resource.organizationId ? `organization:${resource.organizationId}` : resource.ownerId ? `account:${resource.ownerId}` : "platform"; },
@@ -1700,6 +1711,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     organizationSecurityStores.delete(storage.internal);
     organizationSecurity?.close();
     temporaryAccess?.close();
+    closeProjectSlos?.();
     serviceAccounts?.close();
     retentionController?.close();
     await auditExporter?.close();
@@ -2075,6 +2087,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
   const canaryHistory = reportPolicy ? createManagedCanary(storage.internal, reportPolicy) : undefined;
   const canaries = canaryOptions ? canaryHistory : undefined;
   const recordIngressMetric = (metric: IngressRequestMetric): void => {
+    projectSlos.record(metric);
     canaries?.record(metric);
     recordMetric(storage.internal, metric);
     if (metric.admitted) {
@@ -9663,6 +9676,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       }
       const requiredPermission: ProjectPermission = !operation && request.method === "DELETE"
         ? "tokens"
+        : operation === "slo-policies" || operation.startsWith("slo-policies/")
+          ? request.method === "GET" || request.method === "HEAD" ? "read" : "slo"
         : operation === "incidents" || operation.startsWith("incidents/")
           ? "incidents"
         : operation === "members" || operation.startsWith("members/")
@@ -9709,11 +9724,13 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         machineResponseGuards.set(request,()=>{requireCurrentPlatformPrincipal(storage,principal);accessibleProject(storage.internal,project.id,principal,permission);});
       }
       const incidentOperation = operation === "incidents" || operation.startsWith("incidents/");
-      const incidentCredentialHash = incidentOperation && principal.tokenId !== null
+      const sloOperation = operation === "slo-policies" || operation.startsWith("slo-policies/");
+      const metadataOperation = incidentOperation || sloOperation;
+      const incidentCredentialHash = metadataOperation && principal.tokenId !== null
         ? syncHash((request.headers.get("authorization") ?? "").slice(7)) : null;
-      if (!incidentOperation && request.method !== "GET" && request.method !== "HEAD") requireNoEvacuation(project.id);
+      if (!metadataOperation && request.method !== "GET" && request.method !== "HEAD") requireNoEvacuation(project.id);
       const requireCurrentProjectAuthority = () => {
-        if (!incidentOperation && request.method !== "GET" && request.method !== "HEAD") requireNoEvacuation(project.id);
+        if (!metadataOperation && request.method !== "GET" && request.method !== "HEAD") requireNoEvacuation(project.id);
         requireCurrentPlatformPrincipal(storage, principal);
         if (incidentCredentialHash !== null && !storage.internal.prepare("SELECT 1 FROM clank_platform_tokens WHERE id=? AND user_id=? AND token_hash=?").get(principal.tokenId, principal.userId, incidentCredentialHash)) {
           throw new PlatformError(401, "INVALID_TOKEN", "The CLI access token is invalid or expired.");
@@ -9730,6 +9747,20 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         const result=operation.endsWith('/revoke') ? temporaryAccess.revoke(project.id,authority,input as unknown as import('./temporary-access.ts').TemporaryAccessRevoke)
           : temporaryAccess.create(project.id,authority,input as unknown as import('./temporary-access.ts').TemporaryAccessCreate);
         return api({ok:true,result},operation.endsWith('/revoke')?200:201);
+      }
+      if (sloOperation) {
+        if (url.searchParams.size) throw new PlatformError(422, "SLO_INPUT_INVALID", "SLO endpoints do not accept query fields.");
+        const authority: SloAuthority = {
+          userId: principal.userId,
+          authorize(write) {requireCurrentProjectAuthority(); if (write) accessibleProject(storage.internal, project.id, principal, "slo");},
+          audit(action, metadata) {audit(storage.internal, principal.userId, principal.tokenId, project.id, action, metadata);},
+        };
+        if (operation === "slo-policies" && request.method === "GET") return api({ok: true, policies: projectSlos.list(project.id, authority)});
+        if (operation === "slo-policies" && request.method === "POST") return api({ok: true, policy: projectSlos.create(project.id, authority, await readJsonRequest(request, 16 * 1024))}, 201);
+        const policy = /^slo-policies\/([A-Za-z0-9_-]{8,128})(?:\/(change))?$/u.exec(operation);
+        if (policy && !policy[2] && request.method === "GET") return api({ok: true, assessment: projectSlos.read(project.id, policy[1]!, authority)});
+        if (policy?.[2] === "change" && request.method === "POST") return api({ok: true, policy: projectSlos.change(project.id, policy[1]!, authority, await readJsonRequest(request, 16 * 1024))});
+        throw new PlatformError(404, "NOT_FOUND", "SLO endpoint not found.");
       }
       if (incidentOperation) {
         const ownerAllowed = (userId: string) => Boolean(storage.internal.prepare("SELECT 1 FROM clank_auth_users WHERE id=? AND disabled=0").get(userId)) && projectMembershipAllows(storage.internal, project, userId, "incidents");
@@ -10044,6 +10075,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
             role: access.role,
             canUseIncidents: projectMembershipAllows(storage.internal, project, principal.userId, "incidents", access.role)
               && (!principal.projectId || principal.permissions.includes("incidents")),
+            canManageSlos: projectMembershipAllows(storage.internal, project, principal.userId, "slo", access.role)
+              && (!principal.projectId || principal.permissions.includes("slo")),
             canDelete: principal.projectId === null && (access.role === "owner" || access.role === "admin"),
             canOperateJobs: roleAllows(access.role, "jobs")
               && (!principal.projectId || principal.permissions.includes("jobs")),
@@ -11522,6 +11555,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       if (error instanceof BackendActionError) return problem(error.status, error.code, error.message);
       if (error instanceof PlatformError) return problem(error.status, error.code, error.message, error.retryAfter);
       if (error instanceof ProjectIncidentError) return problem(error.status, error.code, error.message);
+      if (error instanceof ProjectSloError) return problem(error.status, error.code, error.message);
       if (error instanceof RequestInputError) return problem(error.status, error.code, error.message);
       if (error instanceof AuthError) return problem(error.status, error.code, error.message, error.retryAfter);
       if (error instanceof BillingWebhookError) {
@@ -11626,6 +11660,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
   auditExporter?.start();
   if (options.retention?.intervalMs !== undefined && options.retention.intervalMs !== false) retentionController?.start();
   operationsMonitor?.start();
+  projectSlos.start();
 
   return {
     handle,
@@ -11641,6 +11676,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     hostingProfile,
     runnerKind: runner.kind ?? "process",
     async close() {
+      projectSlos.close();
       projectIncidents.close();
       if (closed) return;
       closed = true;
@@ -18295,6 +18331,7 @@ const PLATFORM_PROJECT_SECTIONS = new Set([
   "jobs",
   "incidents",
   "settings",
+  "slo",
 ]);
 
 function canonicalPlatformConsolePath(pathname: string): string | null {
@@ -18631,6 +18668,7 @@ const PROJECT_PERMISSIONS: readonly ProjectPermission[] = [
   "jobs",
   "incidents",
   "secrets",
+  "slo",
   "tokens",
   "audit",
   "previews",

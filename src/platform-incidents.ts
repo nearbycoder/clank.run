@@ -57,7 +57,7 @@ const states = new Set(["unknown", "open", "resolved", "regressed", "waiting", "
 /** Private control-plane state; never stores application diagnostic payloads. */
 export async function openProjectIncidents(sql: SQLiteInternal, options: PlatformIncidentOptions, hooks: {
   release(projectId: string, releaseId: string): IncidentRelease | null;
-  alert(projectId: string, id: string): {readonly state: "open" | "resolved"; readonly observedAt: number} | null;
+  alert(projectId: string, id: string): {readonly state: "open" | "resolved" | "unknown"; readonly observedAt: number} | null;
 }) {
   const {randomUUID} = await import("node:crypto");
   const maxIncidents = integer(options.maxIncidents ?? 1000, 1, 100000), maxReceipts = integer(options.maxReceipts ?? 10000, 1, 100000);

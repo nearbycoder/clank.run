@@ -5,8 +5,8 @@ import {serve} from '../../dist/node.js';
 let platform;
 const server=await serve(async request=>{
   const response=await platform.handle(request);
-  if(request.headers.get('x-clank-fixture-hold')==='after-commit'&&request.method==='POST'&&request.url.endsWith('/incidents')&&response.status===201){
-    const data=await response.clone().json();process.send({committed:true,id:data.incident.id,version:data.incident.version});
+  if(request.headers.get('x-clank-fixture-hold')==='after-commit'&&request.method==='POST'&&(request.url.endsWith('/incidents')||request.url.endsWith('/slo-policies'))&&response.status===201){
+    const data=await response.clone().json(),record=data.incident??data.policy;process.send({committed:true,id:record.id,version:record.version});
     await new Promise(()=>{});
   }
   return response;
