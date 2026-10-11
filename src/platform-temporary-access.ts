@@ -26,9 +26,28 @@ export function openPlatformTemporaryAccess(sql: SQLiteInternal, options: Platfo
   for (const bound of [maxGrants,maxReceipts]) if (!Number.isSafeInteger(bound) || bound < 1 || bound > 100000) throw new TypeError('Invalid temporary access storage bound.');
   let closed = false, observedClock = 0;
   const atomic = <T>(handler: () => T): T => sql.inTransaction ? handler() : sql.transaction(handler);
+  // A partial retained store must not erase exact operation identity on reopen.
+  const shapes: Readonly<Record<string, readonly (readonly [string, string, number, number])[]>> = {
+    state: [['singleton','INTEGER',0,1],['protocol','INTEGER',1,0],['clock','INTEGER',1,0]],
+    versions: [['project_id','TEXT',0,1],['version','INTEGER',1,0]],
+    grants: [['id','TEXT',0,1],['project_id','TEXT',1,0],['organization_id','TEXT',1,0],['issuer_id','TEXT',1,0],['recipient_id','TEXT',1,0],['state','TEXT',1,0],['record','TEXT',1,0]],
+    receipts: [['project_id','TEXT',1,1],['actor_id','TEXT',1,2],['operation_id','TEXT',1,3],['intent','TEXT',1,0],['grant_id','TEXT',1,0],['accepted_version','INTEGER',1,0]],
+  };
+  const retained = () => {
+    const rows = Object.keys(shapes).map(suffix => sql.prepare('SELECT type FROM sqlite_schema WHERE name=?').get('clank_platform_temporary_access_'+suffix));
+    if (rows.every(row => !row)) return;
+    for (const [index,suffix] of Object.keys(shapes).entries()) {
+      if (rows[index]?.type !== 'table') fail('TEMPORARY_ACCESS_STATE','Incomplete retained temporary access storage.',503);
+      const columns = sql.prepare(`PRAGMA table_info(clank_platform_temporary_access_${suffix})`).all();
+      if (columns.length !== shapes[suffix].length || columns.some((column,index) => JSON.stringify([column.name,column.type,column.notnull,column.pk]) !== JSON.stringify(shapes[suffix][index]))) fail('TEMPORARY_ACCESS_STATE','Invalid retained temporary access storage shape.',503);
+    }
+    if (sql.prepare('SELECT count(*) AS n FROM clank_platform_temporary_access_state').get()?.n !== 1 || !sql.prepare('SELECT 1 FROM clank_platform_temporary_access_state WHERE singleton=1').get()) fail('TEMPORARY_ACCESS_STATE','Missing retained temporary access state.',503);
+  };
+  retained();
   if (sql.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_platform_temporary_access_state'").get()
     && sql.prepare('SELECT protocol FROM clank_platform_temporary_access_state WHERE singleton=1').get()?.protocol !== 1) fail('TEMPORARY_ACCESS_PROTOCOL', 'Unsupported retained temporary access protocol.', 503);
   atomic(() => {
+    retained();
     sql.exec(`CREATE TABLE IF NOT EXISTS clank_platform_temporary_access_state(singleton INTEGER PRIMARY KEY CHECK(singleton=1),protocol INTEGER NOT NULL,clock INTEGER NOT NULL);
       INSERT OR IGNORE INTO clank_platform_temporary_access_state VALUES(1,1,0);
       CREATE TABLE IF NOT EXISTS clank_platform_temporary_access_versions(project_id TEXT PRIMARY KEY,version INTEGER NOT NULL);

@@ -78,3 +78,21 @@ test('capacity, exact scope, stale concurrent intents, recipient visibility and 
   f.auth.revokeUserSessions(f.target.user.id);assert.throws(()=>f.access.capture(project,f.targetAuthority,grant.id),/native session/);
   f.sql.prepare('UPDATE clank_platform_temporary_access_state SET protocol=9').run();assert.throws(()=>f.restart(),e=>e.code==='TEMPORARY_ACCESS_PROTOCOL');
 });
+
+for (const suffix of ['state','versions','grants','receipts']) test(`missing retained ${suffix} refuses restart without repairing operation history`,async t=>{
+  const f=await setup(t);f.access.create(project,f.ownerAuthority,f.create());
+  const table='clank_platform_temporary_access_'+suffix;f.sql.exec(`DROP TABLE ${table}`);
+  const snapshot=()=>JSON.stringify(['state','versions','grants','receipts'].filter(value=>value!==suffix).map(value=>f.sql.prepare(`SELECT * FROM clank_platform_temporary_access_${value}`).all()));
+  const before=snapshot();assert.throws(()=>f.restart(),e=>e.code==='TEMPORARY_ACCESS_STATE'&&e.status===503);
+  assert.equal(snapshot(),before);assert.equal(f.sql.prepare('SELECT 1 FROM sqlite_schema WHERE name=?').get(table),undefined);
+  assert.equal(f.sql.prepare('SELECT count(*) AS n FROM temporary_test_audit').get().n,1);
+});
+for (const change of ['missing-state-row','renamed-receipt-column','receipt-view']) test(`retained ${change} is refused before grant invalidation or bootstrap`,async t=>{
+  const f=await setup(t);f.access.create(project,f.ownerAuthority,f.create());
+  if(change==='missing-state-row')f.sql.exec('DELETE FROM clank_platform_temporary_access_state');
+  if(change==='renamed-receipt-column')f.sql.exec('ALTER TABLE clank_platform_temporary_access_receipts RENAME COLUMN intent TO lost_intent');
+  if(change==='receipt-view')f.sql.exec('ALTER TABLE clank_platform_temporary_access_receipts RENAME TO retained_receipts; CREATE VIEW clank_platform_temporary_access_receipts AS SELECT * FROM retained_receipts');
+  const grants=JSON.stringify(f.sql.prepare('SELECT * FROM clank_platform_temporary_access_grants').all()),schema=JSON.stringify(f.sql.prepare('SELECT * FROM sqlite_schema ORDER BY name').all());
+  assert.throws(()=>f.restart(),e=>e.code==='TEMPORARY_ACCESS_STATE'&&e.status===503);
+  assert.equal(JSON.stringify(f.sql.prepare('SELECT * FROM clank_platform_temporary_access_grants').all()),grants);assert.equal(JSON.stringify(f.sql.prepare('SELECT * FROM sqlite_schema ORDER BY name').all()),schema);
+});
