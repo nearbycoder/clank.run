@@ -8128,12 +8128,14 @@ async function waitFor(check, timeout = 5_000) {
 
 test("secret rotations validate candidates, fence activation/rollback, track running consumers and survive restart", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-secret-rotations-"));
+  const ports = await reservePlatformTestPorts();
   const dataDirectory = join(root, "platform");
   const options = { dataDirectory, publicUrl: "http://127.0.0.1:4200", signup: true,
-    appPortStart: 59280, appPortEnd: 59285, backups: { intervalMs: false },
+    appPortStart: ports.start, appPortEnd: ports.start + 5, backups: { intervalMs: false },
     validateSecret: async ({ value }) => value.startsWith("valid-") };
-  let platform = await openPlatform(options);
+  let platform;
   try {
+    platform = await openPlatform(options);
     const owner = await authorizeCli(platform, "rotation-owner@example.invalid");
     const other = await authorizeCli(platform, "rotation-other@example.invalid");
     const created = await payload(platform, jsonRequest("/api/projects", { method: "POST", token: owner.accessToken, body: { name: "Rotation app", slug: "rotation-app" } }), 201);
@@ -8168,7 +8170,14 @@ test("secret rotations validate candidates, fence activation/rollback, track run
     assert.doesNotMatch(JSON.stringify(control.prepare("SELECT * FROM clank_platform_secret_rotations").all()), /valid-new-fixture-key|valid-old-fixture-key/); control.close();
     await call("/PARTNER_KEY", "DELETE"); assert.equal((await call("/rotations")).rotations.length, 0);
     await call(`/rotations/${staged.id}/rollback`, "POST", {}, 409);
-  } finally { await platform.close(); await rm(root, { recursive: true, force: true }); }
+  } finally {
+    await platform?.close();
+    const fences = (await readdir(join(dataDirectory, "runtime-guardians")).catch(error => {
+      if (error.code === "ENOENT") return []; throw error;
+    })).filter(name => name.endsWith(".json"));
+    assert.deepEqual(fences, [], "Unverified fixture runtime fences must retain their root and port lease.");
+    await rm(root, { recursive: true, force: true }); await ports.release();
+  }
 });
 
 
