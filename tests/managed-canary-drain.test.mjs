@@ -206,17 +206,26 @@ for (const mode of ['close', 'lease replacement']) test(`canary cannot publish a
 
 
 test('canary final health check cannot publish an earlier healthy sample snapshot', { timeout: 15000 }, async t => {
-  const entered = gate(), release = gate();
-  t.after(() => release.resolve());
+  const measured = gate(), resumeMeasurement = gate(), entered = gate(), release = gate();
+  t.after(() => { resumeMeasurement.resolve(); release.resolve(); });
   let checks = 0;
   const f = await fixture(t, { durationMs: 1500, minimumSamples: 2, healthCheck: async () => {
-    if (++checks === 3) { entered.resolve(); await release.promise; }
+    checks++;
+    if (checks === 2) { measured.resolve(); await resumeMeasurement.promise; }
+    if (checks === 3) { entered.resolve(); await release.promise; }
   } });
+  // Observe genuine stage progress before sending healthy samples. Requests
+  // completed in the stage's initial wall-clock millisecond are excluded.
+  await measured.promise;
+  const stage = f.canaries.reports('project_primary')[0];
   for (let index = 0; index < 2; index++) {
     const response = await f.ingress.handle(f.request('/ok'));
     assert.equal(response.status, 200); assert.equal(await response.text(), 'ok');
   }
-  await entered.promise;
+  assert.equal(f.metrics.length, 2);
+  assert.ok(f.metrics.every(metric => metric.admitted && metric.recordedAt > stage.updatedAt));
+  resumeMeasurement.resolve();
+  await Promise.race([entered.promise, f.settle().then(() => { throw new Error('Canary completed before the final health gate: ' + f.failures.map(error => error.message).join('; ')); })]);
   for (let index = 0; index < 2; index++) {
     const response = await f.ingress.handle(f.request('/fail'));
     assert.equal(response.status, 500); assert.equal(await response.text(), 'failed');
