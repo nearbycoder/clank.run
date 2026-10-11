@@ -51,8 +51,36 @@ type Row=Record<string,unknown>;
 export function openPlatformStatusPages(sql:SQLiteInternal,options:PlatformStatusPagesOptions,hooks:StatusPageHooks){
   const maxPages=integer(options.maxPages??1000,1,10000),maxReceipts=integer(options.maxReceipts??20000,1,100000),maxPreviews=integer(options.maxPreviews??5000,1,20000),maxUpdates=integer(options.maxUpdates??10000,1,50000),maxSubscribers=integer(options.maxSubscribers??5000,1,20000),maxNotifications=integer(options.maxNotifications??50000,1,100000);
   let closed=false,observedClock=0,epoch=0;
-  if(sql.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_platform_status_state'").get()&&sql.prepare('SELECT protocol FROM clank_platform_status_state WHERE singleton=1').get()?.protocol!==1)fail(409,"STATUS_PROTOCOL","Unsupported status protocol; retain its state.");
+  const tables:Record<string,string>={
+    clank_platform_status_state:'singleton:INTEGER:0:1 protocol:INTEGER:1:0 epoch:INTEGER:1:0 clock:INTEGER:1:0',
+    clank_platform_status_pages:'id:TEXT:1:1 project_id:TEXT:1:0 slug:TEXT:1:0 version:INTEGER:1:0 configuration:TEXT:1:0 scope:TEXT:1:0 snapshot:TEXT:0:0 published_version:INTEGER:0:0 health_epoch:INTEGER:1:0 updated_at:INTEGER:1:0',
+    clank_platform_status_previews:'id:TEXT:1:1 page_id:TEXT:1:0 actor_id:TEXT:1:0 epoch:INTEGER:1:0 expected_version:INTEGER:1:0 request:TEXT:1:0 sources:TEXT:1:0 result:TEXT:1:0 digest:TEXT:1:0 expires_at:INTEGER:1:0',
+    clank_platform_status_updates:'sequence:INTEGER:0:1 id:TEXT:1:0 page_id:TEXT:1:0 scope:TEXT:1:0 copy:TEXT:1:0 incident_id:TEXT:0:0 incident_version:INTEGER:0:0 published_at:INTEGER:1:0',
+    clank_platform_status_subscribers:'page_id:TEXT:1:1 actor_id:TEXT:1:2 scope:TEXT:1:0 version:INTEGER:1:0 subscribed:INTEGER:1:0 components:TEXT:1:0 updated_at:INTEGER:1:0',
+    clank_platform_status_notifications:'sequence:INTEGER:0:1 id:TEXT:1:0 page_id:TEXT:1:0 subscriber_id:TEXT:1:0 update_id:TEXT:1:0 record:TEXT:1:0 created_at:INTEGER:1:0',
+    clank_platform_status_domains:'id:TEXT:1:1 page_id:TEXT:1:0 hostname:TEXT:1:0 scope:TEXT:1:0 challenge:TEXT:1:0 routing:TEXT:1:0 checked_at:INTEGER:1:0',
+    clank_platform_status_receipts:'page_id:TEXT:1:1 actor_id:TEXT:1:2 operation_id:TEXT:1:3 scope:TEXT:1:0 request:TEXT:1:0 result:TEXT:1:0',
+  };
+  const invalidStorage=()=>fail(409,'STATUS_STATE_INVALID','Retained status storage is incomplete or invalid; preserve it for recovery.');
+  const storage=(pristine=false,initializing=false):Row|null=>{
+    const retained=Object.keys(tables).map(name=>sql.prepare('SELECT type FROM sqlite_schema WHERE name=?').get(name));
+    if(pristine&&retained.every(row=>!row))return null;
+    if(retained.some(row=>row?.type!=='table'))invalidStorage();
+    for(const [name,shape] of Object.entries(tables)){
+      const columns=sql.prepare('PRAGMA table_xinfo('+name+')').all();
+      if(columns.some(row=>row.dflt_value!==null||row.hidden!==0)||columns.map(row=>[row.name,row.type,row.notnull,row.pk].join(':')).join(' ')!==shape)invalidStorage();
+    }
+    const rows=sql.prepare('SELECT * FROM clank_platform_status_state').all();
+    if(initializing&&rows.length===0)return null;
+    if(rows.length!==1||rows[0].singleton!==1)invalidStorage();
+    const state=rows[0];
+    if(state.protocol!==1)fail(409,'STATUS_PROTOCOL','Unsupported status protocol; retain its state.');
+    if(!Number.isSafeInteger(state.epoch)||Number(state.epoch)<1||!Number.isSafeInteger(state.clock)||Number(state.clock)<0||Number(state.clock)>4102444800000)invalidStorage();
+    return state;
+  };
+  storage(true);
   sql.transaction(()=>{
+    const before=storage(true);
     sql.exec(`CREATE TABLE IF NOT EXISTS clank_platform_status_state(singleton INTEGER PRIMARY KEY CHECK(singleton=1),protocol INTEGER NOT NULL,epoch INTEGER NOT NULL,clock INTEGER NOT NULL) STRICT;
       CREATE TABLE IF NOT EXISTS clank_platform_status_pages(id TEXT PRIMARY KEY,project_id TEXT NOT NULL UNIQUE REFERENCES clank_platform_projects(id) ON DELETE CASCADE,slug TEXT NOT NULL UNIQUE,version INTEGER NOT NULL,configuration TEXT NOT NULL CHECK(json_valid(configuration)),scope TEXT NOT NULL,snapshot TEXT CHECK(snapshot IS NULL OR json_valid(snapshot)),published_version INTEGER,health_epoch INTEGER NOT NULL,updated_at INTEGER NOT NULL) STRICT;
       CREATE TABLE IF NOT EXISTS clank_platform_status_previews(id TEXT PRIMARY KEY,page_id TEXT NOT NULL REFERENCES clank_platform_status_pages(id) ON DELETE CASCADE,actor_id TEXT NOT NULL,epoch INTEGER NOT NULL,expected_version INTEGER NOT NULL,request TEXT NOT NULL CHECK(json_valid(request)),sources TEXT NOT NULL CHECK(json_valid(sources)),result TEXT NOT NULL CHECK(json_valid(result)),digest TEXT NOT NULL,expires_at INTEGER NOT NULL) STRICT;
@@ -61,14 +89,15 @@ export function openPlatformStatusPages(sql:SQLiteInternal,options:PlatformStatu
       CREATE TABLE IF NOT EXISTS clank_platform_status_notifications(sequence INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,page_id TEXT NOT NULL REFERENCES clank_platform_status_pages(id) ON DELETE CASCADE,subscriber_id TEXT NOT NULL,update_id TEXT NOT NULL REFERENCES clank_platform_status_updates(id) ON DELETE CASCADE,record TEXT NOT NULL CHECK(json_valid(record)),created_at INTEGER NOT NULL,UNIQUE(update_id,subscriber_id)) STRICT;
       CREATE TABLE IF NOT EXISTS clank_platform_status_domains(id TEXT PRIMARY KEY,page_id TEXT NOT NULL REFERENCES clank_platform_status_pages(id) ON DELETE CASCADE,hostname TEXT NOT NULL UNIQUE,scope TEXT NOT NULL,challenge TEXT NOT NULL CHECK(json_valid(challenge)),routing TEXT NOT NULL CHECK(routing IN('pending','ready')),checked_at INTEGER NOT NULL) STRICT;
       CREATE TABLE IF NOT EXISTS clank_platform_status_receipts(page_id TEXT NOT NULL,actor_id TEXT NOT NULL,operation_id TEXT NOT NULL,scope TEXT NOT NULL,request TEXT NOT NULL CHECK(json_valid(request)),result TEXT NOT NULL CHECK(json_valid(result)),PRIMARY KEY(page_id,actor_id,operation_id)) STRICT;`);
-    const prior=sql.prepare('SELECT * FROM clank_platform_status_state WHERE singleton=1').get();
+    const prior=storage(false,before===null);
     if(prior){if(prior.protocol!==1||!Number.isSafeInteger(prior.epoch)||Number(prior.epoch)<1||Number(prior.epoch)>=Number.MAX_SAFE_INTEGER||!Number.isSafeInteger(prior.clock)||Number(prior.clock)<0||Number(prior.clock)>4102444800000)fail(409,"STATUS_STATE_INVALID","Invalid retained status clock or epoch.");observedClock=Number(prior.clock);epoch=Number(prior.epoch)+1;}
     else epoch=1;
     observedClock=Math.max(observedClock,integer(Date.now(),0,4102444800000));
     ack(sql.prepare('INSERT INTO clank_platform_status_state VALUES(1,1,?,?) ON CONFLICT(singleton) DO UPDATE SET epoch=excluded.epoch,clock=excluded.clock').run(epoch,observedClock));
     const retained=sql.prepare('SELECT epoch,clock FROM clank_platform_status_state WHERE singleton=1').get();if(retained?.epoch!==epoch||retained.clock!==observedClock)fail(409,"STATUS_ACKNOWLEDGEMENT","Native status clock was not retained.");
+    storage();
   });
-  const protocol=(requireCurrent=true)=>{if(closed)fail(503,"STATUS_CLOSED","Status publishing is closed.");const state=sql.prepare('SELECT * FROM clank_platform_status_state WHERE singleton=1').get();if(state?.protocol!==1)fail(409,"STATUS_PROTOCOL","Unsupported retained status protocol.");if(!Number.isSafeInteger(state.clock)||Number(state.clock)<0||Number(state.clock)>4102444800000||!Number.isSafeInteger(state.epoch)||Number(state.epoch)<1)fail(409,'STATUS_STATE_INVALID','Invalid retained native status clock or epoch.');if(requireCurrent&&state.epoch!==epoch)fail(409,"STATUS_CONTROLLER_REPLACED","Current status controller authority is required.");return state;};
+  const protocol=(requireCurrent=true)=>{if(closed)fail(503,"STATUS_CLOSED","Status publishing is closed.");const state=storage()!;if(requireCurrent&&state.epoch!==epoch)fail(409,"STATUS_CONTROLLER_REPLACED","Current status controller authority is required.");return state;};
   const clock=()=>{const state=protocol();observedClock=Math.max(observedClock,Number(state.clock),integer(Date.now(),0,4102444800000));return observedClock;};
   const persistClock=()=>{const at=clock();ack(sql.prepare('UPDATE clank_platform_status_state SET clock=? WHERE singleton=1 AND epoch=?').run(at,epoch));if(sql.prepare('SELECT clock FROM clank_platform_status_state WHERE singleton=1').get()?.clock!==at)fail(409,"STATUS_ACKNOWLEDGEMENT","Native status clock was not retained.");if(finalChecks)remember('SELECT * FROM clank_platform_status_state WHERE singleton=1',[]);return at;};
   const check=(authority?:StatusPageAuthority,write=false)=>{protocol();authority?.authorize(write);};

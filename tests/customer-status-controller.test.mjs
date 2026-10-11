@@ -4,6 +4,7 @@ import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
+import {DatabaseSync} from 'node:sqlite';
 import {defineDatabase,openSQLite} from '../dist/backend.js';
 import {openPlatformStatusPages} from '../dist/platform-status-pages.js';
 const internal=Symbol.for('clank.sqlite.internal'),project='project_status_native_01';
@@ -16,7 +17,7 @@ async function setup(t,options={}){
  const authority={userId:'actor_status_native_01',authorize(){if(!allowed)throw new Error('Native authority revoked.');},binding:()=>String(generation),audit(){afterAudit();}};
  const controller=openPlatformStatusPages(sql,options,hooks),controllers=[controller],databases=[db];
  t.after(()=>{controllers.forEach(c=>c.close());databases.forEach(d=>d.close());return rm(root,{recursive:true,force:true});});
- return {controller,authority,sql,configuration:configuration(),hooks,sourceReads:()=>sourceReads,changeIncident:()=>incidentVersion++,changeAuthority:()=>generation++,revoke:()=>allowed=false,scope:value=>scope=value,audit:value=>afterAudit=value,async fresh(){const next=await openSQLite(schema,{path:join(root,'control.sqlite')}),c=openPlatformStatusPages(next[internal],options,hooks);controllers.push(c);databases.push(next);return c;}};
+ return {controller,authority,sql,databasePath:join(root,'control.sqlite'),configuration:configuration(),hooks,sourceReads:()=>sourceReads,changeIncident:()=>incidentVersion++,changeAuthority:()=>generation++,revoke:()=>allowed=false,scope:value=>scope=value,audit:value=>afterAudit=value,async fresh(){const next=await openSQLite(schema,{path:join(root,'control.sqlite')});databases.push(next);const c=openPlatformStatusPages(next[internal],options,hooks);controllers.push(c);return c;}};
 }
 const create=f=>f.controller.create(project,f.authority,{configuration:f.configuration,operationId:'status_native_create_01'});
 const review=(f,page,publication={kind:'page'})=>f.controller.preview(project,f.authority,{expectedVersion:page.version,publication});
@@ -69,4 +70,26 @@ test('native observation expiry stays unknown after a wall-clock reversal and pa
  const f=await setup(t,{maxPages:1}),created=create(f);commit(f,review(f,created));const original=Date.now,now=original();let wall=now;Date.now=()=>wall;t.after(()=>Date.now=original);
  wall=f.configuration.components[0].source.expiresAt+1;assert.equal(f.controller.publicPage(f.configuration.slug).components[0].health,'unknown');wall=now-60000;assert.equal(f.controller.publicPage(f.configuration.slug).components[0].health,'unknown');assert.equal(create(f).version,1);
  f.sql.prepare('UPDATE clank_platform_status_state SET clock=-1').run();assert.throws(()=>f.controller.publicPage(f.configuration.slug),e=>e.code==='STATUS_STATE_INVALID');
+});
+
+const retainedStatusSnapshot=f=>{
+ const native=new DatabaseSync(f.databasePath,{readOnly:true});
+ try{const schema=native.prepare('SELECT type,name,tbl_name,sql FROM sqlite_schema ORDER BY type,name').all(),rows={};for(const entry of schema)if(entry.type==='table'){const name='"'+entry.name.replaceAll('"','""')+'"';rows[entry.name]=native.prepare('SELECT * FROM '+name).all();}return {schema,rows};}finally{native.close();}
+};
+const statusStorageFaults={
+ ...Object.fromEntries(['state','pages','previews','updates','subscribers','notifications','domains','receipts'].map(name=>['missing '+name,'DROP TABLE clank_platform_status_'+name])),
+ 'receipt view':'DROP TABLE clank_platform_status_receipts; CREATE VIEW clank_platform_status_receipts AS SELECT 1 AS operation_id',
+ 'renamed column':'ALTER TABLE clank_platform_status_pages RENAME COLUMN version TO replaced_version',
+ 'missing singleton':'DELETE FROM clank_platform_status_state',
+ 'invalid clock':'UPDATE clank_platform_status_state SET clock=-1',
+ 'invalid epoch':'UPDATE clank_platform_status_state SET epoch=0',
+ 'exhausted epoch':'UPDATE clank_platform_status_state SET epoch=9007199254740991',
+};
+for(const [name,fault] of Object.entries(statusStorageFaults))test('native retained status '+name+' refuses reopen before epoch or history changes',async t=>{
+ const f=await setup(t),created=create(f);commit(f,review(f,created));f.controller.close();f.sql.exec(fault);const before=retainedStatusSnapshot(f);
+ await assert.rejects(f.fresh(),e=>e.code==='STATUS_STATE_INVALID'&&e.status===409);assert.deepEqual(retainedStatusSnapshot(f),before);
+});
+for(const table of ['state','receipts'])test('preopened native status refuses live '+table+' loss without repairing history',async t=>{
+ const f=await setup(t),created=create(f);commit(f,review(f,created));f.sql.exec('DROP TABLE clank_platform_status_'+table);const before=retainedStatusSnapshot(f);
+ assert.throws(()=>f.controller.publicPage(f.configuration.slug),e=>e.code==='STATUS_STATE_INVALID');assert.throws(()=>create(f),e=>e.code==='STATUS_STATE_INVALID');assert.deepEqual(retainedStatusSnapshot(f),before);
 });

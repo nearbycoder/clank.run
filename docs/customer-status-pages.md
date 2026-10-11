@@ -14,6 +14,8 @@ An SLO component projects only current native completion coverage. A complete, e
 
 Public reads use the stored approved snapshot; they never query a private incident or change an SLO alert. Expired health becomes unknown with incomplete coverage. Opening a replacement native status controller retires earlier health authority and pending previews. Public text, committed update history and inbox receipts remain retained. Operators review a new snapshot to publish current health after recovery.
 
+Startup and live controller operations refuse a partially missing known status catalog, an incompatible known column layout or an invalid retained singleton before recreating history or advancing its epoch. Surviving records remain unchanged for operator recovery. This checks the eight known table layouts and native epoch/clock, rather than arbitrary SQL constraints or coherent rollback of the entire database. Loss of all eight tables cannot be distinguished from first boot without a separate enrollment marker.
+
 ```ts
 import {createCustomerStatusClient} from "@clank.run/framework/customer-status";
 
