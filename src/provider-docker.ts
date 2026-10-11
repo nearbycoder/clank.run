@@ -1,3 +1,4 @@
+import { consumeProviderDockerClient, runProviderDockerClient } from "./provider-docker-client.ts";
 import {
   applyLinuxDockerNetworkPolicy, createLinuxDockerNetworkPlan, enforceLinuxProjectDiskQuota, removeLinuxDockerNetworkPolicy,
   type DockerOutboundNetworkPolicy, type LinuxDockerNetworkPlan, type LinuxProjectDiskQuota,
@@ -279,7 +280,6 @@ interface NodePath {
 const IDENTIFIER = /^[A-Za-z0-9_-]{1,128}$/u;
 const OWNER = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/u;
 const ENVIRONMENT_NAME = /^[A-Z_][A-Z0-9_]{0,127}$/u;
-const HOST_ENVIRONMENT_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/u;
 const DIGEST = /^[a-f0-9]{64}$/u;
 const CONTAINER_ID = /^[a-f0-9]{12,64}$/u;
 const IMAGE_DIGEST = /@sha256:[a-f0-9]{64}$/u;
@@ -291,28 +291,6 @@ const MAX_ENCODED_ENVIRONMENT_BYTES = 4 * 1024 * 1024;
 const MAX_RUNTIME_LOG_BYTES = 128 * 1024;
 const MAX_RUNTIME_LOG_ENTRIES = 1_000;
 const MAX_RUNTIME_LOG_LINE = 16 * 1024;
-const TRUSTED_DOCKER_ENVIRONMENT = Object.freeze([
-  "DOCKER_API_VERSION",
-  "DOCKER_CERT_PATH",
-  "DOCKER_CONFIG",
-  "DOCKER_CONTEXT",
-  "DOCKER_CUSTOM_HEADERS",
-  "DOCKER_DEFAULT_PLATFORM",
-  "DOCKER_HOST",
-  "DOCKER_TLS_VERIFY",
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "NO_PROXY",
-  "http_proxy",
-  "https_proxy",
-  "no_proxy",
-  "SSH_AUTH_SOCK",
-  "XDG_RUNTIME_DIR",
-  "TMPDIR",
-  "LANG",
-  "LC_ALL",
-] as const);
-
 /**
  * Opens the zero-dependency reference Docker launcher used by a trusted Clank
  * provider. Opening removes only containers with both exact Clank owner labels,
@@ -333,7 +311,8 @@ export async function openDockerDeploymentRuntimeLauncher(
   );
   const owner = stringPattern(options.owner, "owner", OWNER);
   const image = dockerImage(options.image, options.allowMutableImage === true);
-  const executable = safeCommand(options.executable ?? "docker", "executable");
+  const client = consumeProviderDockerClient(options);
+  const { executable, environment: hostEnvironment } = client;
   const network = stringPattern(options.network ?? "bridge", "network", RESOURCE_VALUE);
   if (options.outboundNetwork && options.network !== undefined) throw new TypeError("outboundNetwork manages its own project bridge; omit network.");
   const memory = stringPattern(options.memory ?? "512m", "memory", RESOURCE_VALUE);
@@ -363,7 +342,6 @@ export async function openDockerDeploymentRuntimeLauncher(
   const fetcher = options.fetch ?? globalThis.fetch;
   if (!fetcher) throw new Error("fetch is not available.");
   const user = containerUser(options.user, options.allowContainerRoot === true);
-  const hostEnvironment = trustedHostEnvironment(options.dockerEnvironment);
   const records = new Map<string, RuntimeRecord>();
   const candidates = new Map<DockerDeploymentRuntimeCandidate, RuntimeRecord>();
   const highWater = new Map<string, {
@@ -390,10 +368,9 @@ export async function openDockerDeploymentRuntimeLauncher(
       allowFailure?: boolean;
     } = {},
   ): Promise<DockerCommandResult> =>
-    runCommand(executable, arguments_, {
+    runProviderDockerClient(client, arguments_, {
       timeoutMs: commandTimeoutMs,
       maxOutputBytes: MAX_DOCKER_OUTPUT_BYTES,
-      environment: hostEnvironment,
       ...commandOptions,
     });
 
@@ -1371,93 +1348,6 @@ async function spawnAttachedDocker(
   );
 }
 
-async function runCommand(
-  executable: string,
-  arguments_: readonly string[],
-  options: {
-    timeoutMs: number;
-    maxOutputBytes: number;
-    environment: Readonly<Record<string, string>>;
-    signal?: AbortSignal;
-    allowFailure?: boolean;
-  },
-): Promise<DockerCommandResult> {
-  throwIfAborted(options.signal);
-  const childProcessName = "node:child_process";
-  const { spawn } = await import(childProcessName) as unknown as {
-    spawn(
-      executable: string,
-      arguments_: string[],
-      options: Record<string, unknown>,
-    ): NativeChild;
-  };
-  const child = spawn(executable, [...arguments_], {
-    env: { ...options.environment },
-    stdio: ["ignore", "pipe", "pipe"],
-    shell: false,
-  });
-  let stdout = "";
-  let stderr = "";
-  let outputBytes = 0;
-  let overflow: Error | undefined;
-  const collect = async (
-    stream: AsyncIterable<Uint8Array> | undefined,
-    assign: (value: string) => void,
-  ): Promise<void> => {
-    if (!stream) return;
-    const decoder = new TextDecoder();
-    for await (const chunk of stream) {
-      outputBytes += chunk.byteLength;
-      if (outputBytes > options.maxOutputBytes) {
-        overflow = new Error("Docker command output exceeded its configured limit.");
-        child.kill("SIGKILL");
-        break;
-      }
-      assign(decoder.decode(chunk, { stream: true }));
-    }
-    assign(decoder.decode());
-  };
-  const stdoutTask = collect(child.stdout, (value) => {
-    stdout += value;
-  });
-  const stderrTask = collect(child.stderr, (value) => {
-    stderr += value;
-  });
-  let settled = false;
-  const exit = new Promise<{ code: unknown; signal: unknown; error?: unknown }>((resolve) => {
-    child.once("error", (error) => {
-      if (!settled) {
-        settled = true;
-        resolve({ code: null, signal: null, error });
-      }
-    });
-    child.once("exit", (code, signal) => {
-      if (!settled) {
-        settled = true;
-        resolve({ code, signal });
-      }
-    });
-  });
-  const abort = (): void => {
-    child.kill("SIGKILL");
-  };
-  options.signal?.addEventListener("abort", abort, { once: true });
-  const timer = setTimeout(() => child.kill("SIGKILL"), options.timeoutMs);
-  const result = await exit;
-  clearTimeout(timer);
-  options.signal?.removeEventListener("abort", abort);
-  await Promise.allSettled([stdoutTask, stderrTask]);
-  throwIfAborted(options.signal);
-  if (overflow) throw overflow;
-  if (result.error) throw new Error(`Docker command failed: ${safeError(result.error)}`);
-  if (result.code !== 0 && !options.allowFailure) {
-    throw new Error(
-      `Docker command failed (${String(result.code ?? result.signal ?? "unknown")}): `
-        + boundedFailure(stderr),
-    );
-  }
-  return { stdout, stderr, code: typeof result.code === "number" ? result.code : null };
-}
 
 async function waitForHealth(
   fetcher: typeof fetch,
@@ -1764,37 +1654,6 @@ async function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
     }
     signal.addEventListener("abort", abort, { once: true });
   });
-}
-
-function trustedHostEnvironment(
-  additional: Readonly<Record<string, string>> | undefined,
-): Readonly<Record<string, string>> {
-  const source = (globalThis as any).process.env as Record<string, string | undefined>;
-  const output = Object.create(null) as Record<string, string>;
-  for (const name of TRUSTED_DOCKER_ENVIRONMENT) {
-    if (typeof source[name] === "string") output[name] = source[name]!;
-  }
-  output.PATH = source.PATH ?? "";
-  output.HOME = source.HOME ?? "";
-  if (additional !== undefined) {
-    if (!additional || typeof additional !== "object" || Array.isArray(additional)) {
-      throw new TypeError("dockerEnvironment must be an object.");
-    }
-    const entries = Object.entries(additional);
-    if (entries.length > 64) throw new RangeError("dockerEnvironment has too many entries.");
-    for (const [name, value] of entries) {
-      if (
-        !HOST_ENVIRONMENT_NAME.test(name)
-        || typeof value !== "string"
-        || value.length > 16_384
-        || value.includes("\0")
-      ) {
-        throw new TypeError("dockerEnvironment contains an invalid entry.");
-      }
-      output[name] = value;
-    }
-  }
-  return Object.freeze(output);
 }
 
 function containerUser(input: string | undefined, allowRoot: boolean): string {

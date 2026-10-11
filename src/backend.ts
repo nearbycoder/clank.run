@@ -1445,7 +1445,31 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
         ensureOpen();
         if (capture || transactionActive || readActive) throw new Error("Recovery capture requires an idle database and can only be installed once.");
         if (!native.createSession) throw new Error("Point-in-time recovery requires Node SQLite session support.");
-        capture = factory({ path, exec: (sql) => native.exec(sql), prepare: (sql) => native.prepare(sql), createSession: (options) => native.createSession!(options) });
+        // Capture uses the same native handle but must not bypass an installed
+        // owner guard during bootstrap, asynchronous continuation or commit.
+        // Exact rollback remains available for cleanup after authority loss.
+        const assertCaptureCurrent = () => {
+          if (closed) throw new Error("SQLite database is closed.");
+          writeGuard?.();
+        };
+        assertCaptureCurrent();
+        capture = factory({ path,
+          exec(sql) {
+            if (closed) throw new Error("SQLite database is closed.");
+            if (!/^\s*ROLLBACK\s*;?\s*$/iu.test(sql)) assertCaptureCurrent();
+            native.exec(sql);
+          },
+          prepare(sql) {
+            assertCaptureCurrent();
+            const statement = native.prepare(sql);
+            const invoke = <Value>(handler: () => Value): Value => {
+              assertCaptureCurrent();
+              return handler();
+            };
+            return { all: (...args) => invoke(() => statement.all(...args)), get: (...args) => invoke(() => statement.get(...args)), run: (...args) => invoke(() => statement.run(...args)) };
+          },
+          createSession(options) { assertCaptureCurrent(); return native.createSession!(options); },
+        });
       },
       get inTransaction() {
         return transactionActive;
