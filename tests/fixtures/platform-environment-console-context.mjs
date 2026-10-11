@@ -6,6 +6,11 @@ import { runInNewContext } from 'node:vm';
 // these tests still exercise their original log/activity/runtime assertions.
 export function installEnvironmentConsoleContext(context, html) {
   context.initial ??= { authenticated: false, email: null, impersonation: null };
+  context.organizationSecurityView ??= {scope:null,generation:0,latest:null,draft:null,review:null,busy:false,challenge:null,drafts:new Map(),owner:null};
+  context.q('#organization-security-dialog').close ??= () => {};
+  const resetSecurity=html.match(/^function resetOrganizationSecurity\([^\n]+/m)?.[0];
+  assert.ok(resetSecurity,'Shared organization security reset must be present.');
+  runInNewContext(resetSecurity,context);
   context.state.environmentDrafts ??= new Map();
   context.state.environmentHistoryGeneration ??= 0;
   context.state.environmentProject ??= null;

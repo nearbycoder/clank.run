@@ -20,6 +20,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./organization-security-policy": { "types": "./dist/organization-security-policy.d.ts", "import": "./dist/organization-security-policy.js" },
     "./postgres": { "types": "./dist/postgres.d.ts", "import": "./dist/postgres.js" },
     "./media-processing": { "types": "./dist/media-processing.d.ts", "import": "./dist/media-processing.js" },
     "./service-accounts": { "types": "./dist/service-accounts.d.ts", "import": "./dist/service-accounts.js" },

@@ -4,6 +4,7 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Add opt-in organization security policy review, versioned changes, persistent enrollment grace and independent last-administrator recovery. Fence current browser, CLI and MCP authority, including held requests, exact refresh retries and direct reviewed actions.
 - Fence retained SQLite write contexts to their original active transaction, including deferred async callbacks, so writes cannot bypass revision journals or borrow another owner's transaction.
 
 - Add the documented PostgreSQL application subset with typed tables, native owner-scoped transactions, revisions, explicit reconnect, verified TLS and bounded SCRAM transport. Refuse SQLite-only services and report unknown commit outcomes without replay.

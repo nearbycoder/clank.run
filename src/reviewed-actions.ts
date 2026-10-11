@@ -60,6 +60,8 @@ export interface ReviewedActionsOptions {
   readonly retentionMs?: number;
   /** Best-effort wakeup only. Poll durable inbox/events after process restarts. */
   readonly onChange?: (event: ReviewedApprovalEvent) => void;
+  /** Current server admission, repeated inside each guarded read/write transaction. */
+  readonly authorizeCaller?: (current: AuthRequest<any>) => undefined;
 }
 export interface ReviewedActions {
   readonly tools: readonly McpTool<AuthRequest<any> | null>[];
@@ -115,6 +117,7 @@ export function openReviewedActions(database: SQLiteDatabase<any>, authRuntime: 
     // OAuth tools pass freshly resolved auth, while server callers must never forge AuthRequest values.
     const row = sql.prepare("SELECT disabled, role, profile FROM clank_auth_users WHERE id = ?").get(current.user.id);
     if (!row || row.disabled !== 0 || row.role !== current.user.role || String(row.profile) !== JSON.stringify(current.user.profile)) throw new AuthError("UNAUTHENTICATED", "Refresh your authentication.", 401);
+    if (options.authorizeCaller && sync(options.authorizeCaller(current)) !== undefined) throw new TypeError("Reviewed action admission must complete synchronously without a result.");
     return current;
   };
   const appendEvent = (id: string, actor: string, transition: string) => {
@@ -252,6 +255,7 @@ export function openReviewedActions(database: SQLiteDatabase<any>, authRuntime: 
         const approver = sql.prepare("SELECT disabled FROM clank_auth_users WHERE id = ?").get(row.approved_by);
         if (!approver || approver.disabled !== 0) throw new AuthError("APPROVAL_REQUIRED", "The approver is no longer active.", 409);
         const approvedSession = row.approved_session ? authRuntime.refreshSession(String(row.approved_session)) : null;
+        if (approvedSession && options.authorizeCaller && sync(options.authorizeCaller(approvedSession)) !== undefined) throw new TypeError("Reviewed action admission must complete synchronously without a result.");
         if (!approvedSession?.user || approvedSession.user.id !== row.approved_by
           || !sql.readScoped(approvedSession.user.id, reviewerDb => canReview(row, reviewerDb, approvedSession))) throw new AuthError("APPROVAL_REQUIRED", "The approver must review this action again.", 409);
         const changes = new Map<string, ReviewedRecordChange>();

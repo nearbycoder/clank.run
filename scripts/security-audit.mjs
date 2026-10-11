@@ -181,12 +181,15 @@ for (const expected of ["README.md", "SECURITY.md", "LICENSE", "dist/index.js", 
 // The 6 MiB byte ceiling remains unchanged; no file headroom is reserved.
 // Proposal #273 adds only the optional fleet module and its declaration.
 // Four deliberate public/private service-account runtime and declaration files.
+// Proposal #309 adds exactly one optional policy runtime and its declaration.
 // Proposal #313 adds exactly platform-supervisor.js and its declaration.
+// Proposal #331 adds four PostgreSQL runtime/declaration files; policy adds two.
 // Proposal #339 adds exactly the private managed-shadow.js policy/report helper
 // and its declaration; the package byte ceiling remains unchanged.
-// Proposal #339 staging adds exactly the private object-storage-internal.js module.
-// Proposal #338 private ownership adds exactly provider-handoff.js and provider-docker-client.js.
-if ((packResult?.entryCount ?? 0) > 422) fail("Published package unexpectedly exceeds 422 files.");
+// Accepted main retains the private storage and handoff outputs.
+// Policy adds exactly one runtime and declaration to 422 accepted files.
+// The 6 MiB ceiling remains unchanged.
+if ((packResult?.entryCount ?? 0) > 424) fail("Published package unexpectedly exceeds 424 files.");
 if ((packResult?.unpackedSize ?? 0) > 6 * 1024 * 1024) fail("Published package unexpectedly exceeds 6 MiB unpacked.");
 pass(`publish allowlist contains ${packResult?.entryCount ?? 0} bounded files`);
 
