@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
 import { fixture } from './fixtures/platform-environment-fixture.mjs';
+import { withReleaseId } from './fixtures/cli-release-identity.mjs';
 import { createDeploymentBundle, parseDeploymentConfig } from '../dist/deploy.js';
 import { deploymentDigest } from '../dist/deploy.js';
 const path = (f, project = f.staging) => `/api/projects/${project.id}/dependencies`;
@@ -256,16 +257,44 @@ for (const kind of ['environment','channel']) test(`${kind} promotion applies th
   assert.equal((await f.call(route, newRequest, 409)).error.code, 'DEPENDENCY_NOT_READY');
 });
 
+test('fixed release entropy restores the native method before continuation and after every failure', async () => {
+  const crypto = globalThis.crypto, native = crypto.getRandomValues;
+  const descriptor = Object.getOwnPropertyDescriptor(crypto, 'getRandomValues');
+  const restored = () => {
+    assert.equal(crypto.getRandomValues, native);
+    assert.deepEqual(Object.getOwnPropertyDescriptor(crypto, 'getRandomValues'), descriptor);
+  };
+  await withReleaseId('--D-M2HvB_M_u7HFAxBm1asI', async () => {
+    const other = new Uint8Array(17); assert.equal(crypto.getRandomValues(other), other);
+    const selected = new Uint8Array(18); assert.equal(crypto.getRandomValues(selected), selected);
+    restored(); assert.equal(Buffer.from(selected).toString('base64url'), '--D-M2HvB_M_u7HFAxBm1asI');
+    await Promise.resolve(); restored();
+    const subsequent = new Uint8Array(18); assert.equal(crypto.getRandomValues(subsequent), subsequent);
+  });
+  const failure = new Error('owned fixture failure');
+  for (const operation of [() => { throw failure; }, () => Promise.reject(failure), () => {
+    crypto.getRandomValues(new Uint8Array(18)); restored(); return Promise.reject(failure);
+  }]) {
+    await assert.rejects(withReleaseId('--D-M2HvB_M_u7HFAxBm1asI', operation), error => error === failure); restored();
+  }
+  await assert.rejects(withReleaseId('--D-M2HvB_M_u7HFAxBm1asI', () => undefined), /must consume the fixed entropy/); restored();
+});
+
 test('the actual linked CLI configures, checks and inspects dependency gates and performs exact reviewed rollback', { timeout: 65000 }, async t => {
   const { mkdir } = await import('node:fs/promises'), { execFile } = await import('node:child_process'), { promisify } = await import('node:util');
-  const f = await fixture(t), server = await f.serve(), artifact = await f.artifact('v1'); await f.upload(f.development, artifact, 'dependency_cli_service_01');
+  const f = await fixture(t), requests = [], server = await f.serve((request, response) => {
+    requests.push({ method: request.method, path: new URL(request.url).pathname }); return response;
+  }), artifact = await f.artifact('v1'); await f.upload(f.development, artifact, 'dependency_cli_service_01');
   const started = await f.call('/api/device/start', { clientName: 'Dependency CLI acceptance' }, 201); await f.call('/api/device/approve', { code: started.userCode });
   const token = await f.call('/api/device/token', { deviceCode: started.deviceCode }), home = join(f.root, 'cli-home');
   await mkdir(home); await mkdir(join(f.root, '.clank'));
   await writeFile(join(home, 'config.json'), JSON.stringify({ version: 1, current: server, profiles: { [server]: { token: token.accessToken, expiresAt: token.expiresAt } } }), { mode: 0o600 });
   await writeFile(join(f.root, '.clank/project.json'), JSON.stringify({ version: 1, server, projectId: f.staging.id }), { mode: 0o600 });
   const cli = new URL('../scripts/clank.mjs', import.meta.url).pathname;
-  const run = async args => JSON.parse((await promisify(execFile)(process.execPath, ['--disable-warning=ExperimentalWarning', cli, ...args, '--json'], { cwd: f.root, env: { ...process.env, CLANK_HOME: home }, timeout: 30000, maxBuffer: 1024 * 1024 })).stdout);
+  const run = async args => {
+    const end = args.indexOf('--'), jsonArgs = [...args]; jsonArgs.splice(end === -1 ? args.length : end, 0, '--json');
+    return JSON.parse((await promisify(execFile)(process.execPath, ['--disable-warning=ExperimentalWarning', cli, ...jsonArgs], { cwd: f.root, env: { ...process.env, CLANK_HOME: home }, timeout: 30000, maxBuffer: 1024 * 1024 })).stdout);
+  };
   assert.equal((await run(['dependency','get'])).configuration.version, 0);
   const config = join(f.root, 'dependencies.json'); await writeFile(config, JSON.stringify({ requirements: [{ projectId: f.development.id, readiness: 'healthy' }], timeoutMs: 5000, overridePolicy: 'deny' }));
   assert.equal((await run(['dependency','configure','--config',config,'--expected-version','0'])).configuration.version, 1);
@@ -273,13 +302,41 @@ test('the actual linked CLI configures, checks and inspects dependency gates and
   assert.equal((await run(['dependency','history'])).checks.length, 1);
   await assert.rejects(run(['dependency','get','--config',config]), /does not apply to dependency get/);
   await assert.rejects(run(['dependency','check','--expected-version','01']), /exact --expected-version/);
-  const first = await f.upload(f.staging, artifact, 'dependency_cli_target_01'), next = await f.artifact('v3'), second = await f.upload(f.staging, next, 'dependency_cli_target_02');
+  const first = await withReleaseId('--D-M2HvB_M_u7HFAxBm1asI', () => f.upload(f.staging, artifact, 'dependency_cli_target_01'));
+  const next = await f.artifact('v3'), second = await withReleaseId('--AAAAAAAAAAAAAAAAAAAAAA', () => f.upload(f.staging, next, 'dependency_cli_target_02'));
+  const control = new DatabaseSync(join(f.options.dataDirectory, 'control.sqlite'), { readOnly: true }); t.after(() => control.close());
+  for (const [release, id, bundle] of [[first, '--D-M2HvB_M_u7HFAxBm1asI', artifact], [second, '--AAAAAAAAAAAAAAAAAAAAAA', next]]) {
+    assert.equal(release.id, id);
+    assert.deepEqual({ ...control.prepare('SELECT id,project_id,digest,artifact_available FROM clank_platform_releases WHERE id=?').get(id) }, { id, project_id: f.staging.id, digest: bundle.digest, artifact_available: 1 });
+  }
+  t.diagnostic('Both fixed leading-- release identities were generated by native upload and verified through an independent SQLite connection.');
   const reviewed = (await run(['dependency','get'])).target;
   const checked = (await run(['dependency','check','--expected-version','1'])).check;
-  const args = ['rollback',first.id,'--key','dependency_cli_rollback_01','--expected-active',second.id,'--expected-activation',String(reviewed.activationSequence),'--dependency-version','1','--dependency-check',checked.id];
+  const snapshot = () => ({
+    active: control.prepare('SELECT active_release_id FROM clank_platform_projects WHERE id=?').get(f.staging.id),
+    activations: control.prepare('SELECT * FROM clank_platform_activations WHERE project_id=? ORDER BY id').all(f.staging.id),
+    dependencies: control.prepare('SELECT * FROM clank_platform_dependency_activations WHERE project_id=? ORDER BY activation_id').all(f.staging.id),
+  });
+  for (const [args, code] of [
+    [['rollback', first.id], 'UNKNOWN_OPTION'],
+    [['rollback', '--expected-activ=unused', '--', first.id], 'UNKNOWN_OPTION'],
+    [['rollback', '--expected-active', second.id, '--', first.id], 'MISSING_OPTION_VALUE'],
+    [['rollback', '--expected-active', '--', first.id], 'MISSING_OPTION_VALUE'],
+    [['rollback', '--expected-active=', '--', first.id], 'MISSING_OPTION_VALUE'],
+  ]) {
+    const count = requests.length, before = snapshot();
+    await assert.rejects(run(args), error => JSON.parse(error.stderr).error.code === code);
+    assert.equal(requests.length, count); assert.deepEqual(snapshot(), before);
+  }
+  await f.probe(f.staging, '/write/retained-cli-value');
+  const beforeRollback = snapshot();
+  const args = ['rollback','--key=dependency_cli_rollback_01',`--expected-active=${second.id}`,`--expected-activation=${reviewed.activationSequence}`,'--dependency-version=1',`--dependency-check=${checked.id}`,'--',first.id];
   assert.equal((await run(args)).release.id, first.id); assert.equal((await run(args)).release.id, first.id);
+  assert.equal(snapshot().active.active_release_id, first.id);
+  assert.equal(snapshot().activations.length, beforeRollback.activations.length + 1);
+  assert.equal((await f.probe(f.staging)).value, 'retained-cli-value');
   assert.equal((await run(['dependency','activations'])).activations.length, 3);
-  await assert.rejects(run(['rollback',first.id,'--dependency-check','bad!']), /exact --dependency-check/);
+  await assert.rejects(run(['rollback','--dependency-check','bad!','--',first.id]), /exact --dependency-check/);
 });
 
 test('service deletion and configuration publication share a graph fence before any artifact is removed', { timeout: 45000 }, async t => {
