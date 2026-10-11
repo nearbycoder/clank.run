@@ -935,3 +935,7 @@ Project dependency configuration, checks, retained activations and verified reco
 for strict bodies, version/check binding, upload headers, rollback fencing and human override scope.
 
 - `createTemporaryAccessClient` and `createTemporaryAccessView` expose current-session, bounded native preview grants with expected versions, exact retry intents and explicit revocation. `TemporaryAccessError` supplies bounded transport error codes/status. See [temporary preview access](temporary-access.md) for mandatory native freshness, restart invalidation and the restricted creation header.
+
+## Customer status pages
+
+Use `createCustomerStatusClient()` from `@clank.run/framework/customer-status` for current human administration, public projections and own-account subscriber preferences/inboxes. `create`, `configure`, `preview`, `publish` and `unpublish` retain native versions and exact operation receipts. `domains`, `beginDomain` and `verifyDomain` use current native domain reservations. `publicPage` omits credentials and validates the strict public projection. `preferences`, `subscribe` and `notifications` act only on the actual native account. See [Customer status pages](customer-status-pages.md) for publication review, assurance, limits, custom domains and recovery.
