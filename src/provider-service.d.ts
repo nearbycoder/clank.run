@@ -25,6 +25,8 @@ export declare const DEPLOYMENT_PROVIDER_SNAPSHOT_MEDIA_TYPE: "application/vnd.c
 export declare const DEPLOYMENT_PROVIDER_DIAGNOSTICS_MEDIA_TYPE: "application/vnd.clank.provider-diagnostics+json";
 export declare const DEPLOYMENT_PROVIDER_JOBS_PROTOCOL: "clank-provider-jobs/1";
 export declare const DEPLOYMENT_PROVIDER_JOBS_MEDIA_TYPE: "application/vnd.clank.provider-jobs+json";
+export declare const DEPLOYMENT_PROVIDER_CANARY_CONTROL_PROTOCOL: "clank-provider-canary-control/1";
+export declare const DEPLOYMENT_PROVIDER_CANARY_CONTROL_MEDIA_TYPE: "application/vnd.clank.provider-canary-control+json";
 
 export interface DeploymentProviderServiceState {
   readonly protocol: typeof DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL;
@@ -56,6 +58,8 @@ export interface DeploymentProviderCanaryOptions {
   /** Combined prepared/retired IDs per primary incarnation; exhaustion requires ordinary reconciliation. */
   readonly maxOperations?: number;
   readonly maximumDurationMs?: number;
+  /** Total HTTP control deadline; timeout responses do not acknowledge absence. Defaults to 60 seconds. */
+  readonly controlTimeoutMs?: number;
 }
 
 export interface DeploymentProviderCanaryBinding {
@@ -178,6 +182,9 @@ export declare function openDockerDeploymentProviderService(
 
 /** Returns the exact provider-private consistent snapshot path for one project. */
 export declare function deploymentProviderSnapshotPath(projectId: string): string;
+
+/** Exact authenticated canary control route. Only prepare responses contain a candidate route credential. */
+export declare function deploymentProviderCanaryPath(projectId: string, operation: "binding" | "prepare" | "inspect" | "stop" | "retire"): string;
 
 /** Returns the exact provider-private diagnostics path for one project. */
 export declare function deploymentProviderDiagnosticsPath(projectId: string): string;

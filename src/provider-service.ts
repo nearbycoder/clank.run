@@ -27,6 +27,7 @@ import {
   decodeDeploymentRuntimeCapsule,
   createDeploymentRuntimeCapsule,
   DEPLOYMENT_RUNTIME_PROTOCOL,
+  DEPLOYMENT_RUNTIME_MEDIA_TYPE,
   deploymentRuntimeDigest,
   type DeploymentRuntimeCapsule,
 } from "./runtime-placement.ts";
@@ -45,6 +46,8 @@ export const DEPLOYMENT_PROVIDER_DIAGNOSTICS_MEDIA_TYPE =
 export const DEPLOYMENT_PROVIDER_JOBS_PROTOCOL = "clank-provider-jobs/1";
 export const DEPLOYMENT_PROVIDER_JOBS_MEDIA_TYPE =
   "application/vnd.clank.provider-jobs+json";
+export const DEPLOYMENT_PROVIDER_CANARY_CONTROL_PROTOCOL = "clank-provider-canary-control/1";
+export const DEPLOYMENT_PROVIDER_CANARY_CONTROL_MEDIA_TYPE = "application/vnd.clank.provider-canary-control+json";
 
 export interface DeploymentProviderServiceState {
   readonly protocol: typeof DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL;
@@ -76,6 +79,8 @@ export interface DeploymentProviderCanaryOptions {
   /** Combined prepared/retired IDs per primary incarnation; exhaustion requires ordinary reconciliation. */
   readonly maxOperations?: number;
   readonly maximumDurationMs?: number;
+  /** Total HTTP control deadline; timeout responses do not acknowledge absence. Defaults to 60 seconds. */
+  readonly controlTimeoutMs?: number;
 }
 
 export interface DeploymentProviderCanaryBinding {
@@ -214,6 +219,13 @@ interface ProviderCanaryRetirements {
   primary: DeploymentProviderCanaryBinding;
   epochFloor: number;
   entries: ProviderCanaryRetirementEntry[];
+}
+
+interface ProviderCanaryIssuedBinding {
+  protocol: "clank-provider-canary-binding/1";
+  primary: DeploymentProviderCanaryBinding;
+  serviceIncarnation: string;
+  tokenDigest: number[];
 }
 
 interface NodeStats {
@@ -409,6 +421,8 @@ async function openOwnedDeploymentProviderService(
   const canaryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const canaryDeadlines = new Map<string,number>();
   let canaryIntakeBusy=false;
+  let canaryHttpIntakeBusy=false;
+  let canaryStartupComplete=false;
   const providerIncarnation=crypto.randomUUID();
   const canaryOwnerPath=path.join(serviceDirectory,".canary-controller.json");
   const previousCanaryOwner=await readPrivateJson(fs,canaryOwnerPath);
@@ -546,6 +560,11 @@ async function openOwnedDeploymentProviderService(
 
   const canaryPath = (projectId: string) => path.join(serviceDirectory, `${identifier(projectId, "projectId")}.canary.json`);
   const retirementsPath = (projectId: string) => path.join(serviceDirectory, `${identifier(projectId, "projectId")}.canary-retirements.json`);
+  const issuedBindingPath = (projectId: string) => path.join(serviceDirectory, `${identifier(projectId,"projectId")}.canary-binding.json`);
+  const readIssuedBinding = async (projectId: string): Promise<ProviderCanaryIssuedBinding | null> => {
+    const raw=await readPrivateJson(fs,issuedBindingPath(projectId));
+    return raw===null ? null : providerCanaryIssuedBinding(raw,projectId);
+  };
   const candidateId = async (state: Pick<DeploymentProviderCanaryState, "primary" | "operationId" | "controllerEpoch" | "capsuleSha256">) =>
     `canary_${await deploymentRuntimeDigest(new TextEncoder().encode([state.primary.projectId, state.primary.incarnation, state.controllerEpoch, state.operationId, state.capsuleSha256].join("\n")))}`;
   const readCanary = async (projectId: string): Promise<ProviderCanaryJournal | null> => {
@@ -569,8 +588,9 @@ async function openOwnedDeploymentProviderService(
     }
     return retired;
   };
-  const stopCanary = async (projectId: string, expected?: Pick<DeploymentProviderCanaryState,"primary"|"operationId"|"controllerEpoch">): Promise<DeploymentProviderCanaryState | null> => {
+  const stopCanary = async (projectId: string, expected?: Pick<DeploymentProviderCanaryState,"primary"|"operationId"|"controllerEpoch">, authorize:()=>Promise<void>=async()=>{}): Promise<DeploymentProviderCanaryState | null> => {
     const journal = await readCanary(projectId);
+    await authorize();
     if (journal && expected && (!sameCanaryBinding(journal.current.primary,expected.primary) || journal.current.operationId!==expected.operationId || journal.current.controllerEpoch!==expected.controllerEpoch)) throw new Error("Provider canary cleanup identity is stale.");
     if (journal) {
       const isolatedProject=journal.current.candidateProjectId,owner=canaryProjectOwners.get(isolatedProject);
@@ -579,6 +599,7 @@ async function openOwnedDeploymentProviderService(
       // project. Validate its current owner before any journal or cleanup effect.
       if (journal.current.phase!=="stopped" && (controls.has(isolatedProject) || await readProjectState(isolatedProject))) throw new Error("Provider canary cleanup collides with ordinary ownership.");
     }
+    await authorize();
     // Reconstruct ownership only during serialized lifecycle or startup cleanup.
     // An asynchronous request read must not reclaim an already retired identity.
     if (journal && journal.current.phase!=="stopped") canaryProjectOwners.set(journal.current.candidateProjectId,projectId);
@@ -596,16 +617,21 @@ async function openOwnedDeploymentProviderService(
     canaryReservations.add(projectId);
     journal.current = Object.freeze({ ...journal.current, phase:"stopping" });
     await atomicWriteJson(fs, path, canaryPath(projectId), journal);
+    await authorize();
     const isolatedProject = journal.current.candidateProjectId;
     await cleanupCandidate(null, {projectId:isolatedProject, generation:1});
+    await authorize();
     if (ingress.inspect().some(route=>route.projectId===isolatedProject)
       || runtimes.inspect().some(runtime=>runtime.projectId===isolatedProject)) throw new Error("Provider canary still has a runtime; data cleanup is refused.");
     await data.delete({projectId:isolatedProject, confirmation:`delete ${isolatedProject}`});
+    await authorize();
     if (await data.inspect(isolatedProject) || ingress.inspect().some(route=>route.projectId===isolatedProject)
       || runtimes.inspect().some(runtime=>runtime.projectId===isolatedProject)) throw new Error("Provider canary cleanup could not be verified.");
+    await authorize();
     ingress.forget(isolatedProject,1);
     journal.current = Object.freeze({ ...journal.current, phase:"stopped" });
     await atomicWriteJson(fs, path, canaryPath(projectId), journal);
+    await authorize();
     canaryReservations.delete(projectId);
     canaryIntents.delete(projectId);
     canaryProjectOwners.delete(isolatedProject);
@@ -623,21 +649,21 @@ async function openOwnedDeploymentProviderService(
     const actual = await primaryBinding(expected.projectId);
     if (!actual || !sameCanaryBinding(actual,expected)) throw new Error("Provider canary primary binding is stale.");
   };
-  const finishRetirement = async (retired: ProviderCanaryRetirements, entry: ProviderCanaryRetirementEntry, assertOpen: () => void) => {
+  const finishRetirement = async (retired: ProviderCanaryRetirements, entry: ProviderCanaryRetirementEntry, assertOpen: () => Promise<void>) => {
     const projectId=retired.primary.projectId,isolatedProject=entry.candidateProjectId;
     // Also hold the candidate lane: an ordinary request may already have passed
     // capsule decoding before this retirement entered the primary lane.
     return exclusive(isolatedProject,async()=> {
-      assertOpen();
+      await assertOpen();
       const journal=await readCanary(projectId);
-      assertOpen();
+      await assertOpen();
       const exact=journal && sameCanaryBinding(journal.current.primary,retired.primary) && sameCanaryOperation(journal.current,entry);
       if (journal && (journal.current.operationId===entry.operationId || journal.current.candidateProjectId===isolatedProject) && !exact) throw new Error("Provider canary retirement conflicts with the current candidate.");
       if (controls.has(isolatedProject) || await readProjectState(isolatedProject)
         || canaryProjectOwners.has(isolatedProject) && (!exact || canaryProjectOwners.get(isolatedProject)!==projectId)) throw new Error("Provider canary retirement collides with ordinary or unrelated ownership.");
-      assertOpen();
-      if (exact) await stopCanary(projectId,journal.current);
-      assertOpen();
+      await assertOpen();
+      if (exact) await stopCanary(projectId,journal.current,assertOpen);
+      await assertOpen();
       // An orphan directory without a data manifest is still uncertain state;
       // do not ask the data store to recover an unmatched directory.
       try {await fs.lstat(path.join(root,"projects",isolatedProject));throw new Error("Provider canary retirement found unmatched candidate data.");}
@@ -646,23 +672,26 @@ async function openOwnedDeploymentProviderService(
         || controls.has(isolatedProject) || canaryProjectOwners.has(isolatedProject)
         || ingress.inspect().some(route=>route.projectId===isolatedProject)
         || runtimes.inspect().some(runtime=>runtime.projectId===isolatedProject)) throw new Error("Provider canary retirement absence could not be verified.");
-      assertOpen();
+      await assertOpen();
       if (entry.phase!=="retired") {
         entry.phase="retired";
         await atomicWriteJson(fs,path,retirementsPath(projectId),retired);
-        assertOpen();
+        await assertOpen();
       }
       return Object.freeze({protocol:"clank-provider-canary-retirement/1" as const,primary:retired.primary,...entry,phase:"retired" as const});
     });
   };
-  const canaries: DeploymentProviderCanaryController | undefined = canaryOptions ? {
-    binding(projectId) { return closed ? Promise.resolve(null) : exclusive(identifier(projectId,"projectId"),()=>primaryBinding(projectId)); },
+  const createCanaryController = (authorize:()=>Promise<void>=async()=>{}, allowUnknownOldBinding=false, expectedReleaseId?:string): DeploymentProviderCanaryController => ({
+    binding(projectId) { return closed ? Promise.resolve(null) : exclusive(identifier(projectId,"projectId"),async()=> {await authorize();const binding=await primaryBinding(projectId);await authorize();return binding;}); },
     inspect(projectId) { return exclusive(identifier(projectId,"projectId"),async()=> {
       if (closed) throw new Error("Deployment provider service is closed.");
-      return (await readCanary(projectId))?.current ?? null;
+      await authorize();
+      const state=(await readCanary(projectId))?.current ?? null;
+      await authorize();return state;
     }); },
     async prepare(input) {
-      if (closed || canaryIntakeBusy) throw new Error("Provider canary capsule intake is unavailable.");
+      const policy=canaryOptions;
+      if (!policy || closed || canaryIntakeBusy) throw new Error("Provider canary capsule intake is unavailable.");
       canaryIntakeBusy=true;
       try {
       const startedAt=Date.now(),monotonicStartedAt=performance.now();
@@ -674,13 +703,16 @@ async function openOwnedDeploymentProviderService(
       throwIfAborted(signal);
       const incoming=input.runtime?.bytes,expectedDigest=pattern(input.runtime?.sha256,"canary capsuleSha256",DIGEST);
       if (!(incoming instanceof Uint8Array) || incoming.byteLength>maxDatabaseBytes+102*1024*1024+32) throw new RangeError("Provider canary capsule exceeds its intake bound.");
-      const runtime = await decodeDeploymentRuntimeCapsule(new Uint8Array(incoming),{maxDatabaseBytes});
+      const capturedBytes=new Uint8Array(incoming);
+      await authorize();
+      const runtime = await decodeDeploymentRuntimeCapsule(capturedBytes,{maxDatabaseBytes});
       if (runtime.sha256!==expectedDigest || runtime.manifest.projectId!==primary.projectId || runtime.manifest.releaseId===primary.releaseId
+        || expectedReleaseId!==undefined && runtime.manifest.releaseId!==expectedReleaseId
         || runtime.manifest.database.mode!=="preserve" || runtime.databaseSnapshot || runtime.artifact.bundle.config.jobs) throw new Error("Provider canaries require a distinct code-only release with no declared jobs.");
       return await exclusive(primary.projectId,async()=> {
         let deadline=0;
-        const check = async () => {throwIfAborted(signal); await requireCanaryBinding(primary);if (Date.now()<startedAt || deadline && Date.now()>=deadline
-          || performance.now()-monotonicStartedAt>=canaryOptions.maximumDurationMs) throw new Error("Provider canary preparation expired or its clock regressed.");};
+        const check = async () => {throwIfAborted(signal); await authorize();await requireCanaryBinding(primary);await authorize();if (Date.now()<startedAt || deadline && Date.now()>=deadline
+          || performance.now()-monotonicStartedAt>=policy.maximumDurationMs) throw new Error("Provider canary preparation expired or its clock regressed.");};
         await check();
         if (await readEvacuation(primary.projectId)) throw new Error("Provider canary primary is evacuating.");
         const prior = await readCanary(primary.projectId);
@@ -693,7 +725,7 @@ async function openOwnedDeploymentProviderService(
           const current=prior.current, route=canaryRoutes.get(primary.projectId);
           if (!sameCanaryBinding(current.primary,primary) || current.controllerEpoch!==controllerEpoch || current.capsuleSha256!==runtime.sha256) throw new Error("Provider canary retry identity differs.");
           if (current.phase!=="running" || !route || current.expiresAt<=Date.now()
-            || Date.now()<current.expiresAt-canaryOptions.maximumDurationMs
+            || Date.now()<current.expiresAt-policy.maximumDurationMs
             || (canaryDeadlines.get(primary.projectId)??0)<=performance.now()) throw new Error("Provider canary operation is retired or needs cleanup.");
           return Object.freeze({...current,route});
         }
@@ -701,10 +733,10 @@ async function openOwnedDeploymentProviderService(
         const spent = prior && sameCanaryBinding(prior.current.primary,primary) ? [...prior.spent] : [];
         if (spent.includes(operationId) || prior && sameCanaryBinding(prior.current.primary,primary) && controllerEpoch<prior.current.controllerEpoch) throw new Error("Provider canary operation or controller epoch is retired.");
         const operations=new Set([...spent,...(retired && sameCanaryBinding(retired.primary,primary)?retired.entries.map(entry=>entry.operationId):[])]);
-        if (operations.size>=canaryOptions.maxOperations || canaryReservations.size>=canaryOptions.maxConcurrent) throw new Error("Provider canary capacity is exhausted.");
+        if (operations.size>=policy.maxOperations || canaryReservations.size>=policy.maxConcurrent) throw new Error("Provider canary capacity is exhausted.");
         const state: DeploymentProviderCanaryState = Object.freeze({protocol:"clank-provider-canary/1",operationId,primary,controllerEpoch,
           candidateProjectId:await candidateId({primary,operationId,controllerEpoch,capsuleSha256:runtime.sha256}),releaseId:runtime.manifest.releaseId,
-          capsuleSha256:runtime.sha256,phase:"preparing",expiresAt:startedAt+canaryOptions.maximumDurationMs});
+          capsuleSha256:runtime.sha256,phase:"preparing",expiresAt:startedAt+policy.maximumDurationMs});
         deadline=state.expiresAt;
         await check();
         // Reserve the isolated project before any preflight await. An ordinary
@@ -716,7 +748,7 @@ async function openOwnedDeploymentProviderService(
             || runtimes.inspect().some(value=>value.projectId===state.candidateProjectId)
             || ingress.inspect().some(value=>value.projectId===state.candidateProjectId)) throw new Error("Provider canary isolated identity is already owned.");
           await check();
-          if (canaryReservations.size>=canaryOptions.maxConcurrent) throw new Error("Provider canary capacity is exhausted.");
+          if (canaryReservations.size>=policy.maxConcurrent) throw new Error("Provider canary capacity is exhausted.");
         } catch (error) {canaryProjectOwners.delete(state.candidateProjectId);throw error;}
         // Reserve synchronously before the first journal await, across project locks.
         canaryReservations.add(primary.projectId);
@@ -733,7 +765,7 @@ async function openOwnedDeploymentProviderService(
             || snapshot.bytes.byteLength>maxDatabaseBytes || snapshot.sha256!==await deploymentRuntimeDigest(snapshot.bytes)) throw new Error("Provider canary checkpoint is unavailable.");
           await check();
           const route=Object.freeze({projectId:state.candidateProjectId,releaseId:state.releaseId,generation:1 as const,
-            path:`/v1/clank/apps/${state.candidateProjectId}`,token:`clanki_${crypto.randomUUID()}_${crypto.randomUUID()}`,readPaths:canaryOptions.readPaths});
+            path:`/v1/clank/apps/${state.candidateProjectId}`,token:`clanki_${crypto.randomUUID()}_${crypto.randomUUID()}`,readPaths:policy.readPaths});
           const isolated=await createDeploymentRuntimeCapsule({projectId:route.projectId,releaseId:route.releaseId,generation:1,environment:{},
             database:{path:runtime.manifest.database.path,mode:"replace",snapshot:snapshot.bytes},ingress:{route:route.path,token:route.token},artifact:runtime.artifact.bytes},{maxDatabaseBytes});
           await check();
@@ -754,8 +786,8 @@ async function openOwnedDeploymentProviderService(
           await atomicWriteJson(fs,path,canaryPath(primary.projectId),journal);
           await check();
           canaryRoutes.set(primary.projectId,route);
-          canaryDeadlines.set(primary.projectId,monotonicStartedAt+canaryOptions.maximumDurationMs);
-          const timer=setTimeout(()=>{void exclusive(primary.projectId,()=>stopCanary(primary.projectId,state)).catch(report);},Math.max(1,Math.min(state.expiresAt-Date.now(),canaryOptions.maximumDurationMs-(performance.now()-monotonicStartedAt))));
+          canaryDeadlines.set(primary.projectId,monotonicStartedAt+policy.maximumDurationMs);
+          const timer=setTimeout(()=>{void exclusive(primary.projectId,()=>stopCanary(primary.projectId,state)).catch(report);},Math.max(1,Math.min(state.expiresAt-Date.now(),policy.maximumDurationMs-(performance.now()-monotonicStartedAt))));
           (timer as unknown as {unref?:()=>void}).unref?.();
           canaryTimers.set(primary.projectId,timer);
           return Object.freeze({...journal.current,route});
@@ -772,9 +804,11 @@ async function openOwnedDeploymentProviderService(
       const operationId=identifier(input.operationId,"operationId"),epoch=positiveInteger(input.controllerEpoch,"controllerEpoch");
       return exclusive(primary.projectId,async()=> {
         if (closed) throw new Error("Deployment provider service is closed.");
+        await authorize();
         const journal=await readCanary(primary.projectId);
+        await authorize();
         if (!journal || !sameCanaryBinding(journal.current.primary,primary) || journal.current.operationId!==operationId || journal.current.controllerEpoch!==epoch) throw new Error("Provider canary cleanup identity differs.");
-        return (await stopCanary(primary.projectId,journal.current))!;
+        return (await stopCanary(primary.projectId,journal.current,authorize))!;
       });
     },
     async retire(input) {
@@ -785,17 +819,18 @@ async function openOwnedDeploymentProviderService(
         releaseId:identifier(input.releaseId,"releaseId"),capsuleSha256:pattern(input.capsuleSha256,"capsuleSha256",DIGEST),retirementEpoch:positiveInteger(input.retirementEpoch,"retirementEpoch")});
       if (requested.retirementEpoch<requested.controllerEpoch || requested.releaseId===primary.releaseId) throw new Error("Provider canary retirement epoch or release is invalid.");
       return exclusive(primary.projectId,async()=> {
-        const assertOpen=()=> {if (closed) throw new Error("Deployment provider service is closed.");};
-        assertOpen();
+        const assertOpen=async()=> {if (closed) throw new Error("Deployment provider service is closed.");await authorize();};
+        await assertOpen();
         const journal=await readCanary(primary.projectId);
         let retired=await readRetirements(primary.projectId,journal);
-        assertOpen();
+        await assertOpen();
         const retained=retired?.entries.find(entry=>entry.operationId===requested.operationId);
         if (retained && (!sameCanaryBinding(retired!.primary,primary) || !sameCanaryOperation(retained,requested))) throw new Error("Provider canary retirement identity conflicts with its retained operation.");
         const current=journal?.current;
         if (current?.operationId===requested.operationId && (!sameCanaryBinding(current.primary,primary) || !sameCanaryOperation(current,requested))) throw new Error("Provider canary retirement identity conflicts with its current operation.");
         if (!retained && current?.operationId!==requested.operationId) {
-          await requireCanaryBinding(primary);
+          if (!allowUnknownOldBinding) await requireCanaryBinding(primary);
+          await assertOpen();
           if (journal && sameCanaryBinding(journal.current.primary,primary) && journal.spent.includes(requested.operationId)) throw new Error("Provider canary retirement cannot verify a historical operation identity.");
         }
         if (retired && !sameCanaryBinding(retired.primary,primary)) {
@@ -804,26 +839,31 @@ async function openOwnedDeploymentProviderService(
           retired=null;
         }
         const candidateProjectId=await candidateId({...requested,primary});
+        await assertOpen();
         if (candidateProjectId===primary.projectId) throw new Error("Provider canary retirement collides with its primary.");
         const spent=journal && sameCanaryBinding(journal.current.primary,primary)?journal.spent:[];
         const operations=new Set([...spent,...(retired?.entries.map(entry=>entry.operationId)??[])]);
-        if (!operations.has(requested.operationId) && operations.size>=canaryOptions.maxOperations) throw new Error("Provider canary capacity is exhausted.");
+        if (!operations.has(requested.operationId) && operations.size>=(canaryOptions?.maxOperations??64)) throw new Error("Provider canary capacity is exhausted.");
         retired??={protocol:"clank-provider-canary-retirements/1",primary,epochFloor:requested.retirementEpoch,entries:[]};
         retired.epochFloor=Math.max(retired.epochFloor,requested.retirementEpoch,current && sameCanaryBinding(current.primary,primary)?current.controllerEpoch:0);
         const entry:ProviderCanaryRetirementEntry={...requested,candidateProjectId,retirementEpoch:Math.max(requested.retirementEpoch,retained?.retirementEpoch??0),phase:"retiring"};
         if (retained) retired.entries[retired.entries.indexOf(retained)]=entry;else retired.entries.push(entry);
-        assertOpen();
+        await assertOpen();
         await atomicWriteJson(fs,path,retirementsPath(primary.projectId),retired);
-        assertOpen();
+        await assertOpen();
         return finishRetirement(retired,entry,assertOpen);
       });
     },
-  } : undefined;
+  });
+  const canaries=canaryOptions ? createCanaryController() : undefined;
 
   // Opening any service, including the default/disabled configuration, retires
   // persisted candidates before primary reconciliation can admit another writer.
   const serviceFiles=await fs.readdir(serviceDirectory);
   if (serviceFiles.length>100_000) throw new Error("Provider service metadata capacity is exhausted.");
+  for (const name of serviceFiles.filter(name=>name.endsWith(".canary-binding.json"))) {
+    await readIssuedBinding(identifier(name.slice(0,-20),"canary binding projectId"));
+  }
   const retirementJournals:ProviderCanaryRetirements[]=[];
   for (const name of serviceFiles.filter(name=>name.endsWith(".canary-retirements.json"))) {
     const projectId=identifier(name.slice(0,-24),"canary retirement projectId");
@@ -832,12 +872,159 @@ async function openOwnedDeploymentProviderService(
   }
   // Check retirement ownership before general candidate cleanup can delete data.
   for (const retired of retirementJournals) for (const entry of retired.entries) {
-    if (entry.phase==="retiring") await finishRetirement(retired,entry,()=>{});
+    if (entry.phase==="retiring") await finishRetirement(retired,entry,async()=>{});
   }
   for (const name of serviceFiles.filter(name=>name.endsWith(".canary.json"))) {
     const projectId=identifier(name.slice(0,-12),"canary projectId");
     await stopCanary(projectId);
   }
+
+  canaryStartupComplete=true;
+
+  const handleCanaryControl = async (request:Request, projectId:string, operation:string):Promise<Response> => {
+    const unavailable=()=>controlProblem(503,"CANARY_CONTROL_UNCERTAIN","Provider canary outcome is uncertain; retry exact retirement before proceeding.");
+    const denied=()=>controlProblem(404,"CONTROL_NOT_FOUND","Provider control endpoint not found.");
+    const deadline=new AbortController(),started=performance.now(),timeoutMs=canaryOptions?.controlTimeoutMs??60_000;
+    const abort=()=>deadline.abort();
+    request.signal.addEventListener("abort",abort,{once:true});
+    if (request.signal.aborted) abort();
+    let expire!:()=>void;
+    const expired=new Promise<Response>(resolve=> {expire=()=>{abort();resolve(unavailable());};});
+    const timer=setTimeout(expire,timeoutMs);
+    const checkDeadline=()=> {throwIfAborted(deadline.signal);if (performance.now()-started>=timeoutMs) throw new Error("Provider canary control deadline expired.");};
+    const work=(async()=> {
+      let releaseIntake=false;
+      let failedPrepare: (()=>Promise<unknown>) | undefined;
+      try {
+        const url=new URL(request.url);
+        // Reject invalid control envelopes before authentication or application ingress.
+        let headerBytes=0,headerCount=0;
+        for (const [name,value] of request.headers) {headerBytes+=name.length+value.length;headerCount++;}
+        const bindingRequest=operation==="binding",prepareRequest=operation==="prepare";
+        const declared=request.headers.get("content-length");
+        const maximum=prepareRequest ? maxDatabaseBytes+102*1024*1024+32 : 4_096;
+        const header=request.headers.get("x-clank-canary-input");
+        if (url.search || url.hash || url.username || url.password || headerBytes>16_384 || headerCount>64
+          || request.headers.has("content-encoding") || request.headers.has("transfer-encoding")
+          || request.method!==(bindingRequest?"GET":"POST") || !["binding","prepare","inspect","stop","retire"].includes(operation)
+          || !canaryOptions && operation!=="retire"
+          || bindingRequest && (request.body || declared!==null && declared!=="0" || header!==null)
+          || !bindingRequest && (!declared || !/^[1-9][0-9]{0,9}$/u.test(declared) || Number(declared)>maximum || !request.body
+            || request.headers.get("content-type")!==(prepareRequest?DEPLOYMENT_RUNTIME_MEDIA_TYPE:"application/json"))
+          || prepareRequest && (!header || header.length>4_096) || !prepareRequest && header!==null) return denied();
+        const credential=bearerCredential(request.headers.get("authorization"));
+        if (!credential) return denied();
+        // Digest first, then read the admitted binding. Do not hold capsule intake
+        // while an unauthenticated peer sends an incomplete body.
+        const admittedDigest=await secretDigest(credential);
+        checkDeadline();
+        const control=controls.get(projectId);
+        const issued=await readIssuedBinding(projectId);
+        checkDeadline();
+        const currentCredential=!!control && controls.get(projectId)===control && sameDigest(admittedDigest,control.tokenDigest);
+        const cleanupCredential=operation==="retire" && issued!==null && sameDigest(admittedDigest,issued.tokenDigest);
+        if (!currentCredential && !cleanupCredential) return denied();
+        if (operation!=="retire" && !currentCredential) return denied();
+        const currentAuthority=async()=> {
+          checkDeadline();
+          if (closed || !control || controls.get(projectId)!==control || !sameDigest(admittedDigest,control.tokenDigest)) throw new Error("Provider canary current authority changed.");
+          const actual=await primaryBinding(projectId);
+          checkDeadline();
+          if (!actual || controls.get(projectId)!==control) throw new Error("Provider canary current authority changed.");
+          return actual;
+        };
+        if (bindingRequest) return await exclusive(projectId,async()=> {
+          const primary=await currentAuthority();
+          const prior=await readIssuedBinding(projectId);
+          await currentAuthority();
+          const next:ProviderCanaryIssuedBinding={protocol:"clank-provider-canary-binding/1",primary,serviceIncarnation:providerIncarnation,tokenDigest:[...admittedDigest]};
+          if (!prior || !sameIssuedBinding(prior,next)) {
+            const journal=await readCanary(projectId);
+            const retired=await readRetirements(projectId,journal);
+            await currentAuthority();
+            // A binding replacement cannot erase cleanup authority while any old
+            // candidate or retirement remains unresolved.
+            if (retired) for (const entry of retired.entries) {
+              if (entry.phase==="retiring") await finishRetirement(retired,entry,async()=>{await currentAuthority();});
+            }
+            if (journal && journal.current.phase!=="stopped") {
+              if (!prior || !sameCanaryBinding(journal.current.primary,prior.primary)) throw new Error("Provider canary binding replacement has unrelated ownership.");
+              await stopCanary(projectId,journal.current,async()=>{await currentAuthority();});
+            }
+            await currentAuthority();
+            await atomicWriteJson(fs,path,issuedBindingPath(projectId),next);
+          }
+          // An ignored or altered write cannot issue an unrecoverable binding.
+          const verified=await readIssuedBinding(projectId);
+          await currentAuthority();
+          if (!verified || !sameIssuedBinding(verified,next)) throw new Error("Provider canary binding persistence could not be verified.");
+          return providerCanaryControlResponse({binding:primary});
+        });
+        if (!issued || operation!=="retire" && (!currentCredential || issued.serviceIncarnation!==providerIncarnation)) return denied();
+        const input=prepareRequest ? parseCanaryControlJson(header!) : parseCanaryControlJson(new TextDecoder("utf-8",{fatal:true}).decode(await readCanaryControlBody(request,Number(declared),maximum,deadline.signal)));
+        checkDeadline();
+        const allowed=prepareRequest ? ["primary","operationId","controllerEpoch","releaseId","capsuleSha256"]
+          : operation==="retire" ? ["primary","operationId","controllerEpoch","releaseId","capsuleSha256","retirementEpoch"] : ["primary","operationId","controllerEpoch"];
+        exactControlJson(input,allowed);
+        const primary=normalizedCanaryBinding(exactControlJson(input.primary,["projectId","releaseId","generation","fence","incarnation"]) as unknown as DeploymentProviderCanaryBinding);
+        const operationId=identifier(input.operationId,"operationId"),controllerEpoch=positiveInteger(input.controllerEpoch,"controllerEpoch");
+        if (primary.projectId!==projectId || !sameCanaryBinding(primary,issued.primary)) return denied();
+        // Captured receipt and digest, not a fresh credential lookup, fence every
+        // asynchronous controller continuation. Cleanup does not gain read/admit privileges.
+        const receiptAuthority=async(checkTime=true)=> {
+          if (checkTime) checkDeadline();
+          if (closed || !canaryStartupComplete) throw new Error("Provider canary control is unavailable.");
+          const retained=await readIssuedBinding(projectId);
+          if (checkTime) checkDeadline();
+          if (closed || !retained || !sameIssuedBinding(retained,issued) || !sameDigest(admittedDigest,retained.tokenDigest)) throw new Error("Provider canary issued authority changed.");
+        };
+        const authorize=async()=> {
+          await receiptAuthority();
+          if (operation!=="retire") {
+            const actual=await currentAuthority();
+            if (!sameCanaryBinding(actual,primary)) throw new Error("Provider canary primary changed.");
+          }
+        };
+        await authorize();
+        const oldIssuer=issued.serviceIncarnation!==providerIncarnation && canaryStartupComplete;
+        if (prepareRequest) {
+          const releaseId=identifier(input.releaseId,"releaseId"),capsuleSha256=pattern(input.capsuleSha256,"capsuleSha256",DIGEST);
+          if (releaseId===primary.releaseId) return denied();
+          if (canaryHttpIntakeBusy || canaryIntakeBusy) return unavailable();
+          canaryHttpIntakeBusy=true;releaseIntake=true;
+          const retirement=Object.freeze({primary,operationId,controllerEpoch,releaseId,capsuleSha256,retirementEpoch:controllerEpoch});
+          failedPrepare=()=>createCanaryController(()=>receiptAuthority(false),oldIssuer).retire(retirement);
+          const bytes=await readCanaryControlBody(request,Number(declared),maximum,deadline.signal);
+          await authorize();
+          const result=await createCanaryController(authorize,false,releaseId).prepare({primary,operationId,controllerEpoch,
+            runtime:{bytes,sha256:capsuleSha256} as DeploymentRuntimeCapsule,signal:deadline.signal});
+          await authorize();
+          const response=providerCanaryControlResponse({state:result});
+          checkDeadline();
+          failedPrepare=undefined;
+          return response;
+        }
+        const controller=createCanaryController(authorize,oldIssuer);
+        if (operation==="retire") {
+          const result=await controller.retire({primary,operationId,controllerEpoch,releaseId:identifier(input.releaseId,"releaseId"),
+            capsuleSha256:pattern(input.capsuleSha256,"capsuleSha256",DIGEST),retirementEpoch:positiveInteger(input.retirementEpoch,"retirementEpoch")});
+          await authorize();
+          return providerCanaryControlResponse({retirement:result});
+        }
+        const state=operation==="stop" ? await controller.stop({primary,operationId,controllerEpoch}) : await controller.inspect(projectId);
+        await authorize();
+        if (state && (!sameCanaryBinding(state.primary,primary) || state.operationId!==operationId || state.controllerEpoch!==controllerEpoch)) return unavailable();
+        return providerCanaryControlResponse({state});
+      } catch {
+        // A timeout or lost response is not an absence receipt. Queue an exact
+        // barrier, while the caller must durably retry retirement before advancing.
+        if (failedPrepare) void failedPrepare().catch(report);
+        return unavailable();
+      } finally {if (releaseIntake) canaryHttpIntakeBusy=false;}
+    })();
+    try {return await Promise.race([work,expired]);}
+    finally {clearTimeout(timer);request.signal.removeEventListener("abort",abort);}
+  };
 
   const service: DeploymentProviderService = {
     protocol: DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL,
@@ -978,6 +1165,19 @@ async function openOwnedDeploymentProviderService(
 
     async handle(request) {
       const url = new URL(request.url);
+      // Encoded control namespaces are never delegated to application ingress.
+      // Exact routes use their canonical ASCII spelling only.
+      if (url.pathname.split("/",4).some(segment=>segment.includes("%"))) {
+        return controlProblem(404,"CONTROL_NOT_FOUND","Provider control endpoint not found.");
+      }
+      try {
+        const decoded=decodeURIComponent(url.pathname);
+        if (decoded!==url.pathname && (decoded===DEPLOYMENT_PROVIDER_CONTROL_PREFIX || decoded.startsWith(`${DEPLOYMENT_PROVIDER_CONTROL_PREFIX}/`))) {
+          return controlProblem(404,"CONTROL_NOT_FOUND","Provider control endpoint not found.");
+        }
+      } catch {return controlProblem(404,"CONTROL_NOT_FOUND","Provider control endpoint not found.");}
+      const canaryControl=new RegExp(`^${DEPLOYMENT_PROVIDER_CONTROL_PREFIX}/([A-Za-z0-9_-]{1,128})/canary/(binding|prepare|inspect|stop|retire)$`,"u").exec(url.pathname);
+      if (canaryControl) return handleCanaryControl(request,canaryControl[1]!,canaryControl[2]!);
       const candidateProject=/^\/v1\/clank\/apps\/(canary_[a-f0-9]{64})(?:\/|$)/u.exec(url.pathname)?.[1];
       const primaryProject=candidateProject ? canaryProjectOwners.get(candidateProject) : undefined;
       // The generated prefix is not reserved for ordinary provider projects.
@@ -1486,7 +1686,7 @@ function normalizeProviderCanaryOptions(input: DeploymentProviderCanaryOptions |
     || input.readPaths.some(value=>typeof value!=="string" || value.length>512 || !/^\/(?:[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*\/?)?$/u.test(value)
       || value.split("/").some(part=>part==="." || part===".."))) throw new TypeError("Provider canary paths must be bounded exact public paths.");
   return Object.freeze({readPaths:Object.freeze([...input.readPaths]),maxConcurrent:integer(input.maxConcurrent??4,"canary maxConcurrent",1,64),
-    maxOperations:integer(input.maxOperations??32,"canary maxOperations",1,64),maximumDurationMs:integer(input.maximumDurationMs??30*60_000,"canary maximumDurationMs",100,30*60_000)});
+    maxOperations:integer(input.maxOperations??32,"canary maxOperations",1,64),controlTimeoutMs:integer(input.controlTimeoutMs??60_000,"canary controlTimeoutMs",100,30*60_000),maximumDurationMs:integer(input.maximumDurationMs??30*60_000,"canary maximumDurationMs",100,30*60_000)});
 }
 
 function normalizedCanaryBinding(input: DeploymentProviderCanaryBinding): DeploymentProviderCanaryBinding {
@@ -1498,6 +1698,28 @@ function normalizedCanaryBinding(input: DeploymentProviderCanaryBinding): Deploy
 
 function sameCanaryBinding(left: DeploymentProviderCanaryBinding,right: DeploymentProviderCanaryBinding) {
   return left.projectId===right.projectId && left.releaseId===right.releaseId && left.generation===right.generation && left.fence===right.fence && left.incarnation===right.incarnation;
+}
+
+function providerCanaryIssuedBinding(raw:unknown,projectId:string):ProviderCanaryIssuedBinding {
+  const value=exactControlJson(raw,["protocol","primary","serviceIncarnation","tokenDigest"]);
+  const primary=normalizedCanaryBinding(exactControlJson(value.primary,["projectId","releaseId","generation","fence","incarnation"]) as unknown as DeploymentProviderCanaryBinding);
+  if (value.protocol!=="clank-provider-canary-binding/1" || primary.projectId!==projectId
+    || !Array.isArray(value.tokenDigest) || value.tokenDigest.length!==32
+    || value.tokenDigest.some(byte=>!Number.isInteger(byte) || byte<0 || byte>255)) throw new Error("Provider canary issued binding is invalid.");
+  return {protocol:"clank-provider-canary-binding/1",primary,tokenDigest:[...value.tokenDigest],
+    serviceIncarnation:pattern(value.serviceIncarnation,"canary service incarnation",/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/u)};
+}
+
+function sameDigest(left:Uint8Array|readonly number[],right:Uint8Array|readonly number[]):boolean {
+  if (left.length!==right.length) return false;
+  let different=0;
+  for (let index=0;index<left.length;index++) different|=left[index]!^right[index]!;
+  return different===0;
+}
+
+function sameIssuedBinding(left:ProviderCanaryIssuedBinding,right:ProviderCanaryIssuedBinding):boolean {
+  return left.protocol===right.protocol && left.serviceIncarnation===right.serviceIncarnation
+    && sameCanaryBinding(left.primary,right.primary) && sameDigest(left.tokenDigest,right.tokenDigest);
 }
 
 function sameCanaryOperation(left: Pick<DeploymentProviderCanaryState,"operationId"|"controllerEpoch"|"releaseId"|"capsuleSha256">,right: Pick<DeploymentProviderCanaryState,"operationId"|"controllerEpoch"|"releaseId"|"capsuleSha256">) {
@@ -1909,6 +2131,48 @@ function publicState(state: StoredServiceState): DeploymentProviderServiceState 
 
 export function deploymentProviderSnapshotPath(projectId: string): string {
   return `${DEPLOYMENT_PROVIDER_CONTROL_PREFIX}/${identifier(projectId, "projectId")}/snapshot`;
+}
+
+export function deploymentProviderCanaryPath(projectId:string,operation:"binding"|"prepare"|"inspect"|"stop"|"retire"):string {
+  if (!["binding","prepare","inspect","stop","retire"].includes(operation)) throw new TypeError("Provider canary control operation is invalid.");
+  return `${DEPLOYMENT_PROVIDER_CONTROL_PREFIX}/${identifier(projectId,"projectId")}/canary/${operation}`;
+}
+
+function providerCanaryControlResponse(payload:{binding:DeploymentProviderCanaryBinding}|{state:DeploymentProviderCanaryState|null}|{retirement:DeploymentProviderCanaryRetirement}):Response {
+  const body=JSON.stringify({protocol:DEPLOYMENT_PROVIDER_CANARY_CONTROL_PROTOCOL,...payload});
+  const length=new TextEncoder().encode(body).byteLength;
+  if (length>64*1024) throw new Error("Provider canary response exceeds its bound.");
+  return new Response(body,{headers:{"content-type":DEPLOYMENT_PROVIDER_CANARY_CONTROL_MEDIA_TYPE,"content-length":String(length),
+    "cache-control":"private, no-store","x-content-type-options":"nosniff"}});
+}
+
+function parseCanaryControlJson(text:string):Record<string,unknown> {
+  return exactControlJson(JSON.parse(text),["primary","operationId","controllerEpoch","releaseId","capsuleSha256","retirementEpoch"]);
+}
+
+async function readCanaryControlBody(request:Request,expected:number,maximum:number,signal:AbortSignal):Promise<Uint8Array> {
+  throwIfAborted(signal);
+  if (!Number.isSafeInteger(expected) || expected<1 || expected>maximum || !request.body) throw new Error("Provider canary body length is invalid.");
+  const reader=request.body.getReader();
+  const abort=()=>{void reader.cancel().catch(()=>{});};
+  signal.addEventListener("abort",abort,{once:true});
+  const chunks:Uint8Array[]=[];
+  let length=0;
+  try {
+    for (;;) {
+      const item=await reader.read();
+      throwIfAborted(signal);
+      if (item.done) break;
+      length+=item.value.byteLength;
+      if (length>expected || length>maximum) throw new Error("Provider canary body exceeds its bound.");
+      chunks.push(new Uint8Array(item.value));
+    }
+    if (length!==expected) throw new Error("Provider canary body length is invalid.");
+    const bytes=new Uint8Array(length);
+    let offset=0;
+    for (const chunk of chunks) {bytes.set(chunk,offset);offset+=chunk.byteLength;}
+    return bytes;
+  } finally {signal.removeEventListener("abort",abort);void reader.cancel().catch(()=>{});reader.releaseLock();}
 }
 
 export function deploymentProviderDiagnosticsPath(projectId: string): string {

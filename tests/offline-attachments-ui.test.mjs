@@ -100,3 +100,34 @@ test('uploading and attaching controls keep native disabled behavior and reject 
   }
   assert.deepEqual(f.calls, []);
 });
+
+test('synchronize retains keyboard focus and admits only one action until settlement', async t => {
+  const f = await fixture(t), synchronize = button(f.root, 'Synchronize attachments'), releases = [];
+  f.queue.flush = () => { f.calls.push(['flush']); return new Promise(resolve => releases.push(resolve)); };
+  synchronize.focus(); const first = synchronize.onclick(), focused = f.document.activeElement, pending = synchronize.getAttribute('aria-disabled');
+  const repeated = synchronize.onclick();
+  for (const release of releases) release(); await Promise.all([first, repeated]);
+  assert.equal(focused, synchronize, 'starting Synchronize must not blur its focused control');
+  assert.equal(pending, 'true'); assert.deepEqual(f.calls, [['flush']]);
+  assert.equal(synchronize.getAttribute('aria-disabled'), 'false');
+  const next = synchronize.onclick(); releases.at(-1)(); await next; assert.equal(f.calls.length, 2);
+});
+
+for (const moved of [false, true]) test(`held synchronize failure ${moved ? 'respects moved focus' : 'announces at the still-focused action'}`, async t => {
+  const f = await fixture(t), synchronize = button(f.root, 'Synchronize attachments'); let reject;
+  f.queue.flush = () => new Promise((_, fail) => { reject = fail; });
+  synchronize.focus(); const action = synchronize.onclick(); if (moved) f.elsewhere.focus();
+  reject(Error('Held synchronization failed')); await action;
+  assert.match(f.root.textContent, /Attachments unavailable/);
+  if (moved) assert.equal(f.document.activeElement, f.elsewhere);
+  else assert.equal(f.document.activeElement.getAttribute('role'), 'status');
+});
+
+test('disposed synchronization controls and late failures cannot submit or change another view', async t => {
+  const f = await fixture(t), synchronize = button(f.root, 'Synchronize attachments'); let reject;
+  f.queue.flush = () => { f.calls.push(['flush']); return new Promise((_, fail) => { reject = fail; }); };
+  const held = synchronize.onclick(); f.dispose(); f.elsewhere.focus(); reject(Error('Late failure')); await held;
+  f.queue.flush = async () => { f.calls.push(['stale flush']); };
+  await synchronize.onclick();
+  assert.deepEqual(f.calls, [['flush']]); assert.equal(f.document.activeElement, f.elsewhere); assert.equal(f.root.childNodes.length, 0);
+});

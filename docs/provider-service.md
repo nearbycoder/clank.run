@@ -351,15 +351,17 @@ The service accepts an optional `canaries` configuration with exact anonymous `G
 `readPaths`. `maxConcurrent` bounds simultaneous preparations (default 4, range 1–64),
 `maxOperations` bounds the union of prepared and explicitly retired operation identities per primary incarnation (default 32,
 range 1–64), and `maximumDurationMs` bounds preparation and candidate lifetime (default
-30 minutes, range 100 milliseconds–30 minutes). Paths exclude queries, encoded or dot
+30 minutes, range 100 milliseconds–30 minutes). `controlTimeoutMs` bounds the complete HTTP
+control request (default 60 seconds, range 100 milliseconds–30 minutes); configuration is
+captured when the service opens. Paths exclude queries, encoded or dot
 segments, wildcards and private authenticated routes. The default service omits `canaries`.
 Capsule intake is serialized across the provider, bounded before copying and copied before
 asynchronous verification so callers cannot substitute bytes during preparation.
 
 This exposes `service.canaries.binding`, `prepare`, `inspect`, `stop` and `retire` to trusted server
-callers. It does not enable platform provider canary deployment stages or expose an
-unauthenticated control endpoint. Platform orchestration remains unsupported until its native
-lease fencing, measured stages and process/network failure acceptance are complete.
+callers and the authenticated HTTP controls below. Service enablement alone does not start
+platform traffic stages. Configure the separate [platform controller](deployment-platform.md#isolated-provider-canaries)
+with native supervisor and project leases to run measured stages and durable exact retirement.
 
 `binding(projectId)` returns the current primary release, generation, fence and an opaque
 provider-issued incarnation, or `null` when unavailable. Preparation requires that exact binding,
@@ -426,6 +428,75 @@ discarded by that replacement. Back up provider metadata together; do not delete
 to reclaim capacity. A fresh ordinary primary reconciliation permits new operation capacity.
 Rolling back to a version without retirement support loses this receipt contract: restart
 invalidates old primary bindings, and a controller must obtain and fence a new binding.
+
+### Authenticated provider canary controls
+
+`deploymentProviderCanaryPath(projectId, operation)` returns
+`/v1/clank/control/<projectId>/canary/<operation>`. These provider-private routes require
+`Authorization: Bearer <controlToken>`, using the separate generation control credential
+from the primary runtime capsule. They never fall through to application ingress.
+
+| Operation | Request | Successful response field |
+| --- | --- | --- |
+| `binding` | `GET`, no body | `binding`: complete current primary identity |
+| `prepare` | `POST`, runtime capsule bytes; metadata in `x-clank-canary-input` | `state`: running candidate plus its private `route` |
+| `inspect` | `POST`, JSON `{ primary, operationId, controllerEpoch }` | `state`: exact candidate state or `null`, without a route credential |
+| `stop` | Same JSON identity as inspect | `state`: verified stopped candidate |
+| `retire` | `POST`, JSON `{ primary, operationId, controllerEpoch, releaseId, capsuleSha256, retirementEpoch }` | `retirement`: durable exact absence receipt |
+
+Prepare metadata is JSON `{ primary, operationId, controllerEpoch, releaseId, capsuleSha256 }`.
+The release and source digest must match the submitted capsule. Its content type is
+`application/vnd.clank.runtime`; other POST bodies require exactly `application/json`.
+Every POST requires an exact positive decimal `Content-Length`. JSON bodies and prepare
+metadata are limited to 4 KiB; runtime bytes use the existing database limit plus the
+102 MiB capsule allowance and 32-byte framing bound. Total headers are limited to 16 KiB
+and 64 fields. Queries, encoded control paths, compression, unknown routes, unexpected
+fields and chunked bodies reject. A held unauthenticated body cannot reserve capsule intake.
+Controllers must disable redirects when sending credentials and bound their response reads.
+
+Successful responses use `DEPLOYMENT_PROVIDER_CANARY_CONTROL_PROTOCOL`
+(`clank-provider-canary-control/1`), `DEPLOYMENT_PROVIDER_CANARY_CONTROL_MEDIA_TYPE`
+(`application/vnd.clank.provider-canary-control+json`), an exact content length, and
+`private, no-store`; they are limited to 64 KiB. Only an authenticated exact prepare response
+contains the candidate route token. Binding, inspect, stop and retirement never return that
+token or the control credential digest. A `null` inspect result is not proof of absence.
+
+Before returning an HTTP binding, the provider writes and fsyncs one private bounded
+`service/<project>.canary-binding.json` receipt and verifies its readback. Protocol
+`clank-provider-canary-binding/1` retains the full primary identity, issuing service
+incarnation and a 32-byte generation credential digest; it never stores a raw credential.
+Repeated binding requests for the same live binding are idempotent. The native lifetime
+SQLite lock prevents two live services from issuing or changing this receipt concurrently.
+Corrupt, unsupported or incorrectly scoped receipts prevent startup, including with canaries
+disabled. There is no TTL, silent eviction or deletion-based capacity reset.
+
+Current credentials and the exact live issued binding are required for prepare, inspect and
+stop. After a primary changes, its retained old credential is cleanup-only: it can retire only
+operations on that exact issued binding, and cannot access current data, admit a candidate or
+obtain another binding. Unknown old operations additionally require that the issuing service
+has exited, the replacement owns the actual native lifetime lock, startup cleanup completed,
+and exact runtime, ingress, data and ordinary-state absence passes after durable retirement.
+A primary change within the same still-live service does not supply this restart proof for an
+unknown old operation. Known retained operations can still complete exact cleanup.
+
+A current authenticated binding request may replace the single old issued receipt only after
+old candidate cleanup and unresolved retirement cleanup finish. A controller must durably
+acknowledge its old operation's retirement before requesting that replacement; replacing the
+receipt revokes its old credential. Retained retirement identities remain usable through the
+trusted controller API until its documented history replacement. HTTP authentication never
+widens to a newer or unrelated binding. Authority is rechecked after asynchronous body,
+metadata and native controller work, using the originally admitted credential digest and
+receipt. Numeric epochs alone still do not prove an actual coordinator lease.
+
+`503 CANARY_CONTROL_UNCERTAIN` means the outcome is uncertain. It never acknowledges absence.
+On failed or expired admitted preparation the service schedules exact retirement, but native
+work that ignores abort may still hold its serialized lane. The lifetime lock remains held
+through that work and shutdown cleanup. Durable candidate intent or the issued-binding
+receipt survives process death. The controller must durably retry exact retirement before
+advancing, including after a timeout, lost response, inspect `null`, or authentication refusal.
+A disabled service accepts only retained exact retirement authorization. Keep these metadata
+files in coherent backups; rolling back to a service version without issued-binding support
+removes this HTTP recovery contract and is not a substitute for acknowledged cleanup.
 
 Candidate data is never promoted. After successful evaluation, stop the candidate and verify
 cleanup, then use ordinary fenced single-writer deployment with the latest primary data. A

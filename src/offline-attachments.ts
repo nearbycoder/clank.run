@@ -183,10 +183,20 @@ export async function openOfflineAttachmentQueue(options: OfflineAttachmentQueue
 export function mountOfflineAttachmentQueue(container: HTMLElement, queue: OfflineAttachmentQueue): () => void {
   const document = container.ownerDocument, section = document.createElement("section"), heading=document.createElement("h2"), status = document.createElement("p"), list = document.createElement("ol"), synchronize=document.createElement("button");
   section.setAttribute("aria-label","Pending attachments");section.style.minWidth="0";heading.textContent="Pending attachments";status.setAttribute("role","status");status.tabIndex=-1;synchronize.type="button";synchronize.textContent="Synchronize attachments";section.append(heading,status,synchronize,list);container.append(section);
-  let closed = false, generation = 0, previous: string | undefined;
+  let closed = false, synchronizing = false, generation = 0, previous: string | undefined;
   const pending = new Set<string>(), controls = new Map<string, HTMLButtonElement[]>();
   const updatePending = (id: string) => { for (const button of controls.get(id) ?? []) button.setAttribute("aria-disabled", String(button.disabled || pending.has(id))); };
-  synchronize.onclick=async()=>{synchronize.disabled=true;try{await queue.flush();}catch{if(!closed){list.replaceChildren();previous=undefined;status.textContent="Attachments unavailable. Check the current account before synchronizing.";status.focus();}}finally{if(!closed)synchronize.disabled=false;}};
+  synchronize.onclick=async()=>{
+    if(closed||!synchronize.isConnected||synchronize.disabled||synchronizing)return;
+    synchronizing=true;synchronize.setAttribute("aria-disabled","true");
+    try{await queue.flush();}
+    catch{if(!closed){
+      const stillFocused=document.activeElement===synchronize;
+      list.replaceChildren();previous=undefined;status.textContent="Attachments unavailable. Check the current account before synchronizing.";
+      if(stillFocused)status.focus();
+    }}
+    finally{synchronizing=false;if(!closed)synchronize.setAttribute("aria-disabled",String(synchronize.disabled));}
+  };
   const render = (items: readonly OfflineAttachment[]) => { if(closed)return;generation++;const serialized=JSON.stringify(items);if(serialized===previous)return;previous=serialized;
     const focused=(list.contains(document.activeElement) ? document.activeElement : null) as HTMLElement|null,tag=focused?.dataset.attachmentAction,identity=focused?.dataset.attachmentId;let restored:HTMLButtonElement|undefined;
     controls.clear();list.replaceChildren(); status.textContent = `${new Intl.NumberFormat().format(items.length)} pending attachment${items.length === 1 ? "" : "s"}`;
