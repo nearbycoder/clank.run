@@ -40,6 +40,7 @@ const fixtures = {
 };
 // Separator spacing must preserve native grammar and every literal byte.
 Object.assign(fixtures, {
+  jobs: 'export function snapshot() {\n    const output = (context) => context.results;\n    return Function.prototype.toString.call(output);\n}\n',
   separators: "function sum ( first : number , ... rest : number [ ] ) : number { return rest.reduce ( ( total , value ) => total + value , first ) ; }\nexport function snapshot ( ) { const object = { first : 2 , second : [ 3 , 4 ] } ; const { first , second : [ ... rest ] } = object ; const nested = ( ( value ) => ( { value } ) ) ( sum ( first , ... rest ) ) ; return [ nested.value , Object.keys ( object ) ] ; }\n",
   operatorBoundaries: "export function snapshot ( ) { let first = 2 ; let second = 4 ; const plus = first + ++ second ; const minus = second - -- first ; const number = 1 .toString ( ) ; const doubleDot = 2..toString ( ) ; const fraction = true ? .1 : .2 ; const object = { method ( value ) { return value + 1 ; } } ; const nil = null ; return [ plus , minus , first , second , number , doubleDot , fraction , object ?. method ?. ( 3 ) , object ?. [ \"method\" ] ( 4 ) , nil ?? ( 9 ) , typeof first , first instanceof Number ] ; }\n",
   separatorRegex: "export function snapshot ( ) { const quotient = ( 24 ) / 2 ; const expression = /[(){}:;, ]+/u ; const comment = ( 12 ) /* comment ( : { } , ) */ / 3 ; return [ quotient , expression.source , expression.test ( \" ( ) , \" ) , comment , ( /x/ ) .test ( \"x\" ) ] ; }\n",
@@ -139,6 +140,14 @@ test('release output removes separator spaces while retaining hazardous operator
     assert.ok(built.length < expected.replace(/^[ \t]+/gmu, '').length, `${name}: removes interior spacing beyond indentation`);
   }
   assert.equal(await readFile(join(root, 'dist', 'contract.d.ts'), 'utf8'), declarationFixture);
+});
+
+test('framework callbacks used in persisted workflow revisions retain accepted indentation-only source', async t => {
+  const root = await releaseBuild(t);
+  const expected = compile(fixtures.jobs, {filename: join(root, 'src', 'jobs.ts'), sourceMap: false});
+  const built = await readFile(join(root, 'dist', 'jobs.js'), 'utf8');
+  assert.equal(built, expected.replace(/^[ \t]+/gmu, ''));
+  assert.equal((await import(pathToFileURL(join(root, 'dist', 'jobs.js')).href)).snapshot(), '(context) => context.results');
 });
 
 test('rebuilding emitted JavaScript is idempotent and retains declarations exactly', async t => {

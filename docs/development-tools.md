@@ -56,12 +56,13 @@ newline, comment/license and string, template, SQL and regexp byte. Ambiguous le
 contexts, escaped identifiers, nested Unicode regexp classes and excessive template
 nesting leave the entire module unchanged. A single-line division/regexp ambiguity
 that the indentation scan can safely skip disables all interior-spacing removal
-for that module, including earlier queued edits. This private build step does not change
-public `compile()` output, example compilation, declarations or mapped/debug builds.
-Built framework columns, digests and reflective `Function.toString()` formatting can
-change. Exact-source workflow revisions remain conservative across releases: use the
-same definitions throughout a worker fleet and finish retained workflows with their
-compatible version. Existing verified artifacts retain their bytes. Rollback restores
+for that module, including earlier queued edits. The `jobs.ts` module retains its
+accepted indentation-only layout because the framework's default workflow output
+callback contributes its exact reflected source to persisted definition revisions.
+Interior-spacing removal must not change those existing workflow revisions. This private
+build step does not change public `compile()` output, example compilation, declarations
+or mapped/debug builds. Other built framework columns, digests and reflective
+`Function.toString()` formatting can change. Existing verified artifacts retain their bytes. Rollback restores
 the prior immutable framework distribution; no persisted data is reformatted.
 
 `clank watch` keeps a persistent listener for transient recursive directory scan

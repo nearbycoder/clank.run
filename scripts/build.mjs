@@ -39,7 +39,7 @@ async function compileFile(sourcePath, outputPath, options = {}) {
     // available explicitly for local debugging without bloating every install.
     sourceMap,
   });
-  await writeFileAtomically(outputPath, options.releaseLayout && !sourceMap ? compactReleaseLayout(javascript) : javascript);
+  await writeFileAtomically(outputPath, options.releaseLayout && !sourceMap ? compactReleaseLayout(javascript, options.preserveInteriorSpacing) : javascript);
 }
 
 // This is deliberately private to the framework release build. Remove only
@@ -48,10 +48,10 @@ async function compileFile(sourcePath, outputPath, options = {}) {
 // comment/license, newline and literal byte. Ambiguity discards all edits for
 // the module, and nested template scanning has a fixed bound. The public
 // compiler, example output and mapped builds retain their format contract.
-function compactReleaseLayout(source) {
+function compactReleaseLayout(source, preserveInteriorSpacing = false) {
   if (source.startsWith("#!")) return source;
   const edits = [];
-  let interiorSafe = true;
+  let interiorSafe = !preserveInteriorSpacing;
   const isWord = character => Boolean(character && /[\p{ID_Continue}$\u200c\u200d]/u.test(character));
   const isStart = character => Boolean(character && /[\p{ID_Start}$_]/u.test(character));
   const isLineEnd = character => /[\r\n\u2028\u2029]/u.test(character);
@@ -252,7 +252,11 @@ export async function build({ quiet = false } = {}) {
     } else if (/\.tsx?$/.test(path)) {
       const javascriptOutput = output.replace(/\.tsx?$/, ".js");
       expectedOutputs.add(javascriptOutput);
-      await compileFile(path, javascriptOutput, { jsxImportSource: "./index.js", releaseLayout: true });
+      // jobs.ts owns the default workflow output callback. Its reflected source
+      // is part of persisted definition revisions: retain the accepted previous
+      // indentation-only output, including the callback's interior spaces.
+      await compileFile(path, javascriptOutput, { jsxImportSource: "./index.js", releaseLayout: true,
+        preserveInteriorSpacing: relative(sourceRoot, path) === "jobs.ts" });
     }
   }
   // Ship the same canonical prompt with the platform and the documentation site.
