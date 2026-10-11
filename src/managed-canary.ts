@@ -49,6 +49,11 @@ export function createManagedCanary(internal: SQLiteInternal, input: ManagedCana
   const options = validateManagedCanary(input);
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_canaries(release_id TEXT PRIMARY KEY,project_id TEXT NOT NULL,report TEXT NOT NULL,updated_at INTEGER NOT NULL);`);
   const running = new Map<string, { upstream: string; route?: Omit<IngressCanaryRoute, "trafficPercent">; primary?: Pick<IngressRoute, "projectId" | "releaseId" | "upstream" | "runtime">; assertCurrent: () => void; report: ManagedCanaryReport; samples: Array<{ duration: number; error: boolean }>; total: number; startedAt: number; lastWall: number; failure: string | null }>();
+  // Managed ingress creates a fresh frozen selection inside each handle(), even
+  // when its route store reuses a prior selection. Only that already admitted
+  // local request may keep its native authority through the bounded runtime
+  // drain. Provider candidates remain tied to their current measuring phase.
+  const admittedLocal = new WeakMap<Readonly<IngressRoute>, NonNullable<ReturnType<typeof running.get>>>();
   const shutdown = new AbortController();
   const persist = (report: ManagedCanaryReport, assertCurrent: () => void) => internal.transaction(() => {
     assertCurrent();
@@ -70,14 +75,15 @@ export function createManagedCanary(internal: SQLiteInternal, input: ManagedCana
       return { ...(current.route ?? { upstream: current.upstream, releaseId: current.report.releaseId }), trafficPercent: current.report.trafficPercent } as IngressCanaryRoute;
     },
     assertCurrent(route: Readonly<IngressRoute>): undefined {
-      const current = running.get(route.projectId), selected = route.canary;
-      if (!current || current.failure || !selected || current.report.releaseId !== selected.releaseId || current.upstream !== selected.upstream
+      const admitted = admittedLocal.get(route), current = admitted ?? running.get(route.projectId), selected = route.canary;
+      if (shutdown.signal.aborted || !current || !admitted && current.failure || !selected || current.report.releaseId !== selected.releaseId || current.upstream !== selected.upstream
         || JSON.stringify(current.route?.runtime ?? null) !== JSON.stringify(selected.runtime ?? null)
         || current.route?.projectId !== selected.projectId
         || JSON.stringify(current.route?.readPaths ?? null) !== JSON.stringify(selected.readPaths ?? null)
         || current.primary && (current.primary.projectId !== route.projectId || current.primary.releaseId !== route.releaseId || current.primary.upstream !== route.upstream
           || JSON.stringify(current.primary.runtime ?? null) !== JSON.stringify(route.runtime ?? null))) throw new Error("Canary routing authority changed.");
       current.assertCurrent();
+      if (!selected.runtime && Object.isFrozen(route)) admittedLocal.set(route, current);
       return undefined;
     },
     pendingProjects(): string[] { return [...new Set(internal.prepare("SELECT project_id,report FROM clank_platform_canaries").all().filter(row => JSON.parse(String(row.report)).state === "running").map(row => String(row.project_id)))]; },
