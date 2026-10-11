@@ -11,7 +11,7 @@ const directory = await mkdtemp(join(tmpdir(), "clank-console-navigation-"));
 test.after(() => rm(directory, { recursive: true, force: true }));
 await writeFile(join(directory, "package.json"), '{"type":"module"}\n');
 await Promise.all([
-  "platform-console", "ui-theme", "platform-console-project-sort", "platform-console-project-status",
+  "platform-console", "temporary-access", "ui-theme", "platform-console-project-sort", "platform-console-project-status",
   "platform-console-project-workspace", "platform-console-activity-search", "platform-console-activity-action",
   "platform-console-log-search", "platform-console-usage-export",
 ].map(async name => {
@@ -87,7 +87,8 @@ function fixture(mobile = true) {
   const context = { state, initial, document, hooks,
     q(selector) { return selector === "dialog[open]" ? openDialog : nodes.get(selector) || null; },
     qa(selector, root) { assert.equal(root, sidebar); const result = []; function walk(node) { for (const child of node.children) { if (child.focusable) result.push(child); walk(child); } } walk(root); return result; },
-    window: { location, matchMedia(query) { assert.equal(query, "(max-width:900px)"); return media; },
+    temporaryAccessView: null,
+    window: { location, confirm() { return true; }, matchMedia(query) { assert.equal(query, "(max-width:900px)"); return media; },
       getComputedStyle(node) { let visibility = node.visibility; if (media.matches && sidebar.contains(node) && !sidebar.classList.contains("open")) visibility = "hidden"; return { visibility }; },
       history: { pushState(_data, _title, path) { history.push(["push", path]); updateLocation(path); }, replaceState(_data, _title, path) { history.push(["replace", path]); updateLocation(path); } },
       addEventListener(name, callback) { windowListeners.set(name, callback); },
@@ -117,6 +118,12 @@ test("039: opening mobile navigation contains focus, marks a modal drawer, and m
   assert.equal(f.toggle.attributes["aria-expanded"], "true");
   assert.equal(f.q("#sidebar-scrim").hidden, false);
   assert.deepEqual(f.context.sidebarFocusTargets().map(node => node.id), ["sidebar-close", "nav-overview", "nav-usage", "sign-out"]);
+});
+
+test('temporary-access drafts can cancel route navigation without changing history or focus',async()=>{
+  const f=fixture();f.context.temporaryAccessView={hasPendingChanges:()=>true};f.context.window.confirm=()=>false;
+  const focused=f.document.activeElement;await f.context.navigate('/usage',false,true);assert.equal(f.history.length,0);assert.equal(f.document.activeElement,focused);
+  f.context.window.confirm=()=>true;await f.context.navigate('/usage',false,true);assert.equal(f.history.length,1);
 });
 
 test("039: Tab and Shift+Tab wrap only at drawer boundaries and outside focus is returned inside", () => {

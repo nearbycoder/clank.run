@@ -11,7 +11,7 @@ const directory = await mkdtemp(join(tmpdir(), "clank-project-reset-"));
 test.after(() => rm(directory, { recursive: true, force: true }));
 await writeFile(join(directory, "package.json"), '{"type":"module"}\n');
 await Promise.all([
-  "platform-console", "ui-theme", "platform-console-project-sort", "platform-console-project-status",
+  "platform-console", "temporary-access", "ui-theme", "platform-console-project-sort", "platform-console-project-status",
   "platform-console-project-workspace", "platform-console-activity-search", "platform-console-activity-action",
   "platform-console-log-search", "platform-console-usage-export",
 ].map(async name => {

@@ -1,3 +1,4 @@
+export * from "./temporary-access.ts";
 export * from "./organization-security-policy.ts";
 export { renderAgentActivity } from "./agent-activity.ts";
 export type { AgentActivityOptions, AgentActivity, AgentActivityFilter, AgentActivitySnapshot } from "./agent-activity.ts";
