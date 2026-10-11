@@ -1,0 +1,94 @@
+{
+  "feature": 8,
+  "accepted": true,
+  "reviewedHead": "e588fe0d4b89c21533fe8124520da1e2820ec26e",
+  "merge": "996fb2f2253398e2980bc2ba2455e3b9ee426fce",
+  "tree": "59a65e57e2fce5076cd47ccf1833634ba485a8fd",
+  "mergeMethod": "normal protected expected-head squash",
+  "authorComment": 5481645711,
+  "independentHumanApproval": false,
+  "hostedChecks": [
+    114368196797,
+    114367952455,
+    114367952433,
+    114367952432,
+    114367952389,
+    114367952352,
+    114367952336,
+    114367952088
+  ],
+  "allHostedChecksPassed": true,
+  "analysisNotice": "Ubuntu runner migration, read separately",
+  "openReviewThreads": 0,
+  "productionSource": "215f5943f161c3c2409651a8b0261cec1ff42325",
+  "currentHeadQualification": "Test/reports-only changes retain all575 production source/emitted hashes; full/native proofs bind that identical production source; exact final head passes all8 hosted checks and final loaded provider suites.",
+  "package": {
+    "files": 417,
+    "unpackedBytes": 6120617,
+    "limit": 6291456,
+    "dependencies": 0
+  },
+  "fullNativePostgres": {
+    "node26": {
+      "reported": 2270,
+      "passed": 2258,
+      "failed": 0,
+      "cancelled": 0,
+      "privilegedSkips": 12,
+      "parsedProfiles": 2637
+    },
+    "node22": {
+      "reported": 2270,
+      "passed": 2258,
+      "failed": 0,
+      "cancelled": 0,
+      "privilegedSkips": 12,
+      "parsedProfiles": 2633
+    }
+  },
+  "actualDockerCases": {
+    "node26": 10,
+    "node22": 10,
+    "skipped": 0
+  },
+  "scope": "Code-only provider canaries with explicit isolated read-only data, measured guardrails, actual native authority and acknowledged exact retirement before ordinary preserve-mode writer activation. Browser fixture establishes actual keyboard/focus/mobile/permission UI behavior only.",
+  "limitations": [
+    "No production Railway or physical-host certification",
+    "No feature07,09 or remaining roadmap acceptance",
+    "Historical failed gates, malformed profiles and ineffective pointer actions stay retained"
+  ],
+  "acceptedFeatureCount": 29,
+  "remainingFeatureCount": 11,
+  "checkouts": [
+    {
+      "path": "/home/nearby/.vnc/codex-home/.codex/worktrees/d164/clank",
+      "head": "996fb2f2253398e2980bc2ba2455e3b9ee426fce",
+      "tree": "59a65e57e2fce5076cd47ccf1833634ba485a8fd",
+      "preserved": 7
+    },
+    {
+      "path": "/home/nearby/Sites/clank",
+      "head": "996fb2f2253398e2980bc2ba2455e3b9ee426fce",
+      "tree": "59a65e57e2fce5076cd47ccf1833634ba485a8fd",
+      "preserved": 16
+    }
+  ],
+  "artifacts": {
+    "/tmp/clank-review-2026-10-08/provider-canary-platform-gate01-evidence/provider-canary-platform-full-source03-evidence-01.json": {
+      "sha256": "038b444c8cdb01eed0a84785acd6a0598dcb129695429f31fbf0495098bac6ef",
+      "bytes": 2458
+    },
+    "/tmp/clank-review-2026-10-08/provider-canary-platform-native03-evidence/evidence-01.json": {
+      "sha256": "be606faf87da3b737a7e55b0f237f9c8f79bfb10d3ff8a5df64fb154cdde0dab",
+      "bytes": 4644
+    },
+    "/tmp/clank-review-2026-10-08/pr346-provider-canary-215/evidence-final-01.json": {
+      "sha256": "4f8693dbcf43eb63069a6f25157e8c7f0e4f3a0645db4967bff276ddad11f460",
+      "bytes": 23888
+    },
+    "/tmp/clank-review-2026-10-08/provider-canary-console-browser-01/keyboard-observation-01/evidence-keyboard-01.json": {
+      "sha256": "faf5b8121e29b29f5b439fb06b86d8bfa2166ff4c35b34e96d1c0a966c64c604",
+      "bytes": 6521
+    }
+  }
+}

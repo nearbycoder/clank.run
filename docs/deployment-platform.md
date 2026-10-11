@@ -188,6 +188,90 @@ assigned to it the same bounded two-second drain before stopping the candidate. 
 exceed that limit can fail during termination. Verified process cleanup still precedes rollback
 or writer replacement; an unresolved cleanup fence requires operator recovery.
 
+### Isolated provider canaries
+
+Provider projects can use the same measured traffic stages with explicit read-only isolation:
+
+```ts
+canary: {
+  stages: [
+    { trafficPercent: 10, durationMs: 30_000, minimumSamples: 100 },
+    { trafficPercent: 100, durationMs: 60_000, minimumSamples: 500 },
+  ],
+  maximumErrorRate: 0.01,
+  maximumP95Ms: 500,
+  provider: { databasePolicy: "isolated-read-only", readPaths: ["/", "/healthz"] },
+}
+```
+
+This requires native same-host Linux supervisor leadership, provider placement, managed ingress,
+provider HTTP canary controls, and a primary deployment whose operation has completed. The first
+release initializes the primary normally. Later candidates must have no declared jobs, an approved
+public health path, and no pending migrations. The provider runs them with an isolated snapshot,
+read-only database, no project environment secrets, and the provider's candidate resource limits.
+Only anonymous GET/HEAD requests on approved exact paths enter the traffic split; writes,
+authenticated requests, and other paths keep using the primary. Health probes do not count as
+measured application samples. Every stage requires its configured sample count, error rate, and
+p95 latency before its deadline. Undersampling or uncertainty fails the candidate.
+
+The control plane retains a bounded exact operation, frozen policy, and monotonically increasing
+controller epoch in its native catalog before sending prepare. Actual native supervisor and project
+leases authorize each transition and asynchronous continuation; an epoch number alone does not.
+Candidate traffic uses the same captured primary/candidate identity checks through response reads.
+After a successful measurement, the platform first obtains and persists exact provider retirement,
+then queues ordinary activation with the primary's latest data in `preserve` mode. Candidate data
+is never promoted. A stopped/unknown response, expired lifetime, or missing inspect result cannot
+stand in for acknowledged retirement.
+
+Every native journal transition advances a retained epoch floor, mirrored in its project row in the
+same transaction with exact readback. Missing tables, missing individual rows, and earlier transition
+snapshots fail closed; startup does not reconstruct or reset them. The original provider operation's
+controller epoch and an issued retirement epoch remain fixed for exact retries. New grants are above
+the retained floor. A consistent rollback of the entire catalog still requires the provider's durable
+fencing state; restoring both sides of a safety boundary is an operator recovery operation.
+
+`GET /api/projects/:id/canary` includes the existing measured reports plus a nonsecret `provider`
+status: operation ID, `controllerEpoch` (the current retained floor used as `expectedEpoch`, distinct
+from the immutable provider operation epoch), release, phase, outcome, cleanup requirement, retry
+status, reason, and update time. An uncertain control response returns
+`PROVIDER_CANARY_RECOVERY_REQUIRED`; preserve the operation and retry exact cleanup before starting
+another deployment. `POST /api/projects/:id/canary/recover` takes
+`{ operationId, expectedEpoch }`, requires current deploy permission and configured fresh
+authentication, and only retries cleanup. A stale operation or epoch returns a conflict. Once cleanup
+finishes, interrupted or failed candidates require a new deployment idempotency key. An already
+queued ordinary activation can resume with its original key and current authority.
+
+The Console’s **Deployments → Canary rollout** panel shows retained measurements and provider
+cleanup status even when measurement is disabled. **Clean up candidate** uses the displayed
+operation and epoch; it only stops that candidate. A failed or uncertain request refreshes status
+without automatically sending another mutation. Read-only support sessions cannot run cleanup.
+
+The linked-project CLI provides the same controls:
+
+```sh
+clank canary status --json
+clank canary recover canary_EXACT_OPERATION --expected-epoch 12 --json
+```
+
+Copy the exact operation and current retained epoch from status. A stale epoch is a conflict;
+inspect again before deciding whether to retry. Cleanup does not promote a release.
+
+Restart never resumes a partially measured stage or reuses its pass to allocate a new writer. It
+withdraws candidate routing and retries exact retirement, including when provider canary policy is
+now disabled. An ordinary activation already durably queued can continue. Retained uncertainty
+blocks deployment, rollback, restore, failover, evacuation, deletion, and capsule admission. Cleanup
+uses the retained provider origin and binding; a changed node endpoint cannot redirect the duty.
+A revoked initiating credential cannot promote a candidate, but the current native controller still
+performs its server-owned exact cleanup duty. Finite artifact and project cleanup keeps native lease
+authority through asynchronous work and checks before each new destructive storage submission;
+authority loss cannot cancel an external deletion that was already submitted. If the retained endpoint or cleanup credential is no
+longer usable, preserve the catalog and provider state for operator recovery.
+
+Enabling provider canaries permanently enrolls supervisor protocol 2 before active admission.
+Earlier binaries reject that catalog before acquiring writer duties, even after candidates have
+been retired or the option is disabled. There is no automatic downgrade: keep a compatible binary
+for this catalog. Ordinary catalogs without provider-canary enrollment retain protocol 1.
+
 An unexpected worker or scheduler exit crashes and restarts the complete release group instead of
 leaving a healthy-looking web process with stale background work. Read
 [Durable jobs and cron](jobs-and-cron.md) for queue correctness and process-provider requirements.

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { gzipSync } from 'node:zlib';
 import { createHash } from 'node:crypto';
 import { generateReleaseSigningKey, signReleaseAttestation, verifyReleaseAttestation, encodeReleaseAttestation, decodeReleaseAttestation } from '../dist/release-attestation.js';
+import { reservePlatformTestPorts } from './fixtures/platform-test-ports.mjs';
 const hash = value => createHash('sha256').update(value).digest('hex');
 function artifact(text = 'export const app = 1;') {
   return gzipSync(JSON.stringify({ protocol: 'clank-deploy/1', config: { version: 1, entry: 'server.mjs', include: ['server.mjs', 'migrations'], database: { path: 'app.sqlite', migrations: 'migrations', allowUnsafeMigrations: false }, health: { path: '/healthz', timeoutMs: 5000 }, env: {} }, provenance: { builder: 'clank-cli/1', frameworkVersion: '0.23.0', nodeVersion: process.version, sourceRevision: 'abc123' }, files: [{ path: 'server.mjs', size: Buffer.byteLength(text), sha256: hash(text), mode: 420, content: Buffer.from(text).toString('base64') }] }));
@@ -28,12 +29,14 @@ test('platform admission rejects unsigned artifacts and records a valid signatur
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
   const root = await mkdtemp(join(tmpdir(), 'clank-attestation-'));
-  const key = await generateReleaseSigningKey('local-test');
-  const projects = [], policy = { keys: [{ keyId: key.keyId, publicKey: key.publicKey, projects, builders: ['local-ci'] }] };
-  const platform = await openPlatform({ dataDirectory: root, publicUrl: 'http://127.0.0.1:4200', signup: true, appPortStart: 55000, appPortEnd: 55010, backups: { intervalMs: false }, releaseAttestations: policy });
-  const request = (path, method = 'GET', body, auth = {}) => new Request(`http://127.0.0.1:4200${path}`, { method, headers: { origin: 'http://127.0.0.1:4200', 'content-type': 'application/json', 'x-clank-client-ip': '127.0.0.1', ...auth }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-  const json = async (path, method, body, auth, status = 200) => { const response = await platform.handle(request(path, method, body, auth)); const value = await response.json(); assert.equal(response.status, status, JSON.stringify(value)); return value; };
+  let platform, ports;
   try {
+    ports = await reservePlatformTestPorts();
+    const key = await generateReleaseSigningKey('local-test');
+    const projects = [], policy = { keys: [{ keyId: key.keyId, publicKey: key.publicKey, projects, builders: ['local-ci'] }] };
+    platform = await openPlatform({ dataDirectory: root, publicUrl: 'http://127.0.0.1:4200', signup: true, appPortStart: ports.start, appPortEnd: ports.end, backups: { intervalMs: false }, releaseAttestations: policy });
+    const request = (path, method = 'GET', body, auth = {}) => new Request(`http://127.0.0.1:4200${path}`, { method, headers: { origin: 'http://127.0.0.1:4200', 'content-type': 'application/json', 'x-clank-client-ip': '127.0.0.1', ...auth }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    const json = async (path, method, body, auth, status = 200) => { const response = await platform.handle(request(path, method, body, auth)); const value = await response.json(); assert.equal(response.status, status, JSON.stringify(value)); return value; };
     const response = await platform.handle(request('/__clank/auth/register', 'POST', { email: 'attest@example.invalid', password: 'correct horse battery staple', profile: { name: 'Builder' } }));
     assert.equal(response.status, 201); const session = await response.json(), cookie = response.headers.get('set-cookie').split(';')[0];
     const started = await json('/api/device/start', 'POST', { clientName: 'attestation test' }, {}, 201);
@@ -50,7 +53,7 @@ test('platform admission rejects unsigned artifacts and records a valid signatur
     const receipt = await json(`/api/projects/${project.id}/releases/${result.release.id}/attestation`, 'GET', undefined, auth);
     assert.deepEqual(receipt.attestation, signature); assert.ok(receipt.verifiedAt > 0);
     assert.equal((await upload()).status, 403, 'idempotent retries still require the current admission policy');
-  } finally { await platform.close(); await rm(root, { recursive: true, force: true }); }
+  } finally { await platform?.close(); await ports?.release(); await rm(root, { recursive: true, force: true }); }
 });
 
 test('CLI refuses included, aliased or copied private signing keys before writing a dry-run artifact', async () => {
