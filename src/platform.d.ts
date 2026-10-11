@@ -127,6 +127,31 @@ export interface PlatformDependencyCheck {
   readonly checkedAt: number;
 }
 
+/** Original artifact accepted for observation only; it cannot activate a release. */
+export interface PlatformStagedRelease {
+  readonly id: string;
+  readonly projectId: string;
+  readonly purpose: "shadow-upload";
+  readonly status: "staged";
+  readonly digest: string;
+  readonly artifactBytes: number;
+  readonly storageBytes: number;
+  readonly artifactAvailable: true;
+  readonly runnerArtifact: {readonly bytes: number; readonly storage: "local" | "object"};
+  readonly previousReleaseId: null;
+  readonly frameworkVersion: string;
+  readonly nodeVersion: string;
+  readonly createdAt: number;
+  readonly activatedAt: null;
+  readonly failure: null;
+  readonly providerGeneration: null;
+  readonly migrations: string;
+}
+export interface PlatformStagedReleaseResponse {
+  readonly ok: true;
+  readonly release: PlatformStagedRelease;
+}
+
 export interface PlatformReleaseChannelEntry {
   readonly version: number;
   readonly sourceEnvironment: PlatformEnvironmentName;
