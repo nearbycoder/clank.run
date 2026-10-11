@@ -7,6 +7,8 @@ when an identity or directory begins with a dash. For example:
 `clank environment bind --expected-version=1 --json -- staging --PROJECT_ID`.
 Everything after `--` is positional, including strings such as `--help` or `--json`;
 required options and unknown-option validation still apply before the terminator.
+For an option value that starts with `--`, use the equals form, such as
+`--expected-active=--CURRENT_RELEASE_ID`; a separate `--CURRENT_RELEASE_ID` is ambiguous.
 
 The package also exposes three operator processes: `clank-platform` starts the control plane,
 `clank-runner` connects an authenticated remote deployment node, and `clank-provider` runs the
@@ -402,7 +404,9 @@ Use `clank channel list`, `get`, `pin`, `history`, `actions`, `promote`, `rollba
 for immutable channel pins and explicit environment activation. All mutations require exact
 reviewed versions; activation also captures the target binding, active release and request key.
 `history --version=<n>` reads any exact retained entry. See [persistent release channels](release-channels.md)
-for CLI/dashboard parity, retirement and verified recovery.
+for CLI/dashboard parity, retirement and verified recovery. Generated release IDs may begin
+with `--`, so pass them as `--release=<id>` and `--expected-active=<id>` (for example,
+`--release=--SOURCE_RELEASE_ID` and `--expected-active=--CURRENT_RELEASE_ID`).
 
 ## Scheduled release windows
 
@@ -457,9 +461,14 @@ clank releases
 clank releases delete <inactive-release-id> \
   --confirm="delete-release <project-slug> <inactive-release-id>"
 clank logs --limit=500
-clank rollback <release-id>
-clank rollback <release-id> --restore-data --confirm="restore <slug>"
+clank rollback -- <release-id>
+clank rollback --restore-data --confirm="restore <slug>" -- <release-id>
 ```
+
+Keep every rollback option before `--`, including `--json`. For example,
+`clank rollback --json -- --TARGET_RELEASE_ID` passes a dash-prefixed target literally.
+Reviewed rollbacks likewise use `--expected-active=--CURRENT_RELEASE_ID` before the
+terminator, together with the required key, activation sequence and dependency review.
 
 `clank releases` reports the retained artifact count and runtime, original upload and snapshot bytes. Cleanup requires the token's `rollback` permission, never removes the active artifact, and preserves release metadata, logs, and audit evidence. Removing the active release's immediate predecessor also destroys code rollback and its matching data snapshot, so it additionally requires `--allow-rollback-loss`.
 
