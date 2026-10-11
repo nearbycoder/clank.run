@@ -408,3 +408,71 @@ test('bridge owner WAL refuses before installation while ordinary protocol1 WAL 
 test('unexpected owner WAL or SHM sidecars refuse bridge installation without deletion',async t=>{
  for(const suffix of ['-wal','-shm']){const f=await fixture(t),file=f.writer+suffix;fs.writeFileSync(file,'retained foreign sidecar',{mode:0o600});const before=snapshot(f);await assert.rejects(handoff.enableProviderHandoffBridge(f.owner,f.nativeDomain,limits),/WAL sidecars/);assert.deepEqual(snapshot(f),before);assert.equal(fs.readFileSync(file,'utf8'),'retained foreign sidecar');fs.unlinkSync(file);}
 });
+
+function revocationIntent(f,state='issued'){return {projectId,grantId:f.binding.grantId,bindingSha256:hash(f.binding),containerId:state==='issued'?null:containerId,expectedVersion:state==='issued'?2:state==='created'?3:4};}
+async function revocationFixture(t,state='issued'){
+ const f=await containerFixture(t);if(state!=='issued')await handoff.recordProviderHandoffContainerCreated(f.bridge,f.containerInput);
+ if(state==='started'){f.config.projection=containerProjection(f,'running');f.configure();await handoff.recordProviderHandoffContainerStarted(f.bridge,{...f.containerInput,expectedVersion:3});}return f;
+}
+for(const state of ['issued','created','started'])test('R1 durable '+state+' revocation retains identity and supports exact cleanup-only retry/reopen',async t=>{
+ const f=await revocationFixture(t,state),input=revocationIntent(f,state),before=rows(f.catalog,'clank_provider_handoff_source_grant')[0];
+ const result=await handoff.revokeProviderHandoffGrant(f.bridge,input);assert.deepEqual(result,{grantId:input.grantId,bindingSha256:input.bindingSha256,containerId:input.containerId,state:'revoked',version:input.expectedVersion+1});assert.equal(Object.isFrozen(result),true);assert.equal(f.bridge.mode,'cleanup-only');
+ const row=rows(f.catalog,'clank_provider_handoff_source_grant')[0];assert.deepEqual(row,{...before,state:'revoked'});assert.equal(rows(f.catalog,'clank_provider_handoff_bridge_state')[0].records_sha256,hash(native(f.catalog,mirroredGrant)));const retained=snapshot(f);
+ await assert.rejects(handoff.issueProviderHandoffGrant(f.bridge,f.input),/live/);assert.deepEqual(await handoff.revokeProviderHandoffGrant(f.bridge,input),result);assert.deepEqual(snapshot(f),retained);
+ f.owner.close();const owner=await f.open(),domain=await f.domain(owner),bridge=await handoff.enableProviderHandoffBridge(owner,domain,limits);assert.equal(bridge.mode,'cleanup-only');assert.equal((await handoff.inspectProviderHandoffBridge(bridge)).projects[0].grant.container_id,input.containerId);assert.deepEqual(await handoff.revokeProviderHandoffGrant(bridge,input),result);assert.deepEqual(snapshot(f),retained);
+});
+test('R1 own-data revocation intent refuses accessors and forged authority without effects',async t=>{
+ const f=await revocationFixture(t),input=revocationIntent(f),before=snapshot(f),log=fs.readFileSync(f.log,'utf8');let called=0;const accessor={...input};Object.defineProperty(accessor,'containerId',{get(){called++;return null;}});
+ for(const value of [null,[],accessor,{...input,extra:true},{...input,[Symbol()]:1},{...input,expectedVersion:1},{...input,expectedVersion:Number.MAX_SAFE_INTEGER},{...input,containerId:'bad'}])await assert.rejects(handoff.revokeProviderHandoffGrant(f.bridge,value));
+ await assert.rejects(handoff.revokeProviderHandoffGrant({...f.bridge},input),/genuine/);assert.equal(called,0);assert.deepEqual(snapshot(f),before);assert.equal(fs.readFileSync(f.log,'utf8'),log);
+ const pending=handoff.revokeProviderHandoffGrant(f.bridge,input);input.containerId=containerId;input.expectedVersion=99;assert.equal((await pending).containerId,null);
+});
+for(const fault of ['grant','binding','container','version','retry-version'])test('R1 '+fault+' conflicts preserve durable grant and mirror',async t=>{
+ const f=await revocationFixture(t,'created'),input=revocationIntent(f,'created');if(fault==='retry-version')await handoff.revokeProviderHandoffGrant(f.bridge,input);
+ const before=snapshot(f);if(fault==='grant')input.grantId=randomUUID();if(fault==='binding')input.bindingSha256='a'.repeat(64);if(fault==='container')input.containerId='a'.repeat(64);if(fault==='version'||fault==='retry-version')input.expectedVersion++;
+ await assert.rejects(handoff.revokeProviderHandoffGrant(f.bridge,input));assert.deepEqual(snapshot(f),before);
+});
+for(const mode of ['ignored','altered','false-count','mirror-ignored','mirror-altered','commit-ignored'])test('R1 '+mode+' native writes refuse false revocation acknowledgment',async t=>{
+ const f=await revocationFixture(t,'created'),before=snapshot(f),prepare=DatabaseSync.prototype.prepare,exec=DatabaseSync.prototype.exec;let injected=false;
+ DatabaseSync.prototype.prepare=function(sql){const statement=prepare.call(this,sql);
+  if(sql.startsWith('UPDATE clank_provider_handoff_source_grant SET state=')){
+   if(mode==='ignored')exec.call(this,"CREATE TEMP TRIGGER r1_ignore BEFORE UPDATE ON clank_provider_handoff_source_grant BEGIN SELECT RAISE(IGNORE); END");
+   if(mode==='altered')exec.call(this,"CREATE TEMP TRIGGER r1_alter AFTER UPDATE ON clank_provider_handoff_source_grant BEGIN UPDATE clank_provider_handoff_source_grant SET container_id='"+'a'.repeat(64)+"' WHERE id=1; END");
+   if(mode==='false-count')statement.run=()=>({changes:1});if(['ignored','altered','false-count'].includes(mode))injected=true;
+  }
+  if(sql.startsWith('UPDATE clank_provider_handoff_bridge_state SET version=version+1')){if(mode==='mirror-ignored'){statement.run=()=>({changes:1});injected=true;}if(mode==='mirror-altered'){exec.call(this,"CREATE TEMP TRIGGER r1_mirror AFTER UPDATE ON clank_provider_handoff_bridge_state BEGIN UPDATE clank_provider_handoff_bridge_state SET version=version+1 WHERE id=1; END");injected=true;}}
+  return statement;
+ };
+ DatabaseSync.prototype.exec=function(sql){if(mode==='commit-ignored'&&sql==='COMMIT'&&prepare.call(this,'PRAGMA database_list').get().file===f.catalog){injected=true;return;}return exec.call(this,sql);};
+ try{await assert.rejects(handoff.revokeProviderHandoffGrant(f.bridge,revocationIntent(f,'created')));}finally{DatabaseSync.prototype.prepare=prepare;DatabaseSync.prototype.exec=exec;}
+ assert.equal(injected,true);assert.deepEqual(snapshot(f),before);assert.equal(f.bridge.mode,'cleanup-only');
+});
+for(const target of ['file','directory'])test('R1 '+target+' sync uncertainty retains revoked identity and exact restart retry',async t=>{
+ const f=await revocationFixture(t,'started'),input=revocationIntent(f,'started'),sync=fs.fsyncSync;let injected=false;const expected=target==='file'?f.catalog:f.catalog.slice(0,f.catalog.lastIndexOf('/'));
+ fs.fsyncSync=function(fd){if(!injected&&fs.realpathSync('/proc/self/fd/'+fd)===expected){injected=true;throw Error('R1 sync uncertainty');}return sync.call(this,fd);};syncBuiltinESMExports();
+ try{await assert.rejects(handoff.revokeProviderHandoffGrant(f.bridge,input),/sync uncertainty/);}finally{fs.fsyncSync=sync;syncBuiltinESMExports();}assert.equal(injected,true);assert.equal(rows(f.catalog,'clank_provider_handoff_source_grant')[0].container_id,containerId);assert.equal(rows(f.catalog,'clank_provider_handoff_source_grant')[0].state,'revoked');
+ f.owner.close();const owner=await f.open(),domain=await f.domain(owner),bridge=await handoff.enableProviderHandoffBridge(owner,domain,limits);assert.equal((await handoff.revokeProviderHandoffGrant(bridge,input)).version,5);
+});
+for(const boundary of [0,1])for(const mutation of ['close','domain','catalog-path','index-version'])test('R1 '+mutation+' at domain await '+boundary+' never acknowledges revocation',async t=>{
+ const f=await revocationFixture(t,'created'),input=revocationIntent(f,'created'),hold=join(f.dir,'r1-held'),release=join(f.dir,'r1-release');fs.writeFileSync(f.log+'.info','0');f.config.infoReplies=Array.from({length:boundary+1},()=>({}));f.config.infoReplies[boundary]={hold,release,...(mutation==='domain'?{stdout:'"substitute_daemon"\n'}:{})};f.configure();
+ const pending=assert.rejects(handoff.revokeProviderHandoffGrant(f.bridge,input));await waitContainerFile(hold);
+ if(mutation==='close')f.owner.close();if(mutation==='catalog-path'){fs.renameSync(f.catalog,join(f.dir,'r1-original'));fs.copyFileSync(join(f.dir,'r1-original'),f.catalog);fs.chmodSync(f.catalog,0o600);}if(mutation==='index-version')native(f.index,db=>db.exec('UPDATE clank_provider_handoff_bridge_index SET version=version+1'));
+ const before=snapshot(f);fs.writeFileSync(release,'go');await pending;assert.deepEqual(snapshot(f),before);assert.equal(rows(f.catalog,'clank_provider_handoff_source_grant')[0].state,boundary===0?'created':'revoked');
+});
+
+test('R1 saturated exact retry performs no update and retains reserved quota',async t=>{
+ const f=await revocationFixture(t),reservation={reservationId:randomUUID(),kind:'base',maximumBytes:128,inputSha256:'a'.repeat(64)};await handoff.reserveProviderHandoffSpool(f.bridge,projectId,reservation);
+ native(f.catalog,db=>db.prepare('UPDATE clank_provider_handoff_bridge_state SET version=?').run(Number.MAX_SAFE_INTEGER-1));const input={...revocationIntent(f),expectedVersion:Number.MAX_SAFE_INTEGER-1};const first=await handoff.revokeProviderHandoffGrant(f.bridge,input),before=snapshot(f),prepare=DatabaseSync.prototype.prepare;
+ DatabaseSync.prototype.prepare=function(sql){if(sql.startsWith('UPDATE clank_provider_handoff_'))throw Error('R1 retry must not update');return prepare.call(this,sql);};try{assert.deepEqual(await handoff.revokeProviderHandoffGrant(f.bridge,input),first);}finally{DatabaseSync.prototype.prepare=prepare;}assert.equal(first.version,Number.MAX_SAFE_INTEGER);assert.deepEqual(snapshot(f),before);assert.equal(rows(f.index,'clank_provider_handoff_spool_reservations')[0].maximum_bytes,128);
+});
+for(const boundary of [0,1])for(const mutation of ['catalog-path','other-catalog','index-version'])test('R1 readonly exact retry retains consulted '+mutation+' through domain await '+boundary,async t=>{
+ const f=await containerFixture(t,{},true),input=revocationIntent(f);await handoff.revokeProviderHandoffGrant(f.bridge,input);fs.writeFileSync(f.log+'.info','0');const hold=join(f.dir,'r1-retry-held'),release=join(f.dir,'r1-retry-release');f.config.infoReplies=Array.from({length:boundary+1},()=>({}));f.config.infoReplies[boundary]={hold,release};f.configure();
+ const pending=assert.rejects(handoff.revokeProviderHandoffGrant(f.bridge,input));await waitContainerFile(hold);
+ if(mutation==='catalog-path'){fs.renameSync(f.catalog,join(f.dir,'r1-original'));fs.copyFileSync(join(f.dir,'r1-original'),f.catalog);fs.chmodSync(f.catalog,0o600);}if(mutation==='other-catalog')native(join(f.root,'service','handoff','catalogs',f.other.catalogId,'catalog.sqlite'),db=>db.exec('UPDATE clank_provider_handoff_bridge_state SET version=version+1'));if(mutation==='index-version')native(f.index,db=>db.exec('UPDATE clank_provider_handoff_bridge_index SET version=version+1'));
+ const retained=snapshot(f);fs.writeFileSync(release,'go');await pending;assert.deepEqual(snapshot(f),retained);assert.equal(rows(f.catalog,'clank_provider_handoff_bridge_state')[0].version,3);
+});
+test('R1 lost COMMIT response retains revocation and allows exact cleanup restart retry',async t=>{
+ const f=await revocationFixture(t,'created'),input=revocationIntent(f,'created'),exec=DatabaseSync.prototype.exec;let injected=false;
+ DatabaseSync.prototype.exec=function(sql){const selected=sql==='COMMIT'&&this.prepare('PRAGMA database_list').get().file===f.catalog;const value=exec.call(this,sql);if(selected){injected=true;throw Error('R1 lost commit response');}return value;};try{await assert.rejects(handoff.revokeProviderHandoffGrant(f.bridge,input),/lost commit response/);}finally{DatabaseSync.prototype.exec=exec;}assert.equal(injected,true);assert.equal(rows(f.catalog,'clank_provider_handoff_source_grant')[0].state,'revoked');assert.equal(rows(f.catalog,'clank_provider_handoff_source_grant')[0].container_id,containerId);
+ f.owner.close();const owner=await f.open(),domain=await f.domain(owner),bridge=await handoff.enableProviderHandoffBridge(owner,domain,limits);assert.equal((await handoff.revokeProviderHandoffGrant(bridge,input)).version,4);
+});

@@ -180,7 +180,7 @@ function bridgeCatalog(c:Context,db:any,root:Row,project:Row,reservations:Row[])
   // require their owning partition's complete semantic validation, never adoption.
   if(records.transfer||records.operations.length||records.spools.length)fail("Provider handoff source control records are unsupported by this foundation.");
   if(grant){let binding;try{binding=grantBinding(JSON.parse(grant.binding_json),root,project);}catch{fail("Provider handoff source binding is invalid.");}
-    const observed=grant.state==="created"||grant.state==="started",minimum=grant.state==="started"?4:observed?3:2;
+    const observed=grant.state==="created"||grant.state==="started"||grant.state==="revoked"&&grant.container_id!==null,minimum=grant.state==="started"||grant.state==="revoked"&&observed?4:observed?3:2;
     if(row.version<minimum||grant.id!==1||grant.protocol!==2||grant.grant_id!==binding.grantId||boundedJSON(binding,4096)!==grant.binding_json||c.hash(grant.binding_json)!==grant.binding_sha256||!match(grant.grant_secret_sha256,DIGEST)||!match(grant.control_secret_sha256,DIGEST)||!["issued","created","started","revoked","stopped"].includes(grant.state)||(observed?!match(grant.container_id,DIGEST):grant.container_id!==null)||grant.readiness_json!==null||grant.readiness_sha256!==null)fail("Provider handoff source grant state is unsupported.");
   }else if(reservations.some(r=>r.catalog_id===project.catalog_id))fail("Provider handoff reservation has no retained grant.");
   return {version:row.version,...records};
@@ -516,14 +516,14 @@ function containerObservation(output:string,input:ProviderHandoffContainerInput,
   if(row[7]!== (running?"running":"created")||row[8]!==running||row[9]!==false||row[10]!==false||row[11]!==false||(running?!positive(row[12]):row[12]!==0)||(running?!containerTimestamp(row[13]):row[13]!==zero)||row[14]!==zero)fail("Provider handoff container phase differs.");
   return text;
 }
-function containerFrame(bridge:ProviderHandoffBridge,registered:BridgeContext,rootJSON?:string,stateJSON?:string){
-  const {context:c}=bridgeCurrent(bridge,true),root=marker(c);
+function containerFrame(bridge:ProviderHandoffBridge,registered:BridgeContext,rootJSON?:string,stateJSON?:string,live=true){
+  const {context:c}=bridgeCurrent(bridge,live),root=marker(c);
   if(!root?.bridge||root.bridge.enablement_id!==registered.enablementId||root.domain_json!==boundedJSON(registered.domain,4096)||rootJSON!==undefined&&JSON.stringify(root)!==rootJSON)fail("Provider handoff container root changed.");
   const state=inspect(c,root),from=c.pins.length;let indexRows:Row;
   try{const handoff=directory(c,c.service,"handoff");indexRows=databaseAt(c,handoff,"index.sqlite",INDEX_MAX,false,db=>{
     bridgeIndex(c,db,root,index(c,db,root));return {index:singleton(db,"clank_provider_handoff_index"),bridge:singleton(db,"clank_provider_handoff_bridge_index")};
   });}finally{releasePins(c,from);}
-  if(state.barriers||stateJSON!==undefined&&JSON.stringify({state,index:indexRows})!==stateJSON)fail("Provider handoff container consulted state changed.");
+  if(live&&state.barriers||stateJSON!==undefined&&JSON.stringify({state,index:indexRows})!==stateJSON)fail("Provider handoff container consulted state changed.");
   current(registered.owner);return {c,root,state,indexRows};
 }
 async function recordContainer(bridge:ProviderHandoffBridge,value:ProviderHandoffContainerInput,next:"created"|"started"):Promise<ProviderHandoffContainerAcknowledgment>{
@@ -584,6 +584,60 @@ async function recordContainer(bridge:ProviderHandoffBridge,value:ProviderHandof
     }finally{c.queued--;release();}
   }
 }
+
+type ProviderHandoffRevocationInput=Readonly<{projectId:string;grantId:string;bindingSha256:string;containerId:string|null;expectedVersion:number}>;
+type ProviderHandoffRevocationAcknowledgment=Readonly<{grantId:string;bindingSha256:string;containerId:string|null;state:"revoked";version:number}>;
+function revocationInput(value:ProviderHandoffRevocationInput):ProviderHandoffRevocationInput {
+  const keys=["projectId","grantId","bindingSha256","containerId","expectedVersion"],copy:Row={};
+  if(!value||typeof value!=="object"||Array.isArray(value)||Reflect.ownKeys(value).length!==keys.length)fail("Provider handoff revocation input is invalid.");
+  for(const key of keys){const descriptor=Object.getOwnPropertyDescriptor(value,key);if(!descriptor||!("value" in descriptor))fail("Provider handoff revocation requires own data fields.");copy[key]=descriptor.value;}
+  if(!match(copy.projectId,ID)||!match(copy.grantId,UUID)||!match(copy.bindingSha256,DIGEST)||copy.containerId!==null&&!match(copy.containerId,DIGEST)||!positive(copy.expectedVersion)||copy.expectedVersion<2||copy.expectedVersion>Number.MAX_SAFE_INTEGER-1)fail("Provider handoff revocation input is invalid.");
+  return Object.freeze(copy) as unknown as ProviderHandoffRevocationInput;
+}
+/** Durable authority revocation only. Retains observed container identity; does not stop a process. */
+export async function revokeProviderHandoffGrant(bridge:ProviderHandoffBridge,value:ProviderHandoffRevocationInput):Promise<ProviderHandoffRevocationAcknowledgment>{
+  const input=revocationInput(value),registered=bridgeCurrent(bridge),c=registered.context;
+  if(c.queued>=16)fail("Provider handoff private operation capacity exceeded.");c.queued++;
+  const previousTask=c.tail;let release!:()=>void;c.tail=new Promise(resolve=>{release=resolve;});let retained:number|undefined;
+  try{
+    await previousTask;bridgeCurrent(bridge);retained=c.pins.length;
+    const initial=containerFrame(bridge,registered,undefined,undefined,false),handoff=directory(c,c.service,"handoff"),catalogs=directory(c,handoff,"catalogs");
+    pin(c,c.path.join(handoff.path,"index.sqlite"),false,INDEX_MAX);
+    for(const project of initial.state.projects){const target=directory(c,catalogs,project.catalog_id);pin(c,c.path.join(target.path,"catalog.sqlite"),false,BRIDGE_CATALOG_MAX);}
+    const {root,state,indexRows}=containerFrame(bridge,registered,undefined,undefined,false),rootJSON=JSON.stringify(root),stateJSON=JSON.stringify({state,index:indexRows});
+    await verifyDomain(registered.owner,registered.domain,true);
+    containerFrame(bridge,registered,rootJSON,stateJSON,false);
+    const project=state.projects.find(row=>row.project_id===input.projectId),source=state.states.find(row=>row.projectId===input.projectId),grant=source?.grant;
+    if(!project||!source||!grant||grant.grant_id!==input.grantId||grant.binding_sha256!==input.bindingSha256||grant.container_id!==input.containerId)fail("Provider handoff revocation grant differs.");
+    const retry=source.version===input.expectedVersion+1&&grant.state==="revoked";
+    if(!retry&&(source.version!==input.expectedVersion||!["issued","created","started"].includes(grant.state)))fail("Provider handoff revocation transition conflicts.");
+    const expected={...grant,state:"revoked"},version=input.expectedVersion+1;
+    const wanted={version,grant:expected,transfer:null,operations:[],spools:[]},post={...state,states:state.states.map(row=>row.projectId===input.projectId?{...row,...wanted}:row)},postJSON=JSON.stringify({state:post,index:indexRows}),from=c.pins.length;
+    c.mode="cleanup-only";
+    try{const handoff=directory(c,c.service,"handoff"),catalogs=directory(c,handoff,"catalogs"),target=directory(c,catalogs,project.catalog_id);
+      databaseAt(c,target,"catalog.sqlite",BRIDGE_CATALOG_MAX,!retry,(db,file)=>{db.exec(retry?"BEGIN":"BEGIN IMMEDIATE");try{
+        catalog(c,db,root,project);const before=bridgeCatalog(c,db,root,project,state.reservations),metadata=singleton(db,"clank_provider_handoff_bridge_state");
+        if(JSON.stringify({projectId:project.project_id,catalogId:project.catalog_id,...before})!==JSON.stringify(source))fail("Provider handoff revocation preimage changed.");
+        if(!retry){
+          if(db.prepare(GRANT_CONTAINER_CAS).run("revoked",input.containerId,grant.grant_id,grant.binding_json,grant.binding_sha256,grant.grant_secret_sha256,grant.control_secret_sha256,grant.state,grant.container_id).changes!==1||JSON.stringify(bridgeRecords(db).grant)!==JSON.stringify(expected))fail("Provider handoff revocation grant readback differs.");
+          const mirror=c.hash(boundedJSON(bridgeRecords(db),BRIDGE_CATALOG_MAX));
+          if(db.prepare(CONTAINER_MIRROR_CAS).run(mirror,registered.enablementId,before.version,metadata.records_sha256).changes!==1)fail("Provider handoff revocation mirror write differs.");
+        }
+        commitBridgeFile(c,registered.owner,db,file,target,()=>{catalog(c,db,root,project);if(JSON.stringify(bridgeCatalog(c,db,root,project,state.reservations))!==JSON.stringify(wanted))fail("Provider handoff revocation durable readback differs.");});
+      }catch(error){if(db.isTransaction)db.exec("ROLLBACK");throw error;}});
+    }finally{releasePins(c,from);}
+    containerFrame(bridge,registered,rootJSON,postJSON,false);
+    await verifyDomain(registered.owner,registered.domain,true);
+    containerFrame(bridge,registered,rootJSON,postJSON,false);
+    return Object.freeze({grantId:input.grantId,bindingSha256:input.bindingSha256,containerId:input.containerId,state:"revoked",version});
+  }catch(error){if(c.mode==="bridge-live")c.mode="cleanup-only";c.failed=true;throw error;}
+  finally{
+    try{let failure:unknown;if(retained!==undefined)for(const p of c.pins.splice(retained).reverse()){try{c.fs.closeSync(p.fd);}catch(error){failure??=error;}}
+      if(failure){if(c.mode==="bridge-live")c.mode="cleanup-only";c.failed=true;throw failure;}
+    }finally{c.queued--;release();}
+  }
+}
+
 /** Historical native observation only. No create/start, readiness or admission. */
 export function recordProviderHandoffContainerCreated(bridge:ProviderHandoffBridge,input:ProviderHandoffContainerInput):Promise<ProviderHandoffContainerAcknowledgment>{return recordContainer(bridge,input,"created");}
 /** The same immutable container was observed running; this is not liveness proof. */
