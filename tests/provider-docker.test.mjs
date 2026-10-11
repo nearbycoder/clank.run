@@ -16,11 +16,73 @@ import {
   openDockerDeploymentRuntimeLauncher,
 } from "../dist/provider-docker.js";
 import { parseDeploymentConfig } from "../dist/deploy.js";
+import { createLinuxDockerNetworkPlan } from "../dist/linux-project-isolation.js";
 
 const IMAGE = `clank-test@sha256:${"a".repeat(64)}`;
 // Keep synthetic runtime listeners below Linux's default ephemeral range so
 // parallel test traffic cannot claim a probed port before the fixture binds it.
 const TEST_PORT_BASE = 25_100;
+
+async function orphanNetworkFixture(name) {
+  const fixture=await dockerFixture(name),projectId='canary_orphan_project',owner=`test-${name}`;
+  const plan=await createLinuxDockerNetworkPlan(owner,projectId,{allowCidrs:[]});
+  const networkPath=join(fixture.stateDirectory,'.network-'+plan.network),policyPath=join(fixture.root,'nft-state.json'),nftExecutable=join(fixture.root,'nft.mjs');
+  const network={Name:plan.network,Id:'a'.repeat(64),Driver:'bridge',Options:{'com.docker.network.bridge.name':plan.bridge},Labels:{'run.clank.owner':owner,'run.clank.project':projectId},Containers:{}};
+  await writeFile(networkPath,JSON.stringify(network));
+  await writeFile(policyPath,JSON.stringify({present:true,commands:[]}));
+  await writeFile(nftExecutable,`#!${process.execPath}
+import {readFile,writeFile} from 'node:fs/promises';
+const file=${JSON.stringify(policyPath)},state=JSON.parse(await readFile(file,'utf8')),args=process.argv.slice(2),table=${JSON.stringify({family:'inet',name:plan.table,comment:plan.ownership})};
+state.commands.push(args);await writeFile(file,JSON.stringify(state));
+if(args.join(' ')==='-j list tables'||args.join(' ')==='-j list table inet '+table.name)process.stdout.write(JSON.stringify({nftables:state.present?[{table}]:[]}));
+else if(args.join(' ')==='delete table inet '+table.name){state.present=false;await writeFile(file,JSON.stringify(state));}
+else process.exit(3);
+`,{mode:0o700});
+  return {...fixture,projectId,owner,plan,network,networkPath,policyPath,async open(){return fixture.open({outboundNetwork:{allowCidrs:[],nftExecutable}});}};
+}
+
+test('stop after restart cleans only the exact empty project network and policy with idempotent absence',async()=>{
+  const fixture=await orphanNetworkFixture('canary-orphan');
+  try {
+    const orphan='b'.repeat(64),otherPath=join(fixture.stateDirectory,'.network-other');
+    await writeFile(join(fixture.stateDirectory,orphan+'.json'),JSON.stringify({id:orphan,pid:null,arguments:['--label','run.clank.managed=provider-runtime','--label',`run.clank.owner=${fixture.owner}`,'--label',`run.clank.project=${fixture.projectId}`,'--label','run.clank.generation=1']}));
+    const other={...fixture.network,Name:'operator-network',Id:'c'.repeat(64),Labels:{'run.clank.owner':'another-owner'}};
+    await writeFile(otherPath,JSON.stringify(other));
+    const launcher=await fixture.open();assert.deepEqual(await fixture.containerIds(),[]);assert.deepEqual(launcher.inspect(),[]);
+    assert.equal(await launcher.stop(fixture.projectId,1),false);
+    await assert.rejects(readFile(fixture.networkPath),error=>error.code==='ENOENT');assert.equal(JSON.parse(await readFile(fixture.policyPath,'utf8')).present,false);
+    assert.equal(await launcher.stop(fixture.projectId,1),false);assert.deepEqual(JSON.parse(await readFile(otherPath,'utf8')),other);
+    const policy=JSON.parse(await readFile(fixture.policyPath,'utf8'));assert.equal(policy.commands.filter(args=>args[0]==='delete').length,1);
+    const removed=(await fixture.audit()).filter(entry=>entry.command==='network-rm');assert.equal(removed.length,1);assert.deepEqual(removed[0].arguments,['network','rm',fixture.network.Id]);
+  }finally{await fixture.close();}
+});
+
+test('orphan network cleanup refuses foreign identities, attachments and surviving project containers',async()=>{
+  const fixture=await orphanNetworkFixture('canary-refusal');
+  try {
+    const launcher=await fixture.open();
+    for(const mutation of [{Labels:{...fixture.network.Labels,'run.clank.owner':'other-owner'}},{Labels:{...fixture.network.Labels,'run.clank.project':'other_project'}},{Containers:{live:{Name:'attached'}}},{Driver:'overlay'},{Options:{}},{Id:'wrong-id'},{Containers:null}]) {
+      const network={...fixture.network,...mutation};await writeFile(fixture.networkPath,JSON.stringify(network));
+      await assert.rejects(launcher.stop(fixture.projectId,1),/matching empty project ownership/);assert.deepEqual(JSON.parse(await readFile(fixture.networkPath,'utf8')),network);
+    }
+    await writeFile(fixture.networkPath,JSON.stringify(fixture.network));const container='d'.repeat(64);
+    await writeFile(join(fixture.stateDirectory,container+'.json'),JSON.stringify({id:container,pid:null,arguments:['--label','run.clank.managed=provider-runtime','--label',`run.clank.owner=${fixture.owner}`,'--label',`run.clank.project=${fixture.projectId}`,'--label','run.clank.generation=2']}));
+    await assert.rejects(launcher.stop(fixture.projectId,1),/project containers remain/);
+    const policy=JSON.parse(await readFile(fixture.policyPath,'utf8'));assert.equal(policy.present,true);assert.deepEqual(policy.commands,[]);assert.equal((await fixture.audit()).some(entry=>entry.command==='network-rm'),false);
+  }finally{await fixture.close();}
+});
+
+test('orphan network cleanup retains policy until Docker absence is positively verified',async()=>{
+  const fixture=await orphanNetworkFixture('canary-retry');
+  try {
+    const launcher=await fixture.open(),inspectMarker=join(fixture.stateDirectory,'.network-inspect-failure'),retainMarker=join(fixture.stateDirectory,'.network-remove-retained');
+    await writeFile(inspectMarker,'1');await assert.rejects(launcher.stop(fixture.projectId,1),/verify.*absence/);await rm(inspectMarker);
+    await writeFile(retainMarker,'1');await assert.rejects(launcher.stop(fixture.projectId,1),/did not converge/);
+    assert.deepEqual(JSON.parse(await readFile(fixture.policyPath,'utf8')),{present:true,commands:[]});await rm(retainMarker);
+    await writeFile(join(fixture.stateDirectory,'.network-remove-uncertain'),'1');await launcher.stop(fixture.projectId,1);await launcher.stop(fixture.projectId,1);
+    await assert.rejects(readFile(fixture.networkPath),error=>error.code==='ENOENT');assert.equal(JSON.parse(await readFile(fixture.policyPath,'utf8')).present,false);
+  }finally{await fixture.close();}
+});
 
 test("provider Docker launcher keeps application secrets outside the Docker client boundary", async () => {
   const fixture = await dockerFixture("boundary");
@@ -824,6 +886,25 @@ const alive = (pid) => {
     return false;
   }
 };
+
+if (args[0] === "network") {
+  const entries = (await readdir(stateDirectory)).filter(name => name.startsWith(".network-clank-") || name === ".network-other");
+  const states = await Promise.all(entries.map(async name => ({ name, value: JSON.parse(await readFile(join(stateDirectory, name), "utf8")) })));
+  const selected = states.find(entry => entry.value.Name === args.at(-1) || entry.value.Id === args.at(-1));
+  if (args[1] === "ls") { process.stdout.write(states.map(entry => entry.value.Name).join("\\n") + "\\n"); process.exit(0); }
+  if (args[1] === "inspect") {
+    if (await markerExists(".network-inspect-failure")) process.exit(4);
+    if (!selected) process.exit(1); process.stdout.write(JSON.stringify([selected.value])); process.exit(0);
+  }
+  if (args[1] === "rm") {
+    await append({ command: "network-rm", arguments: args });
+    if (!selected) process.exit(1);
+    if (!(await markerExists(".network-remove-retained"))) await rm(join(stateDirectory, selected.name));
+    if (await markerExists(".network-remove-uncertain")) process.exit(5);
+    process.exit(0);
+  }
+  process.exit(6);
+}
 
 if (operation === "ls") {
   const entries = await readdir(stateDirectory);

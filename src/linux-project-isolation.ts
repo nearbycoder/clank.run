@@ -115,15 +115,26 @@ async function applyNftTransaction(executable: string, rules: string, signal?: A
 
 async function verifyNetworkOwnership(plan: LinuxDockerNetworkPlan, executable: string, signal?: AbortSignal): Promise<any[]> {
   const output = JSON.parse(await command(executable, ["-j", "list", "table", "inet", plan.table], undefined, signal));
-  if (!output.nftables?.some((entry: any) => entry.table?.name === plan.table && entry.table?.comment === plan.ownership)) {
+  if (!output.nftables?.some((entry: any) => entry.table?.family === "inet" && entry.table?.name === plan.table && entry.table?.comment === plan.ownership)) {
     throw new Error("Refusing to modify an nftables table without matching Clank ownership.");
   }
   return output.nftables;
 }
 
 export async function removeLinuxDockerNetworkPolicy(plan: LinuxDockerNetworkPlan, executable = "/usr/sbin/nft"): Promise<void> {
+  requireLinux();
+  const present = async () => {
+    const output = JSON.parse(await command(executable, ["-j", "list", "tables"]));
+    if (!Array.isArray(output.nftables) || output.nftables.some((entry: any) => entry?.table !== undefined
+      && (typeof entry.table?.family !== "string" || typeof entry.table?.name !== "string"))) throw new Error("Cannot verify outbound network policy absence.");
+    return output.nftables.some((entry: any) => entry.table?.family === "inet" && entry.table?.name === plan.table);
+  };
+  if (!await present()) return;
   await verifyNetworkOwnership(plan, executable);
-  await command(executable, ["delete", "table", "inet", plan.table]);
+  let failure: unknown;
+  try { await command(executable, ["delete", "table", "inet", plan.table]); }
+  catch (error) { failure = error; }
+  if (await present()) throw failure ?? new Error("Outbound network policy cleanup did not converge.");
 }
 
 export async function enforceLinuxProjectDiskQuota(options: LinuxProjectDiskQuota, projectDirectory: string, registryDirectory: string, projectId: string, signal?: AbortSignal): Promise<void> {
