@@ -2031,7 +2031,9 @@ test("HTTP malformed and encoded controls never fall through to ordinary applica
   const entered=new Promise(resolve=>bodyRead=resolve);let applicationRequests=0;
   try {
     const ingress=fakeIngress([]);ingress.handle=async()=>{applicationRequests++;return new Response("unexpected application response");};
-    opened=await fixture.open({ingress,canaries:{readPaths:["/healthz"],controlTimeoutMs:500}});await httpCanaryPrimary(fixture,opened);http=await openCanaryHttp(opened.service,url=>{if(url.endsWith("/prepare"))bodyRead();});
+    // This case verifies envelopes and the single intake slot. The separate
+    // deadline case retains its 150ms bound; allow native HTTP/receipt work here.
+    opened=await fixture.open({ingress,canaries:{readPaths:["/healthz"],controlTimeoutMs:5_000}});await httpCanaryPrimary(fixture,opened);http=await openCanaryHttp(opened.service,url=>{if(url.endsWith("/prepare"))bodyRead();});
     for(const path of ["/v1/clank/%2563ontrol/project_service_01/canary/binding","/v1/clank/%252563ontrol/project_service_01/canary/binding","/v1/clank/%63ontrol/project_service_01/canary/binding","/v1/clank/control/project_service_01/canary/%62inding","/v1/clank/control/project_service_01/canary/shadow","/v1/clank/control/project_service_01/canary/prepare?redirect=1"]) {
       assert.equal((await fetch(http.url+path,canaryHttpOptions("binding"))).status,404,path);
     }
@@ -2046,7 +2048,7 @@ test("HTTP malformed and encoded controls never fall through to ordinary applica
     assert.equal((await bad.response).status,404);bad.request.destroy();
     held=heldCanaryHttp(http.url+canaryHttpPath("prepare"),options);await entered;
     const busy=await fetch(http.url+canaryHttpPath("prepare"),options);assert.equal(busy.status,503);
-    held.finish();assert.equal((await held.response).status,200);
+    held.finish();const resumed=await held.response;assert.equal(resumed.status,200,resumed.body);
     assert.equal(applicationRequests,0);
   } finally {held?.request.destroy();await http?.close();await opened?.service.close();await fixture.close();}
 });
