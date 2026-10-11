@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
+import { request as httpRequest } from 'node:http';
 import { promisify } from 'node:util';
 import { existsSync } from 'node:fs';
 import { chown, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -28,6 +29,29 @@ async function ownedContainers(owner, projectId) {
   const result = await command('docker', ['container', 'ls', '--all', '--quiet', '--filter', 'label=run.clank.owner=' + owner,
     ...(projectId ? ['--filter', 'label=run.clank.project=' + projectId] : [])]);
   return result.stdout.trim().split('\n').filter(Boolean);
+}
+async function jsonResponse(response, context) {
+  const text = await response.text();
+  try { return JSON.parse(text); }
+  catch { throw new Error('Owned fixture expected JSON: ' + JSON.stringify({ context, url: response.url, status: response.status, contentType: response.headers.get('content-type'), prefix: text.slice(0, 120) })); }
+}
+function applicationRequest(origin, method, path, headers) {
+  // Native fetch deliberately replaces a caller-supplied Host on both supported
+  // runtimes. Use the actual HTTP transport to send the managed application host.
+  return new Promise((resolve, reject) => {
+    const request = httpRequest(origin + path, { method, headers: { host: 'docker-canary.apps.example.test', ...headers } }, incoming => {
+      const chunks = []; let size = 0;
+      incoming.on('data', chunk => { size += chunk.length; if (size > 1024 * 1024) { request.destroy(new Error('Owned application response exceeds bound.')); return; } chunks.push(chunk); });
+      incoming.on('error', reject);
+      incoming.on('end', () => {
+        const responseHeaders = new Headers();
+        for (const [key, value] of Object.entries(incoming.headers)) if (value !== undefined) responseHeaders.set(key, Array.isArray(value) ? value.join(', ') : value);
+        resolve(new Response(Buffer.concat(chunks), { status: incoming.statusCode, headers: responseHeaders }));
+      });
+    });
+    request.setTimeout(10000, () => request.destroy(new Error('Owned application request timed out.')));
+    request.on('error', reject); request.end(method === 'POST' ? 'write' : undefined);
+  });
 }
 function worker(role) {
   const framework = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -130,7 +154,7 @@ async function fixture(t, stages = [{ trafficPercent: 50, durationMs: 3000, mini
   await provider.rpc('open', { root: providerRoot, origin, endpoint, port: ports.start + 1, portStart: ports.start + 2, portEnd: ports.start + 10, registrationToken, owner, image });
   async function json(path, { method = 'GET', body, token, cookie, csrf } = {}, expected = 200) {
     const response = await fetch(origin + path, { method, headers: { ...(body === undefined ? {} : { 'content-type': 'application/json', origin }), ...(token ? { authorization: 'Bearer ' + token } : {}), ...(cookie ? { cookie } : {}), ...(csrf ? { 'x-clank-csrf': csrf } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(120000) });
-    const value = await response.json(); assert.equal(response.status, expected, JSON.stringify(value)); return { value, response };
+    const value = await jsonResponse(response, method + ' ' + path); assert.equal(response.status, expected, JSON.stringify(value)); return { value, response };
   }
   const registered = await json('/__clank/auth/register', { method: 'POST', body: { email: 'docker-canary@example.test', password: 'correct horse battery staple', profile: { name: 'Docker canary' } } }, 201);
   const cookie = registered.response.headers.get('set-cookie').split(';')[0], csrf = registered.value.csrfToken;
@@ -146,10 +170,14 @@ async function fixture(t, stages = [{ trafficPercent: 50, durationMs: 3000, mini
     raw() { const row = control.prepare('SELECT * FROM clank_platform_provider_canaries WHERE project_id=?').get(project.id); return row ? { ...row, operation: JSON.parse(row.operation) } : null; },
     async deploy(bytes, key) {
       const response = await fetch(origin + '/api/projects/' + project.id + '/releases', { method: 'POST', headers: { authorization: 'Bearer ' + token, 'content-type': 'application/vnd.clank.deploy+gzip', 'content-length': String(bytes.byteLength), 'x-clank-content-sha256': await deploymentDigest(bytes), 'x-clank-idempotency-key': key }, body: bytes, signal: AbortSignal.timeout(120000) });
-      return { status: response.status, body: await response.json() };
+      return { status: response.status, body: await jsonResponse(response, 'POST release ' + key) };
     },
     async traffic(method = 'GET', path = '/', headers = {}) {
-      return fetch(origin + path, { method, headers: { host: 'docker-canary.apps.example.test', ...headers }, ...(method === 'POST' ? { body: 'write' } : {}), signal: AbortSignal.timeout(10000) });
+      const response = await applicationRequest(origin, method, path, headers);
+      if (!response.headers.get('content-type')?.includes('application/json')) {
+        throw new Error('Owned application routing failed: ' + JSON.stringify({ method, path, sentHost: 'docker-canary.apps.example.test', status: response.status, contentType: response.headers.get('content-type'), prefix: (await response.text()).slice(0, 120), platform: await platform.rpc('status') }));
+      }
+      return response;
     },
     async drive(pending, samples = []) {
       let done = false; const result = pending.finally(() => { done = true; }); result.catch(() => {});

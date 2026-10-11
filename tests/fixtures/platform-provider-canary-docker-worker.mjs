@@ -24,7 +24,7 @@ for (const field of ['CapEff', 'CapPrm', 'CapInh', 'CapBnd', 'CapAmb']) {
   assert.equal(BigInt('0x' + status.match(new RegExp('^' + field + ':\\s+([a-f0-9]+)$', 'm'))[1]), role === 'provider' ? 0x201002n : 0n);
 }
 
-let configuration, platform, provider, agent, server, closing;
+let configuration, platform, provider, agent, server, closing, observedApplicationRequests = 0;
 const gates = new Map(), events = [], diagnostics = [];
 const note = event => { events.push(event); if (events.length > 128) events.shift(); };
 const execute = promisify(execFile);
@@ -58,6 +58,10 @@ async function listen(port, handler) {
       const gate = gates.get(action);
       if (gate) { gate.entered++; await gate.promise; }
       const response = await handler(request);
+      if (role === 'platform' && new URL(request.url).pathname === '/' && observedApplicationRequests++ < 4) {
+        note({ kind: 'application-http', method: incoming.method, incomingHost: incoming.headers.host,
+          requestUrl: request.url, status: response.status, contentType: response.headers.get('content-type') });
+      }
       if (action) note({ kind: 'control', action, status: response.status });
       const bytes = Buffer.from(await response.arrayBuffer());
       // Delayed requests continue through the real service even after their
