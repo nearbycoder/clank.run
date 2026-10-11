@@ -59,9 +59,17 @@ test('a guardian evaluates the current clock after its delayed native lease read
   const f=await fixture(t);
   try{
     const leader=await f.start({},undefined,false,false,true);assert.equal(leader.ready.status.state,'leader');
-    await sleep(600);assert.equal((await fetch(leader.ready.url+'/')).status,200);
+    const deadline=performance.now()+5000;let evidence;
+    while(!evidence){
+      try{evidence=JSON.parse(await readFile(join(f.root,'delayed-read.json'),'utf8'));}catch(error){if(error.code!=='ENOENT')throw error;}
+      if(!evidence){assert.ok(performance.now()<deadline,'The guardian must publish a bounded actual delayed-read observation.');await sleep(25);}
+    }
+    assert.equal(evidence.timedOut,undefined);assert.equal(evidence.stateReadNumber,2);
+    assert.equal(evidence.controllerPid,leader.child.pid);assert.equal(evidence.epoch,1);
+    assert.ok(evidence.observedRenewalAt>evidence.beforeReadAt,'The independent native observer must see a real coordinator renewal before the guardian snapshot.');
+    assert.ok(evidence.afterStateReadAt>=evidence.observedRenewalAt);assert.ok(evidence.updatedAt>=evidence.observedRenewalAt);
+    assert.equal((await fetch(leader.ready.url+'/')).status,200);
     const current=await leader.status();assert.equal(current.status.state,'leader');assert.equal(current.status.epoch,1);assert.deepEqual(current.errors,[]);
-    const evidence=JSON.parse(await readFile(join(f.root,'delayed-read.json'),'utf8'));
     assert.ok(evidence.updatedAt>evidence.beforeReadAt,'The actual coordinator must renew during the delayed native read.');
     assert.ok(evidence.updatedAt<=evidence.afterReadAt);assert.ok(evidence.expiresAt>evidence.afterReadAt);
     await leader.stop();
