@@ -39,21 +39,23 @@ async function compileFile(sourcePath, outputPath, options = {}) {
     // available explicitly for local debugging without bloating every install.
     sourceMap,
   });
-  await writeFileAtomically(outputPath, options.releaseLayout && !sourceMap ? compactReleaseLayout(javascript) : javascript);
+  await writeFileAtomically(outputPath, options.releaseLayout && !sourceMap ? compactReleaseLayout(javascript, options.preserveInteriorSpacing) : javascript);
 }
 
 // This is deliberately private to the framework release build. Remove only
-// leading horizontal indentation in known code regions; keep every token,
+// horizontal indentation and spacing beside standalone separators in known
+// code regions; keep every token,
 // comment/license, newline and literal byte. Ambiguity discards all edits for
 // the module, and nested template scanning has a fixed bound. The public
 // compiler, example output and mapped builds retain their format contract.
-function compactReleaseLayout(source) {
+function compactReleaseLayout(source, preserveInteriorSpacing = false) {
   if (source.startsWith("#!")) return source;
-  const parts = [];
-  let copied = 0;
+  const edits = [];
+  let interiorSafe = !preserveInteriorSpacing;
   const isWord = character => Boolean(character && /[\p{ID_Continue}$\u200c\u200d]/u.test(character));
   const isStart = character => Boolean(character && /[\p{ID_Start}$_]/u.test(character));
   const isLineEnd = character => /[\r\n\u2028\u2029]/u.test(character);
+  const isSeparator = character => Boolean(character && ";,:()[]{}".includes(character));
   const expressionWords = new Set(["return", "throw", "case", "default", "extends", "delete", "void", "typeof", "new", "instanceof", "in", "yield", "await", "else", "do"]);
 
   // Native compilation has parsed this module. A regexp literal cannot cross
@@ -126,9 +128,14 @@ function compactReleaseLayout(source) {
       if (character === " " || character === "\t") {
         let end = index + 1;
         while (source[end] === " " || source[end] === "\t") end++;
-        if (index === 0 || isLineEnd(source[index - 1])) {
-          parts.push(source.slice(copied, index));
-          copied = end;
+        // These single-character separators cannot combine with a neighbour
+        // into a different token. Keep other spacing, including numeric dots,
+        // identifier/keyword boundaries, and adjacent operator characters.
+        // Newlines remain untouched, so ASI and restricted productions keep
+        // their original line terminators. Literals/comments bypass this path.
+        const leading = index === 0 || isLineEnd(source[index - 1]);
+        if (leading || isSeparator(source[index - 1]) || isSeparator(source[end])) {
+          edits.push({ start: index, end, leading });
         }
         index = end;
         continue;
@@ -164,6 +171,11 @@ function compactReleaseLayout(source) {
           continue;
         }
         const ambiguous = expression === "ambiguous";
+        // The existing indentation scan may skip an ambiguous single-line
+        // division/regexp region. Its trailing context is not sufficient to
+        // classify interior literal spaces, so discard ALL interior edits for
+        // this module, including edits queued before the ambiguity appeared.
+        if (ambiguous) interiorSafe = false;
         const next = regexp(index, ambiguous, inTemplate);
         if (next === null) return null;
         index = next; expression = ambiguous ? "ambiguous" : false; previous = "literal";
@@ -214,6 +226,13 @@ function compactReleaseLayout(source) {
   }
 
   if (code(0) === null) return source;
+  const parts = [];
+  let copied = 0;
+  for (const edit of edits) {
+    if (!edit.leading && !interiorSafe) continue;
+    parts.push(source.slice(copied, edit.start));
+    copied = edit.end;
+  }
   parts.push(source.slice(copied));
   return parts.join("");
 }
@@ -233,7 +252,11 @@ export async function build({ quiet = false } = {}) {
     } else if (/\.tsx?$/.test(path)) {
       const javascriptOutput = output.replace(/\.tsx?$/, ".js");
       expectedOutputs.add(javascriptOutput);
-      await compileFile(path, javascriptOutput, { jsxImportSource: "./index.js", releaseLayout: true });
+      // jobs.ts owns the default workflow output callback. Its reflected source
+      // is part of persisted definition revisions: retain the accepted previous
+      // indentation-only output, including the callback's interior spaces.
+      await compileFile(path, javascriptOutput, { jsxImportSource: "./index.js", releaseLayout: true,
+        preserveInteriorSpacing: relative(sourceRoot, path) === "jobs.ts" });
     }
   }
   // Ship the same canonical prompt with the platform and the documentation site.
