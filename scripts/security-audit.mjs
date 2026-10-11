@@ -184,8 +184,10 @@ for (const expected of ["README.md", "SECURITY.md", "LICENSE", "dist/index.js", 
 // Proposal #313 adds exactly platform-supervisor.js and its declaration.
 // Proposal #339 adds exactly the private managed-shadow.js policy/report helper
 // and its declaration; the package byte ceiling remains unchanged.
-// Proposal #315 adds exactly platform-point-in-time.js and its declaration.
-if ((packResult?.entryCount ?? 0) > 421) fail("Published package unexpectedly exceeds 421 files.");
+// Accepted main422 plus PITR runtime/declaration and private source helper3.
+// Proposal #339 staging adds exactly the private object-storage-internal.js module.
+// Proposal #338 private ownership adds exactly provider-handoff.js and provider-docker-client.js.
+if ((packResult?.entryCount ?? 0) > 425) fail("Published package unexpectedly exceeds 425 files.");
 if ((packResult?.unpackedSize ?? 0) > 6 * 1024 * 1024) fail("Published package unexpectedly exceeds 6 MiB unpacked.");
 pass(`publish allowlist contains ${packResult?.entryCount ?? 0} bounded files`);
 
