@@ -84,5 +84,40 @@
       40
     ]
   },
-  "qualification": "Original branch source reviews and failed-before proofs retain their named revisions. Local source publication is not browser, production provider, source-wide stop/activation or privileged host certification. Required final hosted checks and protected main merge remain pending."
+  "qualification": "Original branch source reviews and failed-before proofs retain their named revisions. Local source publication is not browser, production provider, source-wide stop/activation or privileged host certification. Required final hosted checks and protected main merge remain pending.",
+  "hostedFixtureCorrection": {
+    "sourceHeadBeforeFixtureCorrection": "ca92d8be4e6c1f22ce38f9ea1bd6a2b41cbc534a",
+    "testPath": "tests/managed-shadow-observer.test.mjs",
+    "testSHA256": "03d785eca66082e50024d41f58183c747eb2b908eb1d94c33a02ac4c66b91e7d",
+    "selectedEachRuntime": {
+      "observerLifecycleStatusPlatformTarget": 101,
+      "admissionFaultDeadlineCases": 2,
+      "heldParallelFaultCase": 1,
+      "failures": 0,
+      "cancellations": 0,
+      "skips": 0
+    },
+    "outputsUnchanged": 320,
+    "hostedBefore": {
+      "head": "ca92d8be4e6c1f22ce38f9ea1bd6a2b41cbc534a",
+      "passed": 5,
+      "cancelledAt15Minutes": 3,
+      "knownAssertion": "parallel candidate comparable count1!=2 on Node24 and packaged Node22",
+      "stall": "No subsequent test progress after missing-handoff case; original next header/body fixtures unconditionally await admission marker."
+    },
+    "beforeFaultQualification": "A declared250ms scheduling delay reproduces indefinite admission waits: two deadline tests time out on Node26; Node22 file timeout occurs during the same selected cases. A declared1100ms held interval after native skip flush reproduces0!=2 on both. These are explicit fixture faults, not exact measured hosted delays. Initial before01 import preparation did not execute tests.",
+    "afterEvidence": {
+      "path": "/tmp/clank-review-2026-10-08/shadow-observer-ci-deadline-01/after-results-03.json",
+      "sha256": "91c6e118c56338a3c0fec592f4dc5adffd2e0c680e4e53010fce4479f51ec7b2"
+    },
+    "parallelEvidence": {
+      "path": "/tmp/clank-review-2026-10-08/shadow-observer-ci-deadline-01/parallel-results-04.json",
+      "sha256": "47e9fac2bb0d11d1713d89a2b85695f982034092a173d164aa2653af9edf8d4a"
+    },
+    "qualification": "One fixture file only. All original assertions, production source/limits,320 outputs, runtime/types/package contract,15minute hosted job limits and main protection unchanged. No feature acceptance increment.",
+    "immutableEvidence": {
+      "path": "/tmp/clank-review-2026-10-08/shadow-observer-ci-deadline-01/publication-test-fix-05.json",
+      "sha256": "60e307687fa78f4b2adaa0c7e4d408ccf548efe58c9a304476d0b2c7c904ab01"
+    }
+  }
 }

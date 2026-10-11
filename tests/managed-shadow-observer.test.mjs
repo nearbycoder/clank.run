@@ -18,7 +18,7 @@ import {prepareShadowSchema} from './fixtures/shadow-schema.mjs';
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const testGates=new Set();
-const gate=()=>{let resolve;const promise=new Promise(done=>resolve=done);const item={promise,resolve:()=>{testGates.delete(item);resolve()}};testGates.add(item);return item};
+const gate=()=>{let resolve;const promise=new Promise(done=>resolve=done);const item={promise,settled:false,resolve:()=>{item.settled=true;testGates.delete(item);resolve()}};testGates.add(item);return item};
 async function until(check,label,ms=3000){const end=performance.now()+ms;while(performance.now()<end){const result=check();if(result)return result;await delay(5)}throw new Error('Timed out: '+label)}
 async function fixture(t,options={}){
  const root=await mkdtemp(join(tmpdir(),'clank-shadow-observer-')),path=join(root,'control.sqlite');
@@ -82,7 +82,9 @@ for(const status of [204,304])test('actual bodyless '+status+' preserves first c
  const response=(req,res)=>{res.statusCode=status;res.setHeader('content-type','application/json');res.end()};const f=await fixture(t,{primary:response,candidate:response});await f.start();assert.equal((await f.request()).status,status);await until(()=>f.read().operation.report.counters.settled===1,'bodyless settlement');assert.equal(f.read().operation.report.counters.comparable,1);
 });
 test('parallel candidates use latest owned native record across intervening skip flushes',async t=>{
- const held=gate(),seen=[];const f=await fixture(t,{candidate:async(req,res)=>{seen.push(req.url);await held.promise;res.setHeader('content-type','application/json');res.end('candidate')}});t.after(()=>held.resolve());await f.start();
+ // This case holds two real requests across a native skip flush. Its deadline
+ // must allow that setup under concurrent CI load before testing both results.
+ const held=gate(),seen=[];const f=await fixture(t,{policy:{maxRequestMs:5000},candidate:async(req,res)=>{seen.push(req.url);await held.promise;res.setHeader('content-type','application/json');res.end('candidate')}});t.after(()=>held.resolve());await f.start();
  assert.deepEqual(await Promise.all([f.request(),f.request()]),[{status:200,body:'primary'},{status:200,body:'primary'}]);await until(()=>seen.length===2,'two independent candidate requests');const floor=f.read().epoch;assert.equal(f.read().operation.report.counters.reserved,2);assert.deepEqual(f.read().operation.reservations,[1,2]);
  await f.request({path:'/ineligible'});await until(()=>f.read().operation.report.skips.ineligible===1,'native coalesced skip flush');assert.ok(f.read().epoch>floor);held.resolve();await until(()=>f.read().operation.report.counters.settled===2,'both concurrent settlements');assert.equal(f.read().operation.report.counters.comparable,2);assert.deepEqual(f.read().operation.reservations,[]);
 });
@@ -90,8 +92,11 @@ test('a missing actual write/end handoff expires without reservation or candidat
  const held=gate(),ready=gate();const f=await fixture(t,{policy:{maxRequestMs:100},handler:async(req,ingress)=>{const response=await ingress.handle(req);ready.resolve();await held.promise;return response}});t.after(()=>held.resolve());await f.start();const primary=f.request();await ready.promise;
  await until(()=>f.read().operation.report.skips['handoff-timeout']===1,'pre-handoff deadline flush');assert.equal(f.read().operation.report.counters.reserved,0);assert.equal(f.events.length,0);held.resolve();assert.equal((await primary).body,'primary');await delay(20);assert.equal(f.events.length,0);
 });
-for(const kind of ['headers','body'])test('candidate '+kind+' deadline never delays complete primary delivery',async t=>{
- const held=gate(),seen=gate();const f=await fixture(t,{policy:{maxRequestMs:150},candidate:async(req,res)=>{seen.resolve();if(kind==='body'){res.setHeader('content-type','application/json');res.write('candidate-prefix')}await held.promise;res.end('candidate-suffix')}});t.after(()=>held.resolve());await f.start();assert.deepEqual(await f.request(),{status:200,body:'primary'});await seen.promise;await until(()=>f.read().operation.report.counters.settled===1,'candidate timeout settlement');
+for(const kind of ['headers','body'])test('candidate '+kind+' deadline never delays complete primary delivery',{timeout:10000},async t=>{
+ // Observe actual admission before checking expiration at the held phase. A
+ // short admission deadline can otherwise expire before HTTP reaches this
+ // fixture and leave an unconditional seen.promise waiting forever.
+ const held=gate(),seen=gate();const f=await fixture(t,{policy:{maxRequestMs:2000},candidate:async(req,res)=>{seen.resolve();if(kind==='body'){res.setHeader('content-type','application/json');res.write('candidate-prefix')}await held.promise;res.end('candidate-suffix')}});t.after(()=>held.resolve());await f.start();assert.deepEqual(await f.request(),{status:200,body:'primary'});await until(()=>seen.settled,'actual candidate '+kind+' admission');await until(()=>f.read().operation.report.counters.settled===1,'candidate timeout settlement');
  assert.equal(f.events.length,1);assert.equal(f.read().operation.report.counters.unknown['candidate-timeout'],1);assert.equal(f.read().operation.report.counters.bothComplete,0);held.resolve();
 });
 for(const side of ['primary','candidate'])test(side+' overshoot preserves primary bytes and counts incomplete only',async t=>{
