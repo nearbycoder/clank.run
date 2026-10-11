@@ -87,11 +87,26 @@ export async function openSupervisorLease(databasePath:string,input:PlatformSupe
       if(row.configuration_id!==options.configurationId||row.configuration_revision!==options.configurationRevision
         ||row.lease_ms!==options.leaseMs||row.poll_ms!==options.pollIntervalMs)fail("SUPERVISOR_CONFIGURATION_CHANGED","Current supervisor configuration is required.");
     };
-    const configured=Boolean(native.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_platform_supervisor_state'").get()),retained=Boolean(native.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_platform_supervisor_lease'").get());
-    if(configured!==retained)fail("SUPERVISOR_STATE_INVALID","Incomplete persisted supervisor ownership; preserve it for operator recovery.");
-    if(configured
-      &&native.prepare("SELECT protocol FROM clank_platform_supervisor_state WHERE singleton=1").get()?.protocol!==1)fail("SUPERVISOR_PROTOCOL","Unsupported supervisor protocol.");
-    transaction(()=>{
+    // Startup has no ownership or external duties yet. Wait only for enrollment's
+    // initial write lock; never replay its body, COMMIT or an active owner's work.
+    const enrollmentDeadline=performance.now()+5000;
+    while(true){
+      native.exec(`PRAGMA busy_timeout=${Math.max(1,Math.min(250,Math.ceil(enrollmentDeadline-performance.now())))}`);
+      try{native.exec("BEGIN IMMEDIATE");break;}
+      catch(error){
+        if((error as {code?:string}).code!=="ERR_SQLITE_ERROR"||(error as {errcode?:number}).errcode!==5||performance.now()>=enrollmentDeadline)throw error;
+        await new Promise(resolve=>setTimeout(resolve,Math.min(25,Math.max(0,enrollmentDeadline-performance.now()))));
+        if(performance.now()>=enrollmentDeadline)throw error;
+      }
+    }
+    try{
+      native.exec("PRAGMA busy_timeout=250");
+      // Observe both tables and their protocol in one locked snapshot. Another
+      // coordinator can commit first enrollment while this opener is waiting.
+      const configured=Boolean(native.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_platform_supervisor_state'").get()),retained=Boolean(native.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_platform_supervisor_lease'").get());
+      if(configured!==retained)fail("SUPERVISOR_STATE_INVALID","Incomplete persisted supervisor ownership; preserve it for operator recovery.");
+      if(configured
+        &&native.prepare("SELECT protocol FROM clank_platform_supervisor_state WHERE singleton=1").get()?.protocol!==1)fail("SUPERVISOR_PROTOCOL","Unsupported supervisor protocol.");
       native.exec(`CREATE TABLE IF NOT EXISTS clank_platform_supervisor_state(
         singleton INTEGER PRIMARY KEY CHECK(singleton=1),protocol INTEGER NOT NULL,configuration_id TEXT NOT NULL,
         configuration_revision INTEGER NOT NULL,lease_ms INTEGER NOT NULL,poll_ms INTEGER NOT NULL) STRICT;
@@ -115,7 +130,8 @@ export async function openSupervisorLease(databasePath:string,input:PlatformSupe
         .run(options.configurationId,options.configurationRevision,options.leaseMs,options.pollIntervalMs);
       native.prepare("INSERT INTO clank_platform_supervisor_lease VALUES(1,0,NULL,NULL,0,?,NULL,NULL) ON CONFLICT(singleton) DO NOTHING").run(now());
       if(prior&&prior.configuration_revision!==options.configurationRevision)native.prepare("UPDATE clank_platform_supervisor_lease SET expires_at=0 WHERE singleton=1").run();
-    });
+      native.exec("COMMIT");
+    }catch(error){try{native.exec("ROLLBACK");}catch{}throw error;}
     function readLease(connection:Connection=native){
       const row=connection.prepare("SELECT * FROM clank_platform_supervisor_lease WHERE singleton=1").get();
       if(!row||!Number.isSafeInteger(row.epoch)||Number(row.epoch)<0||!Number.isSafeInteger(row.expires_at)||Number(row.expires_at)<0
