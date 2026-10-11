@@ -30,7 +30,7 @@ async function fixture(t){
  mutate(db=>db.prepare("UPDATE clank_provider_handoff_source_grant SET state='created',container_id=?").run(containerId));
  const bootstrap={protocol:'clank-provider-source-bootstrap/1',binding,bindingSha256:hash(binding),containerId,catalogPath:'/run/clank-source/catalog.sqlite',grantSecret:keys[0].toString('base64url'),controlSecret:keys[1].toString('base64url'),recoveryKey:keys[2].toString('base64url')};
  t.after(async()=>{owner.close();await rm(root,{recursive:true,force:true});});
- return {root,app,catalog,directory,bootstrap,mutate,database:join(app,'data.sqlite')};
+ return {root,app,catalog,directory,bootstrap,mutate,revoke:input=>handoff.revokeProviderHandoffGrant(bridge,input),database:join(app,'data.sqlite')};
 }
 async function child(t,f,mode='normal',extra={}){
  const args=['--unshare-user','--unshare-pid','--die-with-parent','--ro-bind','/','/','--bind',f.app,f.app,'--tmpfs','/run','--dir','/run/clank-source','--ro-bind',f.directory,'/run/clank-source','--proc','/proc','--dev','/dev'];
@@ -236,4 +236,12 @@ for(const multiple of [false,true])test('native provider owner settles every pin
  const remaining=()=>fs.readdirSync('/proc/self/fd').flatMap(fd=>{try{const path=fs.readlinkSync('/proc/self/fd/'+fd);return path===root||path.startsWith(root+'/')?[{fd:Number(fd),path}]:[];}catch{return [];}});
  fs.closeSync=function(fd){const path=fs.readlinkSync('/proc/self/fd/'+fd),value=close(fd);if(path===root||path.startsWith(root+'/')){attempts.push(path);if(!injected){injected=true;throw first;}if(multiple)throw Error('later close acknowledgment');}return value;};syncBuiltinESMExports();
  try{assert.throws(()=>owner.close(),error=>error===first);assert.equal(injected,true);assert.deepEqual(remaining(),[],'all owned native descriptors must settle');assert.deepEqual(attempts,[join(root,'service','.writer.sqlite'),join(root,'service'),root]);owner.close();assert.equal(attempts.length,3);}finally{fs.closeSync=close;syncBuiltinESMExports();for(const {fd}of remaining())close(fd);await rm(root,{recursive:true,force:true});}
+});
+
+for(const initialized of [false,true])test('R1 durable API revocation denies actual managed child '+(initialized?'next write':'bootstrap'),async t=>{
+ const f=await fixture(t),input={projectId:f.bootstrap.binding.projectId,grantId:f.bootstrap.binding.grantId,bindingSha256:f.bootstrap.bindingSha256,containerId:f.bootstrap.containerId,expectedVersion:3};let p;
+ if(initialized){p=await child(t,f);assert.equal((await p.next()).phase,'initialized');}
+ const result=await f.revoke(input);assert.equal(result.state,'revoked');assert.equal(result.containerId,f.bootstrap.containerId);assert.equal(result.version,4);
+ if(initialized){p.send({revoke:true});assert.deepEqual(await p.next(),{ok:true,records:0});}else {p=await child(t,f,'refuse');assert.equal((await p.next()).ok,true);}await p.done();
+ const db=new DatabaseSync(f.catalog,{readOnly:true});try{assert.equal(db.prepare('SELECT state FROM clank_provider_handoff_source_grant').get().state,'revoked');}finally{db.close();}
 });

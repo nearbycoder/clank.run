@@ -1,0 +1,113 @@
+{
+  "stage": "Reviewed private native grant revocation prerequisite; fresh hosted checks and protected delivery still required. Feature07 remains incomplete.",
+  "sourceBase": "e0515ed5182e20402a705f4ea4ca6ff1a90846c9",
+  "input": [
+    "projectId",
+    "grantId",
+    "bindingSha256",
+    "containerId",
+    "expectedVersion"
+  ],
+  "contract": "Owner-bound bridge may revoke issued, created or started grant. Native exact preimage, CAS and mirror/version readbacks retain the observed container, secrets and binding. Cleanup-only mode and all catalog/index inode pins remain across awaited native domain checks. Exact retry recognizes only matching revoked identity and expectedVersion+1, writes neither grant nor mirror, and can recover after committed-but-uncertain file synchronization or COMMIT response. Reserved spool quota remains retained.",
+  "proposalRevision": "Earlier private expectedState proposal was omitted because prior state is not durably retained after revocation. Every field of the actual five-field immutable retry intent remains provable from the retained grant, container and version. No new table or protocol migration is implied.",
+  "privateReview": {
+    "boundary": "/tmp/clank-review-2026-10-08/handoff-grant-revocation-review-01/candidate-boundary-06.json",
+    "sha256": "3716db36e2cb5fd31f4c02e8da0a447e712ec3c3295193557956e2a57e29f198",
+    "selectionEachRuntime": {
+      "reported": 205,
+      "passed": 205,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0
+    }
+  },
+  "adoptedNewCasesEachRuntime": {
+    "reported": 35,
+    "passed": 35,
+    "failed": 0,
+    "cancelled": 0,
+    "skipped": 0,
+    "runtimes": [
+      "22.16",
+      "24.21",
+      "26.10"
+    ],
+    "coverage": true
+  },
+  "nativeChildProof": "Actual bwrap-isolated managed child refuses bootstrap and next write after committed API revocation. Fixture Docker output is scripted component evidence. No process stop, target activation or host lifecycle certification is claimed.",
+  "initialFailedRun": "Original private selection passed25 and failed2 because child helper attempted JSON serialization of circular owner handle. Corrected helper keeps the revocation function local and transmits only existing fixture data. Original failed log retained.",
+  "build": {
+    "identicalFiles": 320,
+    "runtimes": [
+      "22.16",
+      "26.10"
+    ],
+    "reviewedModuleMatches": true,
+    "generatedExampleChanges": 19,
+    "generatedExampleChangesRetainedPrivatelyAndExcluded": true
+  },
+  "audits": {
+    "types": {
+      "consumerFixtures": 54,
+      "inheritedDiagnostics": 149,
+      "newDiagnostics": 0,
+      "baseline": 154
+    },
+    "documentation": {
+      "markdownFiles": 109,
+      "links": 375,
+      "guides": 104,
+      "declarations": 146,
+      "exports": 162
+    },
+    "security": "passed",
+    "package": {
+      "files": 449,
+      "unpackedBytes": 6947170,
+      "ceilingBytes": 8388608,
+      "dependencies": 0
+    },
+    "evidence": {
+      "path": "/tmp/clank-review-2026-10-08/handoff-grant-revocation-review-01/adopted-audits-08.json",
+      "sha256": "b5643854577bead816f14246b6c50787702ac7fada81a84cef5dbd0db9d76712"
+    },
+    "headScope": "Original adopted source based on e0515ed; current rebased validation is recorded separately."
+  },
+  "sourceSHA256": "3561130508f5a50547d2b0318c8aceebce443fea99fffa4966d995427c545e25",
+  "featureAcceptance": {
+    "accepted": 29,
+    "pending": 11
+  },
+  "rebasedValidation": {
+    "baseHead": "856ded41d8817b72d159b70106a87b102a4422b0",
+    "reviewedHandoffSourceTestsAndCompiledModuleUnchanged": true,
+    "pairedBuild": {
+      "identicalFiles": 320,
+      "runtimes": [
+        "22.16",
+        "26.10"
+      ],
+      "changedFromPriorBuild": [
+        "dist/offline-attachments.js"
+      ],
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/handoff-grant-revocation-review-01/rebased-paired-build-11.json",
+        "sha256": "54f48140cc21e4d4eacdbf07c0cba67cfaac1bc5c11c648a5467477deb746d9a"
+      }
+    },
+    "types": "54packed fixtures;149inherited/0new source diagnostics against baseline154",
+    "docs": "109Markdown/375links/104guides/146declarations/162exports",
+    "security": "passed",
+    "package": {
+      "files": 449,
+      "unpackedBytes": 6947193,
+      "ceilingBytes": 8388608,
+      "dependencies": 0
+    },
+    "evidence": {
+      "path": "/tmp/clank-review-2026-10-08/handoff-grant-revocation-review-01/rebased-audits-12.json",
+      "sha256": "681408aac49caa6e1633881c8c0b26a6d473dd9f97c05e0c58557ebc8279e2a8"
+    },
+    "delivery": "PR370 requires fresh final hosted checks and protected merge before publishing this prerequisite. Neither initial PR370failure nor inherited checks establish delivery of this new handoff source."
+  }
+}
