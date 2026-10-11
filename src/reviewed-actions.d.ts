@@ -6,6 +6,31 @@ import type { McpTool } from "./mcp.js";
 export interface ReviewedActionContext<DB extends DatabaseSchema<any> = any> { readonly db: ReadDatabase<DB>; readonly auth: AuthRequest<any>; }
 export interface ReviewedActionWriteContext<DB extends DatabaseSchema<any> = any> { readonly db: WriteDatabase<DB>; readonly auth: AuthRequest<any>; }
 export interface ReviewedRecordChange { readonly table: string; readonly id: string; readonly beforeVersion: number | null; readonly afterVersion: number | null; }
+export interface ReviewedApprovalMembership {
+  readonly scope: string;
+  readonly role: string;
+  /** Native membership incarnation/version. Never reuse a removed incarnation. */
+  readonly version: string;
+  readonly policyVersion: string;
+}
+export interface ReviewedApprovalQuorum<Preview = any, DB extends DatabaseSchema<any> = any> {
+  readonly revision: string;
+  readonly minimum: number;
+  readonly requiredRoles?: readonly string[];
+  readonly separateRequester?: boolean;
+  readonly voteTtlMs?: number;
+  /** Read current membership through context.db in this same native store. */
+  readonly membership: (context: ReviewedActionContext<DB>, plan: ReviewedActionPlan<Preview>) => ReviewedApprovalMembership | null;
+}
+export interface ReviewedApprovalProgress {
+  readonly revision: string;
+  readonly minimum: number;
+  readonly requiredRoles: readonly string[];
+  readonly separateRequester: boolean;
+  readonly voteTtlMs: number;
+  /** Recorded votes are historical progress, not proof of commit authority. */
+  readonly recordedVotes: number;
+}
 export interface ReviewedAction<Input = any, Preview = any, Output = any, DB extends DatabaseSchema<any> = any> {
   /** Change this revision whenever preview, execution, authorization, or undo semantics change. */
   readonly revision: string;
@@ -15,6 +40,7 @@ export interface ReviewedAction<Input = any, Preview = any, Output = any, DB ext
   readonly title: string;
   readonly authorize: (context: ReviewedActionContext<DB>, input: Input) => boolean;
   readonly authorizeApproval: (context: ReviewedActionContext<DB>, plan: ReviewedActionPlan<NoInfer<Preview>>) => boolean;
+  readonly approvalQuorum?: ReviewedApprovalQuorum<NoInfer<Preview>, DB>;
   readonly preview: (context: ReviewedActionContext<DB>, input: Input) => Preview;
   readonly execute: (context: ReviewedActionWriteContext<DB>, input: Input, preview: NoInfer<Preview>) => Output;
   readonly compensate?: (context: ReviewedActionWriteContext<DB>, receipt: ReviewedActionReceipt<NoInfer<Output>>) => unknown;
@@ -31,6 +57,7 @@ export interface ReviewedActionPlan<Preview = unknown> {
   readonly dependencyMode?: "records";
   readonly status: "pending" | "approved" | "denied" | "expired" | "consumed";
   readonly approvedBy: string | null;
+  readonly quorum?: ReviewedApprovalProgress;
   readonly preview: Preview;
 }
 export interface ReviewedActionReceipt<Output = unknown> {
