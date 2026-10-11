@@ -218,7 +218,7 @@ test('documentation audit requires exact selected declaration output and rejects
     // so the before-fix copy-only audit rejects the valid default representation.
     await writeFile(output, expected);
     assert.match((await command()).stdout, /synchronized declaration files/);
-    for (const altered of [expected.replace('value?:', 'other?:'), expected.replace('every byte', 'every byte!'), expected.replace('key-', 'changed-'), expected.replace('\n', '\r\n'), expected + ' ', expected.slice(0, -1), mapped ? declarationExpected : declarationFixture]) {
+    for (const altered of [expected.replace('value?:', 'other?:'), expected.replace('every byte', 'every byte!'), expected.replace('key-', 'changed-'), expected.replaceAll('\n', '\r\n'), expected + ' ', expected.slice(0, -1), mapped ? declarationExpected : declarationFixture]) {
       await writeFile(output, altered);
       await assert.rejects(command(), error => error.code === 1 && /dist\/contract\.d\.ts does not match/.test(error.stderr));
     }
