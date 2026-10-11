@@ -57,3 +57,12 @@ test('native SLO body intake revalidates exact tokens, membership, session, perm
   control.prepare('UPDATE clank_platform_slo_state SET protocol=1 WHERE singleton=1').run();
  }
 });
+
+test('bounded native HTTP SLO client accepts real session CSRF receipts and historical replay',async t=>{
+ const {createProjectSloClient}=await import('../dist/project-slo.js'),f=await fixture(t),url=await f.serve();
+ const client=createProjectSloClient({url,fetch:async(url,options)=>{const response=await fetch(url,options);if(!response.ok)t.diagnostic(JSON.stringify({status:response.status,body:await response.clone().json()}));return response;},headers:()=>({origin:url,cookie:f.owner.cookie}),auth:{csrfHeader:()=>({'x-clank-csrf':f.owner.csrf})}});
+ const input={configuration:{...configuration,name:'  Native exact policy  ',burnThreshold:1.25},operationId:'slo_native_http_create_01'},policy=await client.create(f.development.id,input);
+ const change={configuration:{...input.configuration,enabled:false},expectedVersion:1,operationId:'slo_native_http_change_01'},changed=await client.change(f.development.id,policy.id,change);
+ assert.equal(changed.version,2);assert.equal(changed.enabled,false);assert.deepEqual(await client.create(f.development.id,input),policy);assert.deepEqual(await client.change(f.development.id,policy.id,change),changed);
+ assert.equal((await client.read(f.development.id,policy.id)).policy.version,2);
+});

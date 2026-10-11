@@ -36,8 +36,40 @@ export function openProjectSlos(sql: SQLiteInternal, options: PlatformSloOptions
   const maxPolicies=integer(options.maxPolicies??1000,1,10000),maxReceipts=integer(options.maxReceipts??10000,1,100000),maxBuckets=integer(options.maxBuckets??200000,1,500000);
   const heartbeat=integer(options.heartbeatMs??1000,100,5000),lease=heartbeat*3;
   const clock=hooks.clock??{wall:()=>Date.now(),monotonic:()=>performance.now()};
-  const protocol=()=>{if(sql.prepare('SELECT protocol FROM clank_platform_slo_state WHERE singleton=1').get()?.protocol!==1)fail(409,"SLO_PROTOCOL_UNSUPPORTED","Unsupported SLO storage protocol.");};
-  if(sql.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_platform_slo_state'").get())protocol();
+  const storageInvalid=():never=>fail(409,"SLO_STORAGE_INVALID","Retained SLO storage is inconsistent.");
+  const layouts:Record<string,readonly (readonly [string,string,number,number])[]>={
+    state:[["singleton","INTEGER",0,1],["protocol","INTEGER",1,0],["owner","TEXT",0,0],["epoch","TEXT",0,0]],
+    collectors:[["id","TEXT",0,1],["expires_at","INTEGER",1,0]],
+    coverage:[["started_at","INTEGER",0,1],["complete","INTEGER",1,0],["epoch","TEXT",1,0]],
+    buckets:[["project_id","TEXT",1,1],["started_at","INTEGER",1,2],["requests","INTEGER",1,0],["completed","INTEGER",1,0],["successful","INTEGER",1,0],["latency","TEXT",1,0]],
+    policies:[["id","TEXT",0,1],["project_id","TEXT",1,0],["version","INTEGER",1,0],["configuration","TEXT",1,0],["created_at","INTEGER",1,0],["updated_at","INTEGER",1,0]],
+    receipts:[["project_id","TEXT",1,1],["actor_id","TEXT",1,2],["operation_id","TEXT",1,3],["request","TEXT",1,0],["result","TEXT",1,0]],
+    alerts:[["id","TEXT",0,1],["policy_id","TEXT",1,0],["project_id","TEXT",1,0],["policy_version","INTEGER",1,0],["state","TEXT",1,0],["version","INTEGER",1,0],["observed_at","INTEGER",1,0]],
+  };
+  const protocol=(pristine=false)=>{
+    let found=0;
+    for(const [suffix,columns] of Object.entries(layouts)){
+      const name='clank_platform_slo_'+suffix,entry=sql.prepare('SELECT type FROM sqlite_schema WHERE name=?').get(name);
+      if(!entry)continue;
+      if(entry.type!=='table')storageInvalid();found++;
+      const actual=sql.prepare('PRAGMA table_xinfo('+name+')').all();
+      if(actual.length!==columns.length||actual.some((row,index)=>{
+        const expected=columns[index]!;
+        return row.name!==expected[0]||row.type!==expected[1]||row.notnull!==expected[2]||row.pk!==expected[3]||row.dflt_value!==null||row.hidden!==0;
+      }))storageInvalid();
+    }
+    if(pristine&&found===0)return;
+    if(found!==Object.keys(layouts).length)storageInvalid();
+    const rows=sql.prepare('SELECT singleton,protocol FROM clank_platform_slo_state').all();
+    if(rows.length!==1||rows[0]!.singleton!==1)storageInvalid();
+    if(rows[0]!.protocol!==1)fail(409,"SLO_PROTOCOL_UNSUPPORTED","Unsupported SLO storage protocol.");
+  };
+  const changed=(result:{changes:number|bigint})=>{if(Number(result.changes)!==1)storageInvalid();};
+  const sameRow=(actual:Record<string,unknown>|undefined,expected:Record<string,unknown>)=>{
+    if(!actual||Object.keys(actual).length!==Object.keys(expected).length||Object.entries(expected).some(([key,value])=>actual[key]!==value))storageInvalid();
+  };
+  protocol(true);
+  sql.transaction(()=>{protocol(true);
   sql.exec(`CREATE TABLE IF NOT EXISTS clank_platform_slo_state(singleton INTEGER PRIMARY KEY CHECK(singleton=1),protocol INTEGER NOT NULL,owner TEXT,epoch TEXT);
     INSERT OR IGNORE INTO clank_platform_slo_state(singleton,protocol) VALUES(1,1);
     CREATE TABLE IF NOT EXISTS clank_platform_slo_collectors(id TEXT PRIMARY KEY,expires_at INTEGER NOT NULL);
@@ -48,6 +80,7 @@ export function openProjectSlos(sql: SQLiteInternal, options: PlatformSloOptions
     CREATE INDEX IF NOT EXISTS clank_platform_slo_policies_project ON clank_platform_slo_policies(project_id,id);
     CREATE TABLE IF NOT EXISTS clank_platform_slo_receipts(project_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,actor_id TEXT NOT NULL,operation_id TEXT NOT NULL,request TEXT NOT NULL,result TEXT NOT NULL CHECK(json_valid(result)),PRIMARY KEY(project_id,actor_id,operation_id));
     CREATE TABLE IF NOT EXISTS clank_platform_slo_alerts(id TEXT PRIMARY KEY,policy_id TEXT NOT NULL UNIQUE REFERENCES clank_platform_slo_policies(id) ON DELETE CASCADE,project_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,policy_version INTEGER NOT NULL,state TEXT NOT NULL,version INTEGER NOT NULL,observed_at INTEGER NOT NULL);`);
+  protocol();});
   const owner=crypto.randomUUID();let epoch=crypto.randomUUID(),closed=false,timer:ReturnType<typeof setTimeout>|undefined;
   let previousWall:number|undefined,previousMono:number|undefined,lastPrunedAt:number|undefined,nextSeal=0,fault=false,sweepAfter="";
   const report=(error:unknown)=>{try{hooks.onError?.(error);}catch{}};
@@ -121,14 +154,21 @@ export function openProjectSlos(sql: SQLiteInternal, options: PlatformSloOptions
         const collectors=sql.prepare('SELECT id FROM clank_platform_slo_collectors WHERE expires_at>? ORDER BY id LIMIT 2').all(now);
         if(state.owner!==owner||state.epoch!==epoch||collectors.length!==1||collectors[0]!.id!==owner)throw new Error("SLO collector ownership changed.");
         const row=sql.prepare('SELECT * FROM clank_platform_slo_buckets WHERE project_id=? AND started_at=?').get(metric.projectId,start);
+        let expected:Record<string,unknown>;
         if(!row){
           if(Number(sql.prepare('SELECT count(*) AS n FROM clank_platform_slo_buckets').get()?.n)>=maxBuckets)throw new Error("SLO measurement capacity is full.");
-          sql.prepare('INSERT INTO clank_platform_slo_buckets VALUES(?,?,1,?,?,?)').run(metric.projectId,start,completed,successful,JSON.stringify(latency));
+          expected={project_id:metric.projectId,started_at:start,requests:1,completed,successful,latency:JSON.stringify(latency)};
+          changed(sql.prepare('INSERT INTO clank_platform_slo_buckets VALUES(?,?,1,?,?,?)').run(metric.projectId,start,completed,successful,expected.latency));
         }else{
           const prior=JSON.parse(String(row.latency));if(!Array.isArray(prior)||prior.length!==7)throw new Error("Malformed retained SLO histogram.");
           const counts=latency.map((count,index)=>integer(prior[index]+count,0,Number.MAX_SAFE_INTEGER));
-          sql.prepare('UPDATE clank_platform_slo_buckets SET requests=?,completed=?,successful=?,latency=? WHERE project_id=? AND started_at=?').run(integer(Number(row.requests)+1,0,Number.MAX_SAFE_INTEGER),integer(Number(row.completed)+completed,0,Number.MAX_SAFE_INTEGER),integer(Number(row.successful)+successful,0,Number.MAX_SAFE_INTEGER),JSON.stringify(counts),metric.projectId,start);
+          expected={project_id:metric.projectId,started_at:start,requests:integer(Number(row.requests)+1,0,Number.MAX_SAFE_INTEGER),completed:integer(Number(row.completed)+completed,0,Number.MAX_SAFE_INTEGER),successful:integer(Number(row.successful)+successful,0,Number.MAX_SAFE_INTEGER),latency:JSON.stringify(counts)};
+          changed(sql.prepare('UPDATE clank_platform_slo_buckets SET requests=?,completed=?,successful=?,latency=? WHERE project_id=? AND started_at=?').run(expected.requests,expected.completed,expected.successful,expected.latency,metric.projectId,start));
         }
+        sameRow(sql.prepare('SELECT * FROM clank_platform_slo_buckets WHERE project_id=? AND started_at=?').get(metric.projectId,start),expected);
+        check();const current=sql.prepare('SELECT owner,epoch FROM clank_platform_slo_state WHERE singleton=1').get()!;
+        const active=sql.prepare('SELECT id FROM clank_platform_slo_collectors WHERE expires_at>? ORDER BY id LIMIT 2').all(clock.wall());
+        if(current.owner!==owner||current.epoch!==epoch||active.length!==1||active[0]!.id!==owner)throw new Error("SLO collector ownership changed.");
       });
     }catch(error){fault=true;try{protocol();const now=clock.wall();invalidate(Math.min(previousWall??now,now),Math.max(previousWall??now,now));}catch{}report(error);}
   };
@@ -170,8 +210,14 @@ export function openProjectSlos(sql: SQLiteInternal, options: PlatformSloOptions
     if(!row)return null;if(row.request!==request)fail(409,"SLO_OPERATION_CONFLICT","That operation ID already represents another SLO change.");return JSON.parse(String(row.result));
   };
   const save=(policy:StoredSloPolicy,authority:SloAuthority,operationId:string,request:string)=>{
-    sql.prepare('INSERT INTO clank_platform_slo_receipts VALUES(?,?,?,?,?)').run(policy.projectId,authority.userId,operationId,request,JSON.stringify(policy));
-    authority.audit('slo.policy',{policyId:policy.id,version:policy.version,operationId});return policy;
+    const expectedPolicy={id:policy.id,project_id:policy.projectId,version:policy.version,configuration:JSON.stringify(policyConfiguration(policy)),created_at:policy.createdAt,updated_at:policy.updatedAt};
+    const expectedReceipt={project_id:policy.projectId,actor_id:authority.userId,operation_id:operationId,request,result:JSON.stringify(policy)};
+    const verify=()=>{
+      sameRow(sql.prepare('SELECT * FROM clank_platform_slo_policies WHERE project_id=? AND id=?').get(policy.projectId,policy.id),expectedPolicy);
+      sameRow(sql.prepare('SELECT * FROM clank_platform_slo_receipts WHERE project_id=? AND actor_id=? AND operation_id=?').get(policy.projectId,expectedReceipt.actor_id,operationId),expectedReceipt);
+    };
+    changed(sql.prepare('INSERT INTO clank_platform_slo_receipts VALUES(?,?,?,?,?)').run(policy.projectId,expectedReceipt.actor_id,operationId,request,expectedReceipt.result));
+    verify();authority.audit('slo.policy',{policyId:policy.id,version:policy.version,operationId});verify();check(authority,true);return policy;
   };
   const capacity=()=>{if(Number(sql.prepare('SELECT count(*) AS n FROM clank_platform_slo_receipts').get()?.n)>=maxReceipts)fail(409,"SLO_CAPACITY","SLO receipt capacity is full.");};
   const reserve=(projectId:string,policyId:string|null,configuration:ProjectSloConfiguration)=>{
@@ -198,8 +244,8 @@ export function openProjectSlos(sql: SQLiteInternal, options: PlatformSloOptions
         check(authority,true);const retained=receipt(projectId,authority,operationId,request);if(retained)return retained;capacity();
         reserve(projectId,null,configuration);
         if(Number(sql.prepare('SELECT count(*) AS n FROM clank_platform_slo_policies').get()?.n)>=maxPolicies||Number(sql.prepare('SELECT count(*) AS n FROM clank_platform_slo_policies WHERE project_id=?').get(projectId)?.n)>=10)fail(409,"SLO_CAPACITY","SLO policy capacity is full.");
-        const policyId=crypto.randomUUID(),now=clock.wall();sql.prepare('INSERT INTO clank_platform_slo_policies VALUES(?,?,1,?,?,?)').run(policyId,projectId,JSON.stringify(configuration),now,now);
-        return save(current(projectId,policyId),authority,operationId,request);
+        const policyId=crypto.randomUUID(),now=clock.wall();changed(sql.prepare('INSERT INTO clank_platform_slo_policies VALUES(?,?,1,?,?,?)').run(policyId,projectId,JSON.stringify(configuration),now,now));
+        return save({...configuration,id:policyId,projectId,version:1,createdAt:now,updatedAt:now},authority,operationId,request);
       });
     },
     change(projectId:string,policyId:string,authority:SloAuthority,value:unknown):StoredSloPolicy{
@@ -210,8 +256,8 @@ export function openProjectSlos(sql: SQLiteInternal, options: PlatformSloOptions
         check(authority,true);const retained=receipt(projectId,authority,operationId,request);if(retained)return retained;capacity();
         const prior=current(projectId,policyId);if(prior.version!==expectedVersion)fail(409,"SLO_VERSION_CONFLICT","SLO policy changed; refresh before saving.");
         reserve(projectId,policyId,configuration);
-        sql.prepare('UPDATE clank_platform_slo_policies SET version=version+1,configuration=?,updated_at=? WHERE project_id=? AND id=? AND version=?').run(JSON.stringify(configuration),clock.wall(),projectId,policyId,expectedVersion);
-        return save(current(projectId,policyId),authority,operationId,request);
+        const now=clock.wall();changed(sql.prepare('UPDATE clank_platform_slo_policies SET version=version+1,configuration=?,updated_at=? WHERE project_id=? AND id=? AND version=?').run(JSON.stringify(configuration),now,projectId,policyId,expectedVersion));
+        return save({...configuration,id:policyId,projectId,version:expectedVersion+1,createdAt:prior.createdAt,updatedAt:now},authority,operationId,request);
       });
     },
     alert(projectId:string,alertId:string):StoredSloAlert|null{check();const row=sql.prepare('SELECT * FROM clank_platform_slo_alerts WHERE project_id=? AND id=?').get(projectId,alertId);return row?alertFrom(row):null;},

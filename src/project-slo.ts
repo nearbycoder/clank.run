@@ -126,7 +126,25 @@ export function createProjectSloClient(options: ProjectSloClientOptions = {}): P
     if (!/^[A-Za-z0-9_-]{8,128}$/u.test(value)) throw new TypeError("Invalid project or SLO identifier.");
     return encodeURIComponent(value);
   };
-  const request = async (projectId: string, suffix: string, method = "GET", body?: unknown) => {
+  const uncertain=():never=>{throw new Error("SLO acknowledgment is unavailable or does not match this operation. Inspect current state before explicitly retrying the same operation.");};
+  const fields=(value:any,keys:readonly string[])=>!!value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).length===keys.length&&keys.every(key=>Object.hasOwn(value,key));
+  const configKeys=['name','objective','targetBasisPoints','windowMinutes','minimumRequests','burnThreshold','enabled'];
+  const canonical=(value:any)=>{
+    if(!fields(value,configKeys)||typeof value.name!=='string'||!value.name.trim()||new TextEncoder().encode(value.name).byteLength>160||/[\u0000-\u001f\u007f]/u.test(value.name))uncertain();
+    const objective=value.objective,kind=objective?.kind;
+    if(kind!=='request-success'&&kind!=='latency'||!fields(objective,kind==='latency'?['kind','maximumMs']:['kind'])||kind==='latency'&&![50,100,250,500,1000,2500,5000].includes(objective.maximumMs))uncertain();
+    if(!Number.isSafeInteger(value.targetBasisPoints)||value.targetBasisPoints<9000||value.targetBasisPoints>9999||![5,60,1440,10080].includes(value.windowMinutes)||!Number.isSafeInteger(value.minimumRequests)||value.minimumRequests<1||value.minimumRequests>1000000||typeof value.burnThreshold!=='number'||!Number.isFinite(value.burnThreshold)||value.burnThreshold<1||value.burnThreshold>1000||typeof value.enabled!=='boolean')uncertain();
+    return {name:value.name,objective:kind==='latency'?{kind,maximumMs:objective.maximumMs}:{kind},targetBasisPoints:value.targetBasisPoints,windowMinutes:value.windowMinutes,minimumRequests:value.minimumRequests,burnThreshold:value.burnThreshold,enabled:value.enabled};
+  };
+  const acknowledgement=(payload:any,projectId:string,policyId:string|undefined,text:string)=>{
+    if(!fields(payload,['ok','policy'])||payload.ok!==true||!fields(payload.policy,[...configKeys,'id','projectId','version','createdAt','updatedAt']))uncertain();
+    const policy=payload.policy,input=JSON.parse(text);
+    if(!fields(input,policyId?['configuration','operationId','expectedVersion']:['configuration','operationId'])||typeof input.operationId!=='string'||!/^[A-Za-z0-9_-]{8,128}$/u.test(input.operationId))uncertain();
+    if(typeof policy.id!=='string'||!/^[A-Za-z0-9_-]{8,128}$/u.test(policy.id)||policy.projectId!==projectId||policyId&&policy.id!==policyId||!Number.isSafeInteger(policy.version)||policy.version!==(policyId?input.expectedVersion+1:1)||policyId&&(!Number.isSafeInteger(input.expectedVersion)||input.expectedVersion<1||input.expectedVersion>=Number.MAX_SAFE_INTEGER)||!Number.isSafeInteger(policy.createdAt)||policy.createdAt<0||!Number.isSafeInteger(policy.updatedAt)||policy.updatedAt<0)uncertain();
+    const config=Object.fromEntries(configKeys.map(key=>[key,policy[key]]));
+    if(JSON.stringify(canonical(config))!==JSON.stringify(canonical(input.configuration)))uncertain();
+  };
+  const request = async (projectId: string, suffix: string, method = "GET", body?: unknown, policyId?: string) => {
     const headers = new Headers(options.headers?.());
     for (const [name, value] of Object.entries(options.auth?.csrfHeader() ?? {})) headers.set(name, value);
     const text = body === undefined ? undefined : JSON.stringify(body);
@@ -164,16 +182,18 @@ export function createProjectSloClient(options: ProjectSloClientOptions = {}): P
     let payload: any;
     try { payload = JSON.parse(new TextDecoder().decode(all)); } catch { throw new Error("SLO transport returned invalid JSON."); }
     if (!response.ok || payload?.ok !== true) {
+      if(response.ok&&method==="POST")uncertain();
       const error = new Error("SLO access changed or the operation was rejected. Refresh before retrying.") as Error & {status: number};
       error.status = response.status;
       throw error;
     }
+    if(method==="POST")acknowledgement(payload,projectId,policyId,text!);
     return payload;
   };
   return {
     list: async projectId => (await request(projectId, "")).policies,
     read: async (projectId, policyId) => (await request(projectId, `/${identifier(policyId)}`)).assessment,
     create: async (projectId, input) => (await request(projectId, "", "POST", input)).policy,
-    change: async (projectId, policyId, input) => (await request(projectId, `/${identifier(policyId)}/change`, "POST", input)).policy,
+    change: async (projectId, policyId, input) => (await request(projectId, `/${identifier(policyId)}/change`, "POST", input, policyId)).policy,
   };
 }
