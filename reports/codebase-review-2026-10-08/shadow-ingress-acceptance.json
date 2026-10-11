@@ -1,0 +1,208 @@
+{
+  "scope": "Accepted transport prerequisite and continuing draft review; roadmap29accepted/11remaining.",
+  "accepted": {
+    "pullRequest": "https://github.com/nearbycoder/clank.run/pull/352",
+    "reviewedHead": "599342de6f741c2d714e3fcdbdf800233a49daf0",
+    "reviewedTree": "89150d8303d5bc2f60ac2492db614f9927d3f57e",
+    "merge": {
+      "sha": "944149c51d207a63713434eaf1c8b42b89c8355c",
+      "merged": true,
+      "message": "Pull Request successfully merged"
+    },
+    "checks": {
+      "headRevision": "599342de6f741c2d714e3fcdbdf800233a49daf0",
+      "checks": [
+        {
+          "id": 114389411704,
+          "name": "CodeQL",
+          "head_sha": "599342de6f741c2d714e3fcdbdf800233a49daf0",
+          "status": "completed",
+          "conclusion": "success",
+          "details_url": "https://github.com/nearbycoder/clank.run/runs/114389411704",
+          "output": {
+            "title": "No new alerts in code changed by this pull request",
+            "summary": "[View all branch alerts](/nearbycoder/clank.run/security/code-scanning?query=pr%3A352+tool%3ACodeQL+is%3Aopen).",
+            "text": null,
+            "annotations_count": 0
+          }
+        },
+        {
+          "id": 114389133406,
+          "name": "Native PostgreSQL / Node 26.10",
+          "head_sha": "599342de6f741c2d714e3fcdbdf800233a49daf0",
+          "status": "completed",
+          "conclusion": "success",
+          "details_url": "https://github.com/nearbycoder/clank.run/actions/runs/38111939224/job/114389133406",
+          "output": {
+            "title": null,
+            "summary": null,
+            "text": null,
+            "annotations_count": 0
+          }
+        },
+        {
+          "id": 114389133405,
+          "name": "Native PostgreSQL / Node 22.16",
+          "head_sha": "599342de6f741c2d714e3fcdbdf800233a49daf0",
+          "status": "completed",
+          "conclusion": "success",
+          "details_url": "https://github.com/nearbycoder/clank.run/actions/runs/38111939224/job/114389133405",
+          "output": {
+            "title": null,
+            "summary": null,
+            "text": null,
+            "annotations_count": 0
+          }
+        },
+        {
+          "id": 114389133403,
+          "name": "Node 24",
+          "head_sha": "599342de6f741c2d714e3fcdbdf800233a49daf0",
+          "status": "completed",
+          "conclusion": "success",
+          "details_url": "https://github.com/nearbycoder/clank.run/actions/runs/38111939224/job/114389133403",
+          "output": {
+            "title": null,
+            "summary": null,
+            "text": null,
+            "annotations_count": 0
+          }
+        },
+        {
+          "id": 114389133369,
+          "name": "Node 22.16",
+          "head_sha": "599342de6f741c2d714e3fcdbdf800233a49daf0",
+          "status": "completed",
+          "conclusion": "success",
+          "details_url": "https://github.com/nearbycoder/clank.run/actions/runs/38111939224/job/114389133369",
+          "output": {
+            "title": null,
+            "summary": null,
+            "text": null,
+            "annotations_count": 0
+          }
+        },
+        {
+          "id": 114389133367,
+          "name": "Packaged-release conformance",
+          "head_sha": "599342de6f741c2d714e3fcdbdf800233a49daf0",
+          "status": "completed",
+          "conclusion": "success",
+          "details_url": "https://github.com/nearbycoder/clank.run/actions/runs/38111939224/job/114389133367",
+          "output": {
+            "title": null,
+            "summary": null,
+            "text": null,
+            "annotations_count": 0
+          }
+        },
+        {
+          "id": 114389133230,
+          "name": "Semantic and packed consumer types",
+          "head_sha": "599342de6f741c2d714e3fcdbdf800233a49daf0",
+          "status": "completed",
+          "conclusion": "success",
+          "details_url": "https://github.com/nearbycoder/clank.run/actions/runs/38111939224/job/114389133230",
+          "output": {
+            "title": null,
+            "summary": null,
+            "text": null,
+            "annotations_count": 0
+          }
+        },
+        {
+          "id": 114389132354,
+          "name": "JavaScript and TypeScript analysis",
+          "head_sha": "599342de6f741c2d714e3fcdbdf800233a49daf0",
+          "status": "completed",
+          "conclusion": "success",
+          "details_url": "https://github.com/nearbycoder/clank.run/actions/runs/38111939034/job/114389132354",
+          "output": {
+            "title": null,
+            "summary": null,
+            "text": null,
+            "annotations_count": 1
+          }
+        }
+      ],
+      "statuses": [],
+      "annotations": [],
+      "hasMore": false,
+      "job": null,
+      "jobs": [],
+      "log": null,
+      "logTruncated": false,
+      "providerGuidance": "GitHub guidance for this response only: use checkRunId for output and annotations, runId from a GitHub Actions /runs/<id> link to list jobs, or jobId from a /jobs/<id> link for logs. page paginates checks, jobs or annotations. Keep the supplied account and returned headRevision on follow-up reads. Third-party CI exposes only the output reported to GitHub."
+    },
+    "analysisAnnotation": {
+      "checkRunId": 114389132354,
+      "read": true,
+      "level": "notice",
+      "message": "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026."
+    },
+    "authorComment": 5481904130,
+    "qualification": "Author verification is not independent human approval. This is Feature09 transport prerequisite, not complete feature acceptance."
+  },
+  "mainSynchronization": {
+    "/home/nearby/.vnc/codex-home/.codex/worktrees/d164/clank": {
+      "head": "944149c51d207a63713434eaf1c8b42b89c8355c",
+      "tree": "89150d8303d5bc2f60ac2492db614f9927d3f57e",
+      "originalFilesVerified": 7
+    },
+    "/home/nearby/Sites/clank": {
+      "head": "944149c51d207a63713434eaf1c8b42b89c8355c",
+      "tree": "89150d8303d5bc2f60ac2492db614f9927d3f57e",
+      "originalFilesVerified": 16
+    }
+  },
+  "focused": {
+    "manifestSha256": "b64a2afc591dd6f9791893363b112a482f454900db6e0313b7bec083bfa6fa66",
+    "totals": {
+      "26": {
+        "tests": 107,
+        "pass": 107,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "22": {
+        "tests": 107,
+        "pass": 107,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      }
+    },
+    "package": {
+      "files": 419,
+      "unpackedBytes": 6004354,
+      "ceiling": 6291456
+    }
+  },
+  "retainedProofs": {
+    "temporaryCurrentFull": {
+      "manifestSha256": "1611348d5537d78bc26f3e807e577b54223fce6c34fec35c347b606cbedd09a4",
+      "qualification": "Draft evidence; not feature acceptance."
+    },
+    "costsCurrentFull": {
+      "manifestSha256": "a6fb6cc2e67db9ad4bb7f495890a71cb4f1e7352f48e725cfdc957ef990e5729",
+      "qualification": "Draft evidence; not feature acceptance."
+    },
+    "recoveryDestinationBefore": {
+      "manifestSha256": "6f2a7772e0c5fb87045cd323c86fbca3a1488aece9e8fa88f7845ecc7054a50b",
+      "qualification": "Draft evidence; not feature acceptance."
+    },
+    "recoveryDestinationAfter": {
+      "manifestSha256": "8c3390e624ff16c0ec7946a7145efd3f0869e93f23729c0aa5bf194098334268",
+      "qualification": "Draft evidence; not feature acceptance."
+    },
+    "recoveryConsoleBefore": {
+      "manifestSha256": "7fe834c820e8359e2ee767713034d3927021d7f9be6fd70776eddd2ec700ab4a",
+      "qualification": "Draft evidence; not feature acceptance."
+    },
+    "recoveryConsoleAfter": {
+      "manifestSha256": "c9348a69648937d334df93acf5d53cef068ce625aa0b37f57051874fa87a88f9",
+      "qualification": "Draft evidence; not feature acceptance."
+    }
+  }
+}
