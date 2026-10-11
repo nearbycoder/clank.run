@@ -1,4 +1,4 @@
-import { captureExactRequest, setTrustedClientAddress, takeRequestHandoff } from "./security.ts";
+import { captureCanonicalRequestTarget, captureExactRequest, setTrustedClientAddress, takeRequestHandoff } from "./security.ts";
 
 export interface FetchApplication {
   handle(request: Request): Response | Promise<Response>;
@@ -241,6 +241,7 @@ async function dispatch(
   digest: (value: string) => string,
   afterWrite: (callback: () => void) => unknown,
 ): Promise<void> {
+  const attachTarget = captureCanonicalRequestTarget(incoming.method, incoming.url);
   const attachExact = captureExactRequest(incoming.method, incoming.url, incoming.rawHeaders, options.trustProxy === true, digest);
   const headers = new Headers();
   for (const [name, value] of Object.entries(incoming.headers)) {
@@ -288,6 +289,7 @@ async function dispatch(
   });
   setTrustedClientAddress(request, forwardedFor || incoming.socket.remoteAddress || "unknown");
   attachExact?.(request);
+  attachTarget?.(request);
   let handedOff = false;
   const handoff = (): void => {
     if (handedOff || responseClosed) return; handedOff = true;

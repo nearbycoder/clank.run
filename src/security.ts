@@ -13,6 +13,30 @@ const URL_ATTRIBUTES = new Set([
 
 const TRUSTED_CLIENT_ADDRESSES = new WeakMap<Request, string>();
 
+const CANONICAL_REQUEST_TARGETS = new WeakMap<Request, Readonly<{method:"POST";url:string}>>();
+/** @internal Separate POST target evidence; never anonymous observation or authentication. */
+export function captureCanonicalRequestTarget(method: unknown, target: unknown): ((request: Request) => void) | undefined {
+  try {
+    if(method!=="POST" || typeof target!=="string" || target.length<1 || target.length>1024 || !target.startsWith("/")
+      || /[^\x21-\x7e]|[%\\?#]|\/\//u.test(target) || target.split("/").some(part=>part==="." || part===".."))return undefined;
+    let attached=false;
+    return request=>{
+      if(attached)return;attached=true;
+      try {
+        const value=request.url,url=new URL(value);
+        if(request.method!==method || value.length>2048 || /[^\x21-\x7e]/u.test(value) || url.pathname!==target || url.search || url.hash)return;
+        CANONICAL_REQUEST_TARGETS.set(request,Object.freeze({method,url:value}));
+      } catch { /* Unsupported transport evidence never changes ordinary dispatch. */ }
+    };
+  } catch { return undefined; }
+}
+/** @internal Assertion-only exact native object/method/URL evidence; clones carry none. */
+export function hasCanonicalRequestTarget(request: Request): boolean {
+  try {const proof=CANONICAL_REQUEST_TARGETS.get(request);return Boolean(proof && request.method===proof.method && request.url===proof.url);}
+  catch {return false;}
+}
+
+
 /** @internal Native transport proof; never inherited by Request.clone(). */
 export interface ExactRequest { readonly method: "GET" | "HEAD"; readonly path: string; readonly accept: string | null; }
 const EXACT_REQUESTS = new WeakMap<Request, {

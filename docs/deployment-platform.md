@@ -275,6 +275,79 @@ Earlier binaries reject that catalog before acquiring writer duties, even after 
 been retired or the option is disabled. There is no automatic downgrade: keep a compatible binary
 for this catalog. Ordinary catalogs without provider-canary enrollment retain protocol 1.
 
+### Shadow operator controls
+
+The Console's **Deployments → Shadow traffic** panel compares bounded anonymous read traffic
+against an isolated candidate checkpoint. Shadowing never activates the candidate or promotes
+its data. Reports and exact stop controls remain available when new shadow sessions are disabled.
+Read-only support sessions can inspect reports but cannot upload, preview, start, or stop.
+
+First select an existing inactive immutable release, or use **Upload artifact only** to retain a
+validated artifact without deploying it. Create an artifact offline with
+`clank deploy --dry-run --output=/secure/path/release.clank.gz`, then select it in the Console;
+an optional release attestation uses the same format as ordinary deployment. The upload sends
+`POST /api/projects/:id/releases/stage` with the binary
+`application/vnd.clank.deploy+gzip` body, `x-clank-content-sha256`, a stable
+`x-clank-idempotency-key`, and the human session's `x-clank-csrf`. Server artifact quotas and
+attestation rules still apply. An upload-only release is labeled explicitly in the release selector.
+
+Choose a subset of the configured GET/HEAD paths and resource limits, then **Review comparison**.
+The Console sends `{ releaseId, expectedEpoch, policy }` to
+`POST /api/projects/:id/shadow/preview`. Review binds the immutable artifact digest, primary
+release and generation, policy revision, and current retained epoch. Its token expires after
+120 seconds. **Start reviewed comparison** sends only `{ reviewToken, idempotencyKey }` to
+`POST /api/projects/:id/shadow/start`; acceptance records intent and does not establish that a
+candidate is running or that its comparison passed. Field, project, session, permission, or epoch
+changes invalidate the displayed review. The acknowledgment must match the captured artifact,
+policy revision and exact normalized narrowing; neither a wider nor an unexpectedly narrower
+response becomes startable. Malformed preview or status responses remain unavailable;
+they never create a startable review or claim that no sessions exist.
+
+Human mutations require a current non-impersonating session, current deploy permission, CSRF,
+and fresh authentication even when optional general freshness settings are off. A
+fresh-authentication refusal remains visible: verify with a passkey or MFA, inspect current
+status, then explicitly repeat the intended action. The Console never automatically resends a
+mutation. A successful HTTP status alone is not acknowledgment: unreadable, truncated, or
+identity-mismatched response bodies remain uncertain. Start responses must match the reviewed
+release, digest, primary, policy and revision; stage responses must identify the same project,
+digest, byte count and available upload-only artifact. Uncertain start and upload responses retain
+the exact request identity locally for an explicit retry; upload retries retain the same bytes, digest,
+and key. Leaving the view or signing
+out discards those local retry details. Discarding them does not cancel a server operation.
+
+`GET /api/projects/:id/shadow` lists at most 20 retained sessions per page with bounded
+`limit`/`before` pagination. The Console returns the exact opaque `clankshc1` cursor (at most
+512 ASCII bytes) to the same project's list route. A stale or invalid cursor fails visibly and
+requires an explicit refresh; paging never mutates a session.
+`GET /api/projects/:id/shadow/:sessionId` reads one exact session. Status distinguishes immutable
+original `controllerEpoch` from `epoch`, the advancing retained status version. **Stop shadow
+session** and **Retry exact stop** both use
+`POST /api/projects/:id/shadow/:sessionId/stop` with exactly
+`{ operationId, controllerEpoch }` from that session. The UI does not substitute a newer epoch or
+invent a recovery endpoint. A stop acknowledgment is not proof of candidate absence: retained
+`cleanupRequired` remains visible until exact retirement is acknowledged. Failed or uncertain
+stop requests refresh status once and require an explicit retry. Late responses cannot replace
+another project's state or move focus away from a control selected while the request was pending.
+
+Reports expose only bounded transport aggregates. `reserved` counts durable attempts, `settled`
+counts completed outcome records, and `comparable` requires both bounded bodies to complete and
+both media types to be valid. `bothComplete` includes bounded EOF pairs with invalid media types.
+Status-class and media-type equal/different counts each sum to `comparable`; fixed unknown reason
+counts plus comparable sum to settled. The latency table shows cumulative counts at
+1, 5, 10, 25, 50, 100, 250, 500, 1,000, 2,500, 5,000 and 10,000 ms, plus overflow and unknown.
+Each side's population equals settled attempts, including completed observations from pairs that
+were not comparable. No percentile is inferred from the buckets. Legacy reports retain exactly
+these aggregates. Version-two reports also show the six fixed skip counters as saturating
+best-effort lower bounds, excluded from every comparison and latency denominator. Pruned
+aggregates remain unavailable while their compact immutable session identity stays visible.
+
+A verified snapshot is labeled as an isolated checkpoint with its digest, byte length, provider
+acquisition interval, and platform observation time. Elapsed time since observation is unavailable
+after restart, and cross-host wall-clock freshness is always unknown. Missing snapshots and
+incomplete reports are shown as unavailable. Transport aggregates do not establish semantic
+correctness, data freshness, or deployment approval. The read-only CLI exposes the same status
+with `clank shadow status [directory] [--session <id>] [--json]`.
+
 An unexpected worker or scheduler exit crashes and restarts the complete release group instead of
 leaving a healthy-looking web process with stale background work. Read
 [Durable jobs and cron](jobs-and-cron.md) for queue correctness and process-provider requirements.
@@ -534,3 +607,62 @@ A native receipt binds the exact request, artifact, location, and unique publica
 An exact retry with fresh authority may continue an unsubmitted reserved attempt or complete final availability from an already acknowledged receipt. Only verified original bytes and current native authority permit staged/available status. Uncertain uploads block release cleanup, project deletion, and preview expiration before runtime shutdown or storage deletion. Explicit cleanup of an available staged artifact checks references, deletes it, verifies absence, and only then releases native storage accounting. Original receipt identity and artifact byte count remain retained; unknown deletion outcomes preserve accounting.
 
 Staging atomically enrolls shadow schema version two without changing its prior enrollment identity. Current coordinators and guardians retain the greatest committed schema version they observe and refuse downgrade or missing publication schema; legacy schema-one binaries refuse version two. Restart validation rejects damaged retained receipts before writer admission. Whole-catalog rollback that removes every newer marker, column, and receipt across process restart remains outside that detection boundary. Lowering admission limits does not prevent validated older artifacts from being inspected or cleaned up.
+
+### Retained shadow lifecycle foundation
+
+`ClankPlatformOptions.shadowTraffic` accepts an explicit revision, exact read paths and GET/HEAD methods, and maximum sample percentage, duration, attempts, concurrency, response bytes, request duration, and retained report count. Configuration requires managed ingress, native supervisor leadership, and provider placement. The admission foundation exposes preview, start and exact stop, with native recovery. Its private observer mirrors eligible requests after the primary response starts; authenticated GET status and a read-only native MCP mount expose retained observations. Integrated Console/CLI status remains separate work.
+
+The private lifecycle shares the existing provider candidate slot and project epoch with ordinary canaries. A native transaction records each intent together with a compact replay receipt and project mirror before a provider effect. Readback verifies exact persisted values, including ignored or altered native writes. Each transition advances the status epoch while retaining the original provider operation and retirement identity. At most sixteen unresolved shadow operations are permitted across the catalog. An unresolved shadow operation blocks ordinary provider writers and referenced artifact cleanup until exact retirement is acknowledged and the native operation is complete.
+
+Startup uses that same lifecycle to retire retained operations even when `shadowTraffic` is disabled. Cleanup reuses the retained provider origin, current credentials for the exact generation, and original binding identity; uncertain cleanup preserves the writer barrier. A delayed prepare cannot supersede the provider's durable retirement. Shutdown or lost authority can prevent cleanup from completing, leaving the obligation for a successor with current native authority. The live owner can interrupt its own held preparation for exact-session stop. A public stop uses the original operation and controller epoch, while the owner performs the native compare-and-swap against its latest status epoch.
+
+Each project retains at most 1,024 compact replay fences without eviction. Completed aggregate bodies are pruned to the configured bound, at most 100, while immutable session, policy, primary, candidate, checkpoint, and recorded timestamp identity remains. The canonical receipt is limited to 16 KiB; identity plus aggregates to 32 KiB. A digest binds identity and aggregates. Pruning verifies exact absence and the retained body count before committing. A pruned body remains unavailable rather than being reconstructed from raw requests; no sampled paths, credentials, headers, or bodies are retained. Process-local elapsed observation time is not persisted as a deadline or restart proof.
+
+Native component tests exercise the shared transaction and lease implementation, and actual child-process tests cover SIGKILL, normal lease takeover, disabled-policy cleanup, writer refusal during uncertainty, and delayed provider preparation. Their provider runtime launcher is a fixture; they do not establish Linux runtime isolation, certificate-backed public mirroring, browser acceptance, or completion of the shadow-traffic feature. Certificate-backed public success is separately gated on an independently generated current host certificate and must be run on the explicit disposable host.
+
+### Shadow review and exact admission
+
+`POST /api/projects/:projectId/shadow/preview` accepts only `{releaseId,expectedEpoch,policy}`. It requires a current human browser session with deploy permission, mandatory fresh passkey/MFA assurance, same origin and CSRF, and actual native supervisor/project ownership. The selected artifact must be an available staged shadow upload or inactive deployment from that project. Preview verifies code-only database compatibility, current genuine Linux host certification, and the exact authenticated provider primary. It creates no candidate, checkpoint, generation or review cache.
+
+Policy fields may be omitted to retain configured bounds; explicit narrowing is never discarded. Mutation bodies are bounded to 8192 UTF-8 bytes. A preview returns a safe review and an opaque signed token valid for 120 seconds. The token's closed canonical payload is bounded to 3072 bytes and its complete wire representation to 4150 ASCII bytes. It binds the authenticated user/session, candidate artifact, full primary identity, policy and current slot epoch without returning provider credentials. Do not log the token.
+
+`POST /api/projects/:projectId/shadow/start` accepts only `{reviewToken,idempotencyKey}`, with an ASCII `[A-Za-z0-9_-]{16,128}` key. New admission verifies current review authority and commits an immutable intent before provider preparation; a `202` is an intent acknowledgment, not cleanup or observation proof. Disconnecting after that acknowledgment does not discard the tracked owner. The tracked owner prepares the isolated candidate before accepting eligible observations; the acknowledgment itself proves neither preparation nor measured traffic.
+
+An exact consumed retry under the original current user and browser session returns its retained identity, including after review expiry, policy changes or HMAC-key rotation. The stored input and review digests must both match; a different user or browser session cannot replay it merely by having deploy permission. A live newer shadow owner permits a coherent read of the historical receipt under its actual native capability, without cancelling either session or contacting the provider. Pruned aggregates return `report:null` and `reportAvailable:false`; immutable identity remains available.
+
+`POST /api/projects/:projectId/shadow/:sessionId/stop` accepts only `{operationId,controllerEpoch}` using the original identity, not a later status epoch. It cannot stop a replacement session. A `202` can still report cleanup required; only a retained complete operation proves acknowledged retirement. Cleanup continues under native authority independently of expired human authorization. Snapshot elapsed time is a floored local monotonic duration while its original owner is live, and is null after restart; cross-host freshness remains unknown.
+
+New shadow sessions commit the existing native shadow schema marker from `clank-platform-shadow/2` to `/3` before recording their intent; supervisor protocol remains `3`. The marker keeps the same tables, enrollment identity and publication receipts. Staging alone remains at schema `/2`. Current readers and guardians retain the greatest committed schema version, while older `/2` readers refuse `/3` even when no session remains. A provisional read from another connection cannot advance that committed floor. Preserve the catalog for recovery if its marker, required tables or publication column is missing; startup does not recreate them. Coherent restoration of every catalog marker and row from an older backup cannot be detected solely from that restored catalog.
+
+Version-two reports have the exact shape `{protocol:2,counters,latency,skips}`. The six fixed `skips` keys are `ineligible`, `sampled-out`, `capacity`, `attempt-limit`, `handoff-timeout` and `withdrawn`; each is a nonnegative integer that saturates at 2,147,483,647. Skips are best-effort totals and never enter sample or latency denominators. The observer coalesces pending skips outside the primary callbacks; process or authority loss may discard increments that were not committed. Completed legacy `{counters,latency}` reports keep their original canonical bytes and digest. Recovery of an unfinished legacy session keeps that format and applies the existing interruption accounting; it never rewrites the report into v2. Aggregate pruning retains the immutable compact receipt (at most 16 KiB), with the full identity and aggregate bounded to 32 KiB. New report bodies and native replay validation must agree on the enrolled schema version.
+
+
+### Read-only shadow history
+
+`GET /api/projects/:projectId/shadow` returns exactly `{ok,enabled,epoch,policy,sessions,nextBefore}`. It requires current project read permission from a human session, CLI token, or service-account credential; it does not require a fresh mutation assurance. Impersonation and preview-only credentials cannot read it. Disabled policy returns `enabled:false` and `policy:null` while preserving retained safe session identities. Reading status never prepares, stops, recovers, reserves, or activates a candidate. A busy ordinary project operation refuses the read; a live shadow owner can lend only its captured native read assertion, which is checked again before publication.
+
+The list accepts only literal `limit` (default `20`, canonical integer `1..20`) and `before`, each once, in either order. `nextBefore` is an opaque, project-bound HMAC cursor of at most 512 ASCII bytes. Pass it unchanged: encoded names or values, duplicate fields, empty fields, unknown fields, tampering, another project's cursor, and cursors signed before master-key rotation receive `400 SHADOW_CURSOR_INVALID`. Refresh the list after key rotation. Pagination fixes the original controller-epoch ceiling on the first page and returns descending original epochs; new sessions cannot enter that page sequence. Current phase, project epoch, and aggregate availability may still change. A verified cursor above the native retained floor refuses damaged state instead of returning an empty page.
+
+`GET /api/projects/:projectId/shadow/:sessionId` accepts no query and returns the same `{ok,enabled,epoch,session}` envelope as exact admission replay. An unknown session receives `404 SHADOW_SESSION_NOT_FOUND`. Historical status uses the caller's current read authority, while consumed admission replay retains its stricter original human-session binding. Pruned sessions keep immutable identity with `report:null` and `reportAvailable:false`; legacy report bytes remain unchanged. Local elapsed milliseconds are nonnegative integers or `null` after restart, never durable cross-host freshness proof.
+
+Every read validates the bounded native receipt set and its mirror, including rows outside the selected page. At most 1,024 replay identities and 100 retained aggregate bodies are accepted. Each safe serialized session is bounded to 32 KiB and the complete GET response to 1 MiB. Reads do not create or upgrade an unenrolled schema. A stale owner or invalid retained state fails closed; no cleanup work is hidden in a status request. The same read builder serves the read-only MCP mount below. Integrated Console/CLI status remains a separate pending checkpoint.
+
+### Read shadow status through MCP
+
+Agents may POST JSON-RPC to the exact native control-host path `/api/projects/:projectId/shadow/mcp`. The stateless mount exposes only `shadow_status`, requires `agent:read` inside MCP after current exact project read authorization, and advertises `readOnlyHint:true`, `destructiveHint:false`, `idempotentHint:true`, and `openWorldHint:false`. Initialize and tool listing require the same authorization as tool calls. Use an explicit current CLI, project-read, or service-account bearer credential. Cookie-only and mixed-cookie requests, preview-only or deploy-only grants, impersonation, a different project scope, supplied cross-origin Origin, and cross-site Fetch Metadata are refused. Nonbrowser clients may omit Origin.
+
+Tool arguments are closed: either `{sessionId}` for one retained session or `{limit?,before?}` for a list. `limit` is an integer from 1 through 20; `before` is the unchanged opaque cursor from the previous page, at most 512 characters. Do not send a project ID in arguments. Structured content matches the authenticated GET status DTO, including unchanged legacy reports, version-two counters, null pruned reports, disabled policy, and local-only elapsed time. Text content contains the same JSON. The whole MCP response, including both copies, is bounded to 1 MiB; the JSON request body is bounded to 8 KiB. There are no mutation tools, MCP sessions, Apps, streaming, OAuth discovery, browser CORS, or status cache.
+
+The mount requires separate private evidence captured from the original native POST target before Fetch normalization. Raw targets are bounded to 1,024 ASCII bytes and captured absolute URLs to 2,048 ASCII bytes. Encoded or dot-segment aliases, query or fragment delimiters, backslashes and double slashes are ineligible. This proof cannot authorize a caller: the exact Request method, URL, headers, current principal and native authority are checked again after body/framework awaits and serialization, immediately before returning the response. Clone or replacement Requests and direct `platform.handle(new Request(...))` lack this evidence and receive `403 SHADOW_MCP_TRANSPORT_UNAVAILABLE` before framework body parsing. Use GET status or the native listener with unsupported adapters; do not synthesize proof. An upstream proxy that already normalized the target is outside this guarantee—the proof covers bytes received by Clank's listener.
+
+Refusal before framework parsing does not promise an early socket response: the ordinary native adapter may finish cancelling an unread upload before writing its refusal. Native HTTP tests distinguish this transport cleanup from parser admission, retain Node parser refusals separately, and exercise actual credential revocation during held bodies and after response serialization. The new target evidence does not widen anonymous observation eligibility, and the endpoint performs no provider, sampling, retirement, or deployment work. These component checks do not establish browser, privileged provider isolation, or complete Feature09 acceptance.
+
+### Detached shadow observations
+
+Only the native HTTP adapter can establish the exact anonymous GET/HEAD request proof. An approved exact path with no query, body, credentials or custom headers may be selected against the live owner’s immutable policy. Cloned Requests and changed headers lose eligibility. The primary observer and body callbacks update fixed memory facts only: they do not read SQLite, reserve a sample, fetch, clone/tee a body, or read ahead. The adapter schedules a one-shot handoff after an actual primary write/end; only its detached task can commit the sample reservation and submit a candidate request. This removes a candidate dependency from delivery, but does not promise independent CPU scheduling within the shared process.
+
+Each observation keeps its original monotonic deadline, bounded by the configured request duration and remaining session lifetime. At most sixteen ephemeral or running observations occupy the leader, also bounded by each session’s concurrency; capacity exhaustion never queues traffic. Waiting for handoff and uncertain cancellation still consume that occupancy. The candidate receives a new request containing only the approved method/path, optional bounded Accept, fixed identity/no-store headers and private candidate ingress identity. There is no retry, redirect, primary fallback, or forwarding of user credentials. Candidate bytes are discarded within the configured limit; primary bytes continue unchanged, even when observation is detached.
+
+Native supervisor/project ownership, the initiating principal, immutable policy and exact primary/candidate state are checked around detached awaits and reservation/settlement transactions. Concurrent samples adopt the latest committed owner record. A report comparison requires both bounded EOFs and valid metadata; equal status classes or media types are transport observations, not semantic correctness. Missing, unread, oversized or cancelled bodies remain incomplete. A native lease loss leaves outstanding ordinals for successor interruption instead of allowing stale settlement. Stop disables intake before cancellation and exact retirement; an uncertain task or absence keeps the durable writer barrier. Restart does not replay sample requests.
+
+Native component tests cover actual first-byte delivery while a separate SQLite writer holds reservation contention, parallel accounting, bounded capacity, deadline/authority loss and ignored or altered writes. Actual process tests cover SIGKILL/SIGSTOP with a committed sample reservation and disabled-policy recovery. Their runtime launcher remains a fixture. The certificate-gated public observer tests require separate disposable-host execution; no Docker runtime isolation, browser acceptance or completed Feature09 claim follows from local component tests.

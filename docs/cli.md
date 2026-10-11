@@ -354,6 +354,40 @@ pre-upgrade history and the declared-response-byte boundary. `--json` returns th
 `clank-usage/1` API document without calculating prices or invoices. See
 [Usage accounting and traffic limits](usage-and-limits.md).
 
+## Shadow comparison status
+
+```sh
+clank shadow status
+clank shadow status ../linked-app --json
+clank shadow status --session shadow_EXACT_SESSION --json
+```
+
+This read-only command uses the linked project's current credential to list retained shadow
+sessions or inspect one exact session. `--json` emits the same safe status document as the
+Console. The CLI cannot upload, preview, start, stop, or recover a shadow session; those actions
+require the Console's current human session, deploy permission, CSRF protection, and fresh
+passkey or MFA verification. A failed status request is not retried automatically. Malformed or mismatched status
+documents fail before human or JSON output; they never imply disabled policy or an empty history.
+Validation includes canonical, unique read paths and methods, and excludes definitely incomplete
+attempts from the both-complete count. A later invalid content type or authority loss can still
+follow completed bounded bodies. Lists contain at most 20 sessions. The Console passes the
+opaque, canonical `clankshc1` cursor (at most 512 ASCII bytes) unchanged; an invalid or stale
+cursor requires an explicit refresh. Exact session IDs may begin with `-` or `_`.
+
+Version-two reports retain the six fixed skip counters as saturating best-effort lower bounds;
+they never enter comparison or latency denominators. Legacy reports remain unchanged without
+invented skip values. Large JSON output waits for the actual stdout write callback before the
+command completes. A pipe write failure fails the command; bytes already submitted cannot be
+retracted if authorization changes afterward.
+
+Human output keeps the immutable original `controllerEpoch` separate from the current retained
+`epoch` status version. It reports reserved, settled, comparable and unknown attempts, fixed
+cumulative latency buckets, and whether cleanup still needs acknowledgment. Missing full reports
+remain visible as compact terminal receipts. An isolated checkpoint's provider acquisition interval
+and platform observation time do not establish its age across hosts; cross-host freshness remains
+unknown. Transport aggregates do not establish semantic correctness or authorize deployment.
+See [Shadow operator controls](deployment-platform.md#shadow-operator-controls).
+
 ## Account plan and entitlements
 
 ```sh
