@@ -47,9 +47,12 @@ const cases=[['created bootstrap initializes capture but admits no ordinary writ
 for(const [name,mode] of cases)test(name,async t=>{
  const f=await fixture(t);if(mode==='refuse')f.mutate(db=>db.exec("UPDATE clank_provider_handoff_source_grant SET state='revoked'"));
  const p=await child(t,f,mode),first=await p.next();
- if(mode==='normal'){assert.equal(first.phase,'initialized');p.send({});assert.deepEqual(await p.next(),{ok:true,records:0});const db=new DatabaseSync(f.database,{readOnly:true});try{assert.equal(db.prepare('SELECT sequence FROM clank_pitr_state').get().sequence,0);assert.equal(db.prepare('SELECT count(*) AS n FROM clank_pitr_journal').get().n,0);}finally{db.close();}}
+ if(mode==='normal'){assert.equal(first.phase,'initialized');p.send({});assert.deepEqual(await p.next(),{ok:true,records:0});}
  else assert.equal(first.ok,true);
+ // The result is written before the child closes its runtime. Wait for actual
+ // exit before opening an independent reader across native close-time writes.
  await p.done();
+ if(mode==='normal'){const db=new DatabaseSync(f.database,{readOnly:true});try{assert.equal(db.prepare('SELECT sequence FROM clank_pitr_state').get().sequence,0);assert.equal(db.prepare('SELECT count(*) AS n FROM clank_pitr_journal').get().n,0);}finally{db.close();}}
  if(mode!=='normal')assert.deepEqual(fs.readdirSync(f.app).filter(name=>name.startsWith('.clank-source-recovery-')),[]);
 });
 test('fresh native grant revocation denies the next managed write',async t=>{const f=await fixture(t),p=await child(t,f);assert.equal((await p.next()).phase,'initialized');f.mutate(db=>db.exec("UPDATE clank_provider_handoff_source_grant SET state='revoked'"));p.send({revoke:true});assert.deepEqual(await p.next(),{ok:true,records:0});await p.done();});

@@ -19,7 +19,7 @@ const hash=value=>createHash('sha256').update(value).digest('hex');
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const testGates=new Set();
 const gate=()=>{let resolve;const promise=new Promise(done=>resolve=done);const item={promise,settled:false,resolve:()=>{item.settled=true;testGates.delete(item);resolve()}};testGates.add(item);return item};
-async function until(check,label,ms=3000){const end=performance.now()+ms;while(performance.now()<end){const result=check();if(result)return result;await delay(5)}throw new Error('Timed out: '+label)}
+async function until(check,label,ms=10000){const end=performance.now()+ms;while(performance.now()<end){const result=check();if(result)return result;await delay(5)}throw new Error('Timed out: '+label)}
 async function fixture(t,options={}){
  const root=await mkdtemp(join(tmpdir(),'clank-shadow-observer-')),path=join(root,'control.sqlite');
  const lease=await openSupervisorLease(path,{configurationId:'shadow-observer',configurationRevision:1,leaseMs:30000,pollIntervalMs:50});assert.equal(lease.acquire(),true);
@@ -56,7 +56,7 @@ async function fixture(t,options={}){
   const record=await controller.start(project,{kind:'shadow',sessionId,operationId:'op_'+randomUUID(),idempotencyKeyDigest:hash(sessionId),inputDigest:hash('input'+sessionId),reviewDigest:hash('review'+sessionId),releaseId:'candidate',artifactSha256:hash('artifact'),capsuleSha256:null,controllerEpoch:epoch,retirementEpoch:epoch,primary:null,primaryReleaseId:'release_primary',primaryFence:1,nodeId:'node',origin:target,credentialGeneration:1,policyRevision:configured.revision,policyDigest:hash(JSON.stringify(configured)),policy:shadow.narrowShadowPolicy(configured,{}),maxReports:configured.maxReports,phase:'binding',outcome:null,stopRequested:false,snapshot:null,report:shadow.emptyShadowReport(2),reservations:[],retirement:null,createdAt:now,expiresAt:now+configured.maxDurationMs,updatedAt:now},()=>{});
   await until(()=>read(project)?.operation.phase==='observing','real native observing owner');return record;
  };
- const request=({project='projecttest',path='/catalog',method='GET',headers={},firstByte}={})=>new Promise((resolve,reject)=>{const req=httpRequest(new URL(path,server.url),{method,headers:{host:project+'.test',...headers}},res=>{const chunks=[];res.on('data',chunk=>{firstByte?.();firstByte=null;chunks.push(chunk)});res.on('end',()=>resolve({status:res.statusCode,body:Buffer.concat(chunks).toString()}));res.on('error',reject)});req.on('error',reject);req.end()});
+ const request=({project='projecttest',path='/catalog',method='GET',headers={},firstByte}={})=>new Promise((resolve,reject)=>{const req=httpRequest(new URL(path,server.url),{method,agent:false,headers:{host:project+'.test',...headers}},res=>{const chunks=[];res.on('data',chunk=>{firstByte?.();firstByte=null;chunks.push(chunk)});res.on('end',()=>resolve({status:res.statusCode,body:Buffer.concat(chunks).toString()}));res.on('error',reject)});req.on('error',reject);req.end()});
  t.after(async()=>{for(const item of [...testGates,...gates])item.resolve();await controller.close();await server.close();for(const native of[primary,candidate]){native.closeAllConnections();await new Promise(resolve=>native.close(resolve))}orchestrator.close();database.close();sql.close();lease.close();await rm(root,{recursive:true,force:true})});
  return{root,sql,internal,controller,lease,read,start,request,events,errors,url:server.url,gate:()=>{const item=gate();gates.push(item);return item},revoke:()=>{admitted=false},target,route,assertDetached:()=>assert.equal(callbackDepth,0,'Candidate cancellation must not run in a primary callback')};
 }
@@ -187,7 +187,7 @@ test('post-header cancellation beyond the original deadline retains global occup
 
 test('rejected native response without a reader retains cancellation occupancy and the durable stop barrier',async t=>{
  const body=gate(),cancelRelease=gate(),nativeFetch=globalThis.fetch;let pendingCancellation=false,first=true;
- const f=await fixture(t,{productionRequest:true,policy:{maxRequestMs:250,maxConcurrent:16,maxDurationMs:30000},candidate:async(req,res)=>{res.setHeader('content-type','application/json');if(f.events.length===1)res.setHeader('content-encoding','identity');res.write('prefix');await body.promise;res.end('suffix')}});
+ const f=await fixture(t,{productionRequest:true,policy:{maxRequestMs:2000,maxConcurrent:16,maxDurationMs:30000},candidate:async(req,res)=>{res.setHeader('content-type','application/json');if(f.events.length===1)res.setHeader('content-encoding','identity');res.write('prefix');await body.promise;res.end('suffix')}});
  t.after(()=>{globalThis.fetch=nativeFetch});
  globalThis.fetch=async(...args)=>{
   const response=await nativeFetch(...args);
@@ -223,7 +223,7 @@ test('rejected native response without a reader retains cancellation occupancy a
 for(const firstReleased of ['read','cancel'])test('deadline independently cancels native reader and retains both observed completions: '+firstReleased+' first',async t=>{
  const body=gate(),readRelease=gate(),cancelRelease=gate(),nativeFetch=globalThis.fetch;
  let intercepted=false,readStarted=false,readDelivered=false,cancelStarted=false,cancelDelivered=false,nativeReadSettled=false,nativeCancelSettled=false;
- const f=await fixture(t,{productionRequest:true,policy:{maxRequestMs:400,maxConcurrent:16,maxDurationMs:30000},candidate:async(req,res)=>{res.setHeader('content-type','application/json');res.write('prefix');await body.promise;res.end('suffix')}});
+ const f=await fixture(t,{productionRequest:true,policy:{maxRequestMs:2000,maxConcurrent:16,maxDurationMs:30000},candidate:async(req,res)=>{res.setHeader('content-type','application/json');res.write('prefix');await body.promise;res.end('suffix')}});
  t.after(()=>{globalThis.fetch=nativeFetch});
  globalThis.fetch=async(...args)=>{
   const response=await nativeFetch(...args);
@@ -264,7 +264,7 @@ for(const firstReleased of ['read','cancel'])test('deadline independently cancel
 
 test('late native headers consume cancellation intent without acquiring a reader',async t=>{
  const body=gate(),headersRelease=gate(),cancelRelease=gate(),nativeFetch=globalThis.fetch;let intercepted=false,headersReceived=false,cancelStarted=false,cancelDelivered=false,reads=0;
- const f=await fixture(t,{productionRequest:true,policy:{maxRequestMs:200},candidate:async(req,res)=>{res.setHeader('content-type','application/json');res.write('prefix');await body.promise;res.end('suffix')}});
+ const f=await fixture(t,{productionRequest:true,policy:{maxRequestMs:2000},candidate:async(req,res)=>{res.setHeader('content-type','application/json');res.write('prefix');await body.promise;res.end('suffix')}});
  t.after(()=>{globalThis.fetch=nativeFetch});
  globalThis.fetch=async(...args)=>{const response=await nativeFetch(...args);if(!intercepted&&String(args[0]).startsWith(f.target+'/candidate/')){
   intercepted=true;headersReceived=true;const getReader=response.body.getReader.bind(response.body),cancel=response.body.cancel.bind(response.body);

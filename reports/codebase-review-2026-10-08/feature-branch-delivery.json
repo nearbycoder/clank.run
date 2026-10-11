@@ -142,5 +142,72 @@
       ],
       "qualification": "Package tests completed in approximately13minutes; Node24 was still progressing when its15minute limit expired; Node22 stalled at an unbounded cancellation marker."
     }
+  },
+  "hostedPhaseAndCloseCorrection": {
+    "priorHead": "85c2f38e435f8356796501d628b278a5640f2f68",
+    "unchangedAssertions": 298,
+    "unchangedOutputs": 320,
+    "testHashes": {
+      "tests/managed-shadow-observer.test.mjs": "724c3ac2b72f7ab0e7d876cbde263629276fd17033556ff0c395e958fc26fea4",
+      "tests/provider-handoff-runtime.test.mjs": "f17bb4fd4d31352e269caf6c447bc36e7c358b71604601896be48fa997281a62"
+    },
+    "runtimes": [
+      "22.16",
+      "24.21",
+      "26.10"
+    ],
+    "actualCoverageEachRuntime": {
+      "observerLifecycleStatusPlatformTarget": 101,
+      "handoffRuntime": 87
+    },
+    "controlledBeforeAfterEachRuntime": {
+      "admissionDeadlineCases": 4,
+      "secondaryBatchCompletion": 1,
+      "nativeCloseLock": 1
+    },
+    "hostedBefore": {
+      "successfulChecks": 5,
+      "node24": {
+        "reported": 3462,
+        "passed": 3424,
+        "failed": 1,
+        "cancelled": 0,
+        "skipped": 37
+      },
+      "node22": {
+        "reported": 3462,
+        "passed": 3422,
+        "failed": 3,
+        "cancelled": 0,
+        "skipped": 37
+      },
+      "package": {
+        "reported": 3462,
+        "passed": 3419,
+        "failed": 6,
+        "cancelled": 0,
+        "skipped": 37
+      },
+      "qualification": "All three complete jobs finished within the increased25minute window; failures retained. Node24 failed the independent SQLite read racing child close. Node22 also failed secondary cleanup observation and late native header setup. Package additionally observed primary ECONNRESET, rejected-response setup before cancellation and both reader/cancel setup deadlines."
+    },
+    "qualification": "Fixture-only changes. Native independent persisted state reads now follow confirmed child exit. Actual2s deadline scenarios and bounded10s observations separate native setup from held cancellation/batch completion; strict16/15/1capacity, independent read/cancel completion, late-header no-reader and all298assertions unchanged. Primary fixture HTTP requests use dedicated connections, avoiding shared keep-alive pool dependence; exact hosted ECONNRESET cause is not established. Controlled750ms actual owned candidate fetch delay and6s secondary response completion fail before and pass after. Explicit rollback-journal exclusive lock until child stdin EOF fails before and passes after; initial WAL lock probe passed and remains qualified. Production source/limits,320outputs, exported types/package/dependencies,25minuteCI windows and main protections unchanged. No feature acceptance increment.",
+    "evidence": {
+      "shadow": {
+        "path": "/tmp/clank-review-2026-10-08/shadow-observer-phase-races-01/results-02.json",
+        "sha256": "ef3c116614510fc6022c0c12224e08086739414db41ba820ee193de8ab0fc85d"
+      },
+      "handoff": {
+        "path": "/tmp/clank-review-2026-10-08/handoff-bootstrap-close-race-01/verified-boundary-04.json",
+        "sha256": "cdb5eeb2ca77f06b27961a0e83433944648c215f5f383b413b1760b96fe7edfa"
+      },
+      "assertions": {
+        "path": "/tmp/clank-review-2026-10-08/shadow-observer-phase-races-01/assertion-parity-03.json",
+        "sha256": "632535d49d84225e532dd55537ccdd9b87a9185f3a179eabf36423fe994b7d68"
+      }
+    },
+    "immutableBoundary": {
+      "path": "/tmp/clank-review-2026-10-08/shadow-observer-phase-races-01/publication-boundary-04.json",
+      "sha256": "a3e931cdd6cfb2d366c068098ddd5ae96d59efb8ffd17862f67e442070bc4b21"
+    }
   }
 }
