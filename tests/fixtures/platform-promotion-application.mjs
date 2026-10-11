@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 const { label, stopWrite, stopBarrier } = JSON.parse(readFileSync(new URL('./fixture-config.json', import.meta.url), 'utf8'));
 const db = new DatabaseSync(process.env.CLANK_DATABASE_PATH);
@@ -15,7 +15,7 @@ const server = createServer(async (request, response) => {
     return;
   }
   if (request.url === '/held' && label === 'canary-candidate' && process.env.CANARY_REQUEST_HOLD) {
-    writeFileSync(process.env.CANARY_REQUEST_ENTERED, 'admitted');
+    appendFileSync(process.env.CANARY_REQUEST_ENTERED, `${process.pid}\n`);
     while (existsSync(process.env.CANARY_REQUEST_HOLD)) await new Promise(resolve => setTimeout(resolve, 10));
   }
   if (request.url.startsWith('/write/')) db.prepare('UPDATE sample SET value=?').run(decodeURIComponent(request.url.slice(7)));
