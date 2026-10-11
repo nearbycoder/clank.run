@@ -31,11 +31,19 @@ export type ShadowUnknownReason = "not-submitted" | "candidate-timeout" | "candi
   | "primary-incomplete" | "primary-oversized" | "cancelled" | "authority-lost" | "interrupted" | "persistence-uncertain" | "content-type-invalid";
 interface ShadowLatency { readonly cumulative: readonly number[]; readonly overflow: number; readonly unknown: number; }
 /** @internal Transport aggregates carry no response body, identity or arbitrary header key. */
-export interface ShadowReport {
+interface ShadowReportBody {
   readonly counters: Readonly<{ reserved: number; settled: number; comparable: number; statusClassEqual: number; statusClassDifferent: number;
     mediaTypeEqual: number; mediaTypeDifferent: number; bothComplete: number; unknown: Readonly<Record<ShadowUnknownReason, number>> }>;
   readonly latency: Readonly<{ primary: ShadowLatency; candidate: ShadowLatency }>;
 }
+
+export type ShadowSkipReason = "ineligible" | "sampled-out" | "capacity" | "attempt-limit" | "handoff-timeout" | "withdrawn";
+export type ShadowSkips = Readonly<Record<ShadowSkipReason,number>>;
+export interface ShadowLegacyReport extends ShadowReportBody { readonly protocol?: never; readonly skips?: never; }
+export interface ShadowReportV2 extends ShadowReportBody { readonly protocol: 2; readonly skips: ShadowSkips; }
+export type ShadowReport = ShadowLegacyReport | ShadowReportV2;
+const shadowSkipReasons: readonly ShadowSkipReason[] = Object.freeze(["ineligible","sampled-out","capacity","attempt-limit","handoff-timeout","withdrawn"]);
+const shadowSkipMaximum = 2147483647;
 
 /** @internal The status version is separate from the immutable provider retirement identity. */
 export type ShadowPhase = "binding" | "preparing" | "observing" | "retiring" | "retired" | "complete";
@@ -136,15 +144,23 @@ export function narrowShadowPolicy(policy: PlatformShadowPolicy, value: unknown)
     maxResponseBytes:number("maxResponseBytes",current.maxResponseBytes),requestMs:number("requestMs",current.maxRequestMs)});
 }
 
-export function emptyShadowReport(): ShadowReport {
+export function emptyShadowReport(version?: 1): ShadowLegacyReport;
+export function emptyShadowReport(version: 2): ShadowReportV2;
+export function emptyShadowReport(version: 1 | 2 = 1): ShadowReport {
+  if(version!==1 && version!==2)shadowInvalid("SHADOW_REPORT_INVALID");
   const unknown = Object.fromEntries(shadowUnknownReasons.map(reason=>[reason,0])) as Record<ShadowUnknownReason,number>;
   const latency = () => ({cumulative:shadowLatencyBuckets.map(()=>0),overflow:0,unknown:0});
-  return normalizeShadowReport({counters:{reserved:0,settled:0,comparable:0,statusClassEqual:0,statusClassDifferent:0,mediaTypeEqual:0,mediaTypeDifferent:0,bothComplete:0,unknown},latency:{primary:latency(),candidate:latency()}},10000);
+  const body={counters:{reserved:0,settled:0,comparable:0,statusClassEqual:0,statusClassDifferent:0,mediaTypeEqual:0,mediaTypeDifferent:0,bothComplete:0,unknown},latency:{primary:latency(),candidate:latency()}};
+  return normalizeShadowReport(version===2?{protocol:2,...body,skips:Object.fromEntries(shadowSkipReasons.map(reason=>[reason,0]))}:body,10000);
 }
 
 /** @internal Fail closed before publishing or replaying a retained aggregate. */
 export function normalizeShadowReport(value: unknown, maxAttempts: number): ShadowReport {
-  const code = "SHADOW_REPORT_INVALID",maximum = shadowNumber(maxAttempts,10000,code),input = closedShadowObject(value,["counters","latency"],code);
+  const code = "SHADOW_REPORT_INVALID",maximum = shadowNumber(maxAttempts,10000,code);
+  const versioned=Boolean(value && typeof value==="object" && Object.hasOwn(value,"protocol"));
+  const input=closedShadowObject(value,versioned?["protocol","counters","latency","skips"]:["counters","latency"],code);
+  if(versioned && input.protocol!==2)shadowInvalid(code);
+  const skips=versioned?normalizeShadowSkips(input.skips):undefined;
   const counterKeys = ["reserved","settled","comparable","statusClassEqual","statusClassDifferent","mediaTypeEqual","mediaTypeDifferent","bothComplete","unknown"];
   const raw = closedShadowObject(input.counters,counterKeys,code),rawUnknown = closedShadowObject(raw.unknown,shadowUnknownReasons,code);
   const count = (number: unknown) => shadowNumber(number,maximum,code,0);
@@ -166,7 +182,23 @@ export function normalizeShadowReport(value: unknown, maxAttempts: number): Shad
     if (cumulative.some((value,index)=>index > 0 && value < cumulative[index-1]) || cumulative[cumulative.length-1]+overflow+unknown !== counters.settled) shadowInvalid(code);
     return Object.freeze({cumulative:Object.freeze(cumulative),overflow,unknown});
   };
-  return Object.freeze({counters,latency:Object.freeze({primary:histogram(latency.primary),candidate:histogram(latency.candidate)})});
+  const body={counters,latency:Object.freeze({primary:histogram(latency.primary),candidate:histogram(latency.candidate)})};
+  return skips?Object.freeze({protocol:2 as const,...body,skips}):Object.freeze(body);
+}
+
+function normalizeShadowSkips(value: unknown): ShadowSkips {
+  const code="SHADOW_REPORT_INVALID",raw=closedShadowObject(value,shadowSkipReasons,code);
+  return Object.freeze(Object.fromEntries(shadowSkipReasons.map(reason=>[reason,shadowNumber(raw[reason],shadowSkipMaximum,code,0)])) as Record<ShadowSkipReason,number>);
+}
+/** @internal Fixed best-effort skip totals never affect sample denominators. */
+export function addShadowSkips(report: ShadowReportV2, increments: ShadowSkips, maxAttempts: number): ShadowReportV2 {
+  const before=normalizeShadowReport(report,maxAttempts),added=normalizeShadowSkips(increments);
+  if(before.protocol!==2)shadowInvalid("SHADOW_REPORT_INVALID");
+  const skips=Object.fromEntries(shadowSkipReasons.map(reason=>[reason,Math.min(shadowSkipMaximum,before.skips[reason]+added[reason])]));
+  return normalizeShadowReport({...before,skips},maxAttempts) as ShadowReportV2;
+}
+function assertShadowReportSchema(connection: ShadowRead, report: ShadowReport): void {
+  if(report.protocol===2 && assertProviderShadowSchema(shadowSchemaRead(connection)).version!==3)shadowInvalid("SHADOW_STATE_INVALID");
 }
 
 const shadowOutcomes: readonly ShadowOutcome[] = Object.freeze(["stopped","expired","attempt-limit","interrupted","authority-revoked","policy-changed","primary-changed","provider-error"]);
@@ -241,7 +273,7 @@ export function normalizeShadowOperation(value: unknown, projectId: string, epoc
     retirement=Object.freeze({...value,primary:bound}) as unknown as DeploymentProviderCanaryRetirement;
   }
   if(!["binding","complete"].includes(operation.phase) && (!primary || !operation.capsuleSha256)
-    || operation.phase==="binding" && (primary!==null || snapshot!==null || retirement!==null || operation.outcome!==null || report.counters.reserved!==0)
+    || operation.phase==="binding" && (primary!==null || snapshot!==null || retirement!==null || operation.outcome!==null || report.counters.reserved!==0 || report.protocol===2 && Object.values(report.skips).some(value=>value!==0))
     || ["preparing","observing"].includes(operation.phase) && (operation.outcome!==null || retirement!==null)
     || operation.phase==="observing" && snapshot===null
     || ["retiring","retired","complete"].includes(operation.phase) && operation.outcome===null
@@ -327,7 +359,7 @@ function decodeReplay(row: Record<string,unknown>, projectId: string, hash: Shad
     report=normalizeShadowReport(JSON.parse(row.report_json),identity.policy.maxAttempts);
     if(JSON.stringify(report)!==row.report_json || reportDigest(identity,report,hash)!==receipt.reportDigest)shadowInvalid(code);
   } else if(identity.phase!=="complete")shadowInvalid(code);
-  if(report && (identity.phase==="binding" ? report.counters.reserved!==0 : report.counters.reserved!==report.counters.settled))shadowInvalid(code);
+  if(report && (identity.phase==="binding" ? report.counters.reserved!==0 || report.protocol===2 && Object.values(report.skips).some(value=>value!==0) : report.counters.reserved!==report.counters.settled))shadowInvalid(code);
   return Object.freeze({receipt,report});
 }
 function replayMirror(rows: readonly ShadowReplay[], hash: ShadowHash): string {
@@ -338,7 +370,9 @@ export function readShadowReplays(connection: ShadowRead, projectId: string, has
   shadowId(projectId);
   const raw=connection.prepare("SELECT * FROM clank_platform_shadow_reports WHERE project_id=? ORDER BY session_id LIMIT 1025").all(projectId);
   if(raw.length>1024)shadowInvalid("SHADOW_STATE_INVALID");
-  const rows=Object.freeze(raw.map(row=>decodeReplay(row,projectId,hash))),project=connection.prepare("SELECT shadow_replay_receipt FROM clank_platform_projects WHERE id=?").get(projectId);
+  const rows=Object.freeze(raw.map(row=>decodeReplay(row,projectId,hash)));
+  const versioned=rows.find(row=>row.report?.protocol===2);if(versioned?.report)assertShadowReportSchema(connection,versioned.report);
+  const project=connection.prepare("SELECT shadow_replay_receipt FROM clank_platform_projects WHERE id=?").get(projectId);
   if(rows.filter(row=>row.receipt.identity.phase==="binding").length>1 || rows.filter(row=>row.receipt.identity.phase==="complete" && row.report!==null).length>100)shadowInvalid("SHADOW_STATE_INVALID");
   if(!project || project.shadow_replay_receipt!==replayMirror(rows,hash) && !(rows.length===0 && project.shadow_replay_receipt===null))shadowInvalid("SHADOW_STATE_INVALID");
   return rows;
@@ -346,7 +380,7 @@ export function readShadowReplays(connection: ShadowRead, projectId: string, has
 /** @internal Invoke only inside the platform's guarded native transaction, alongside its shared journal CAS. */
 export function writeShadowReplay(connection: SQLiteInternal, projectId: string, record: ShadowRecord, previous: readonly ShadowReplay[], hash: ShadowHash): void {
   if(!connection.inTransaction)shadowInvalid("SHADOW_STATE_INVALID");
-  const identity=replayIdentity(projectId,record),report=record.operation.report;
+  const identity=replayIdentity(projectId,record),report=record.operation.report;assertShadowReportSchema(connection,report);
   const receipt=Object.freeze({protocol:1 as const,identity,reportDigest:reportDigest(identity,report,hash)}),serialized=shadowBoundedJson(receipt,16*1024);
   const existing=previous.find(row=>row.receipt.identity.sessionId===identity.sessionId);
   if(existing){
@@ -396,8 +430,8 @@ function sameReplayAdmission(identity: ShadowReplayIdentity, operation: ShadowOp
 export function assertShadowReplay(connection: ShadowRead, projectId: string, record: ShadowRecord, hash: ShadowHash): void {
   const row=connection.prepare("SELECT * FROM clank_platform_shadow_reports WHERE project_id=? AND session_id=?").get(projectId,record.operation.sessionId);
   if(!row)shadowInvalid("SHADOW_STATE_INVALID");
-  const replay=decodeReplay(row,projectId,hash);
-  if(!sameReplayAdmission(replay.receipt.identity,record.operation)
+  const replay=decodeReplay(row,projectId,hash);assertShadowReportSchema(connection,record.operation.report);if(replay.report)assertShadowReportSchema(connection,replay.report);
+  if(replay.report && replay.report.protocol!==record.operation.report.protocol || !sameReplayAdmission(replay.receipt.identity,record.operation)
     || record.operation.phase==="complete" && JSON.stringify(replay.receipt.identity)!==JSON.stringify(replayIdentity(projectId,record))
     || record.operation.phase!=="complete" && replay.receipt.identity.phase!=="binding")shadowInvalid("SHADOW_STATE_INVALID");
 }
@@ -406,7 +440,7 @@ export function saveShadowRecord(connection: SQLiteInternal, projectId: string, 
   const epoch=shadowInteger((prior?.epoch??0)+1),serialized=JSON.stringify(operation);
   const record=readShadowRecord({project_id:projectId,protocol:2,epoch,operation:serialized,updated_at:operation.updatedAt},projectId,hash);
   const write=()=>{
-    current();
+    current();assertShadowReportSchema(connection,record.operation.report);
     const before=connection.prepare("SELECT * FROM clank_platform_provider_canaries WHERE project_id=?").get(projectId);
     const project=connection.prepare("SELECT provider_canary_epoch FROM clank_platform_projects WHERE id=?").get(projectId);
     if(!project || project.provider_canary_epoch!==(prior?.epoch??0) || (prior ? !before || before.epoch!==prior.epoch || before.operation!==prior.serialized : Boolean(before)))shadowInvalid("SHADOW_STATE_INVALID");
@@ -416,8 +450,9 @@ export function saveShadowRecord(connection: SQLiteInternal, projectId: string, 
     if(admission && Number(connection.prepare("SELECT count(*) AS total FROM clank_platform_provider_canaries WHERE protocol=2 AND json_extract(operation,'$.phase')<>'complete'").get()?.total)>=16)shadowInvalid("SHADOW_CAPACITY");
     if(before?.protocol===2){const old=readShadowRecord(before,projectId,hash);assertShadowReplay(connection,projectId,old,hash);
       if(old.operation.phase!=="complete"){
-        const op=old.operation,allowed:Record<ShadowPhase,readonly ShadowPhase[]>={binding:["binding","preparing","complete"],preparing:["preparing","observing","retiring"],observing:["observing","retiring"],retiring:["retiring","retired"],retired:["complete"],complete:[]};
+        const op=old.operation,beforeSkips=op.report.skips,afterSkips=operation.report.skips,allowed:Record<ShadowPhase,readonly ShadowPhase[]>={binding:["binding","preparing","complete"],preparing:["preparing","observing","retiring"],observing:["observing","retiring"],retiring:["retiring","retired"],retired:["complete"],complete:[]};
         if(op.sessionId!==operation.sessionId || op.controllerEpoch!==operation.controllerEpoch || !allowed[op.phase].includes(operation.phase)
+          || op.report.protocol!==operation.report.protocol || beforeSkips && afterSkips && shadowSkipReasons.some(reason=>afterSkips[reason]<beforeSkips[reason])
           || operation.updatedAt<op.updatedAt || op.stopRequested && !operation.stopRequested || operation.report.counters.reserved<op.report.counters.reserved || operation.report.counters.settled<op.report.counters.settled
           || op.capsuleSha256!==null && operation.capsuleSha256!==op.capsuleSha256 || op.primary!==null && JSON.stringify(op.primary)!==JSON.stringify(operation.primary)
           || op.snapshot!==null && JSON.stringify(op.snapshot)!==JSON.stringify(operation.snapshot) || op.retirement!==null && JSON.stringify(op.retirement)!==JSON.stringify(operation.retirement)
@@ -449,7 +484,7 @@ function shadowCurrent(adapter:ShadowLifecycleAdapter,projectId:string,record:Sh
 }
 function interruptedShadowReport(operation:ShadowOperation):ShadowReport {
   const count=operation.reservations.length,report=operation.report;
-  return normalizeShadowReport({counters:{...report.counters,settled:report.counters.settled+count,unknown:{...report.counters.unknown,interrupted:report.counters.unknown.interrupted+count}},
+  return normalizeShadowReport({...report,counters:{...report.counters,settled:report.counters.settled+count,unknown:{...report.counters.unknown,interrupted:report.counters.unknown.interrupted+count}},
     latency:{primary:{...report.latency.primary,unknown:report.latency.primary.unknown+count},candidate:{...report.latency.candidate,unknown:report.latency.candidate.unknown+count}}},operation.policy.maxAttempts);
 }
 /** @internal Shared by the live owner and real platform startup, including policy-disabled recovery. */
@@ -670,7 +705,29 @@ export function assertShadowReviewReplay(payload:ShadowReviewPayload,identity:Sh
 
 /** @internal Schema identity is separate from per-session policy and enablement. */
 export const shadowSchemaIdentity = "clank-platform-shadow/2";
-export interface ShadowSchemaIdentity { readonly enrollmentId: string; readonly version: 1 | 2; }
+export const shadowReportSchemaIdentity = "clank-platform-shadow/3";
+export interface ShadowSchemaIdentity { readonly enrollmentId: string; readonly version: 1 | 2 | 3; }
+function shadowSchemaRead(connection: ShadowRead): ShadowRead {
+  return {prepare:sql=>connection.prepare(sql==="PRAGMA table_list"?"SELECT * FROM pragma_table_list":sql)};
+}
+/** @internal Commit the compatibility barrier before separate supervisor enrollment or v2 intent. */
+export function upgradeShadowReportSchema(connection: SQLiteInternal, current:()=>void): ShadowSchemaIdentity {
+  if(connection.inTransaction)shadowInvalid("SHADOW_STATE_INVALID");
+  let retained:ShadowSchemaIdentity|undefined;
+  connection.transaction(()=>{
+    current();const schema=shadowSchemaRead(connection),before=assertProviderShadowSchema(schema);
+    if(before.version!==2 && before.version!==3)shadowInvalid("SHADOW_STATE_INVALID");
+    if(before.version===2){
+      const changed=connection.prepare("UPDATE clank_platform_shadow_state SET schema_id=? WHERE singleton=1 AND protocol=1 AND enrollment_id=? AND schema_id=?")
+        .run(shadowReportSchemaIdentity,before.enrollmentId,shadowSchemaIdentity);
+      if(Number(changed.changes)!==1)shadowInvalid("SHADOW_STATE_INVALID");
+    }
+    retained=assertProviderShadowSchema(schema);
+    if(retained.version!==3 || retained.enrollmentId!==before.enrollmentId)shadowInvalid("SHADOW_STATE_INVALID");
+    current();
+  });
+  current();return retained!;
+}
 
 /** @internal Read only: protocol-three startup must never reconstruct missing state. */
 export function assertProviderShadowSchema(connection: Pick<SQLiteInternal, "prepare">): ShadowSchemaIdentity {
@@ -703,9 +760,9 @@ export function assertProviderShadowSchema(connection: Pick<SQLiteInternal, "pre
     || !releases.some(column => column.name === "upload_request_digest" && column.type === "TEXT" && column.notnull === 0)) invalid();
   const rows = connection.prepare("SELECT * FROM clank_platform_shadow_state LIMIT 2").all();
   const row = rows[0];
-  if (rows.length !== 1 || row.singleton !== 1 || row.protocol !== 1 || !["clank-platform-shadow/1", shadowSchemaIdentity].includes(String(row.schema_id))
+  if (rows.length !== 1 || row.singleton !== 1 || row.protocol !== 1 || !["clank-platform-shadow/1", shadowSchemaIdentity, shadowReportSchemaIdentity].includes(String(row.schema_id))
     || typeof row.enrollment_id !== "string" || !/^[a-f0-9]{64}$/u.test(row.enrollment_id)) invalid();
-  const version = row.schema_id === shadowSchemaIdentity ? 2 : 1;
+  const version = row.schema_id === shadowReportSchemaIdentity ? 3 : row.schema_id === shadowSchemaIdentity ? 2 : 1;
   const publication = releases.find(column => column.name === "upload_publication_receipt");
   if (version === 1) {
     if (publication || connection.prepare("SELECT 1 FROM clank_platform_releases WHERE purpose='shadow-upload' LIMIT 1").get()) invalid();

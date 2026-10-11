@@ -1,5 +1,5 @@
 import { openNodeEvacuations, type NodeEvacuationPlan, type EvacuationProject, type NodeEvacuationHooks } from "./node-evacuation.ts";
-import { assertProviderShadowSchema, shadowSchemaIdentity, readShadowRecord, assertShadowReplay, readShadowReplays, saveShadowRecord, retireShadow,
+import { assertProviderShadowSchema, shadowSchemaIdentity, upgradeShadowReportSchema, readShadowRecord, assertShadowReplay, readShadowReplays, saveShadowRecord, retireShadow,
   normalizeShadowPolicy, narrowShadowPolicy, createShadowController, emptyShadowReport, normalizeShadowReview, parseShadowReviewToken, shadowReviewToken, shadowReviewSelection, expandShadowReviewSelection, shadowReviewDigest, assertShadowReviewReplay,
   type ShadowReviewPayload, type ShadowSessionPolicy, type ShadowReplayView, type ShadowReport, type ShadowPhase, type PlatformShadowPolicy, type ShadowRecord, type ShadowOperation, type ShadowOutcome, type ShadowLifecycleAdapter } from "./managed-shadow.ts";
 import { createManagedCanary, validateManagedCanary, type ManagedCanaryOptions } from "./managed-canary.ts";
@@ -3863,6 +3863,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     admit:(projectId,operation)=>assertShadowAdmission(projectId,operation,()=>{}),
     begin(projectId,operation,current){
       const admit=()=>assertShadowAdmission(projectId,operation,current);admit();
+      if(operation.report.protocol!==2)throw new Error("New shadow intent requires an enrolled version-two report.");
       const prior=providerCandidateRecord(projectId);requireNoProviderCanary(projectId);
       if(prior && prior.operation.phase!=="complete")throw new Error("A candidate still retains the shared project slot.");
       if(operation.controllerEpoch!==nextCanaryEpoch(prior))throw new Error("Shadow controller epoch is not current.");
@@ -5549,10 +5550,11 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         if(reviewed.artifactSha256!==payload.artifactSha256 || reviewed.primaryArtifactSha256!==payload.primaryArtifactSha256 || reviewed.providerBindingDigest!==payload.providerBindingDigest
           || reviewed.binding.incarnation!==payload.primaryIncarnation || reviewed.primaryFence!==payload.primaryFence || reviewed.primaryReleaseId!==payload.primaryReleaseId
           || reviewed.primaryGeneration!==payload.primaryGeneration || reviewed.nodeId!==payload.nodeId)throw new PlatformError(409,"SHADOW_PRIMARY_CHANGED","The reviewed provider binding changed.");
+        upgradeShadowReportSchema(storage.internal,current);leadership!.enrollProviderShadow();current();
         const createdAt=Date.now(),epoch=canaryInteger(payload.expectedEpoch+1),operation:ShadowOperation={kind:"shadow",sessionId:"shadow_"+crypto.randomUUID(),operationId:"shadowop_"+crypto.randomUUID(),idempotencyKeyDigest:keyDigest,inputDigest,reviewDigest:payload.reviewDigest,
           releaseId:payload.releaseId,artifactSha256:payload.artifactSha256,capsuleSha256:null,controllerEpoch:epoch,retirementEpoch:epoch,primary:null,primaryReleaseId:payload.primaryReleaseId,primaryFence:payload.primaryFence,
           nodeId:payload.nodeId,origin:reviewed.origin,credentialGeneration:payload.credentialGeneration,policyRevision:payload.policyRevision,policyDigest:payload.policyDigest,policy,maxReports:configured.maxReports,
-          phase:"binding",outcome:null,stopRequested:false,snapshot:null,report:emptyShadowReport(),reservations:[],retirement:null,createdAt,expiresAt:createdAt+policy.durationMs,updatedAt:createdAt};
+          phase:"binding",outcome:null,stopRequested:false,snapshot:null,report:emptyShadowReport(2),reservations:[],retirement:null,createdAt,expiresAt:createdAt+policy.durationMs,updatedAt:createdAt};
         return {operation,primary:reviewed.binding,primaryArtifactSha256:reviewed.primaryArtifactSha256,reviewIssuedAt:payload.issuedAt,reviewExpiresAt:payload.expiresAt};
       });
     });

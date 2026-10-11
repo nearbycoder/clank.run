@@ -145,13 +145,13 @@ test('same-key replay fences reject changed inputs and a new live session cannot
   const replay=shadow.readShadowReplays(f.internal,'project',hash)[0];assert.equal(replay.receipt.identity.inputDigest,first.operation.inputDigest);
 });
 
-test('terminal retirement classifies every retained unresolved reservation as interrupted without inventing agreement',async t=>{
-  const f=await fixture(t),current=await f.acquire();let record=preparing(f,f.save('project',null,f.operation(),current));
+for(const version of [1,2])test(`report v${version}: terminal retirement classifies every retained unresolved reservation as interrupted without inventing agreement`,async t=>{
+  const f=await fixture(t),current=await f.acquire();if(version===2){shadow.upgradeShadowReportSchema(f.internal,current);f.lease.enrollProviderShadow();}const op=f.operation();if(version===2)op.report=shadow.emptyShadowReport(2);let record=preparing(f,f.save('project',null,op,current));
   const snapshot={sha256:hash('actual-checkpoint-fixture'),bytes:4096,providerStartedAt:Date.now(),providerCompletedAt:Date.now(),platformObservedAt:Date.now()};
   record=f.save('project',record,{...record.operation,phase:'observing',snapshot,report:{...record.operation.report,counters:{...record.operation.report.counters,reserved:2}},reservations:[1,2],updatedAt:Date.now()},current);
   record=await shadow.retireShadow(f.adapter,'project',record,current,'interrupted');assert.equal(record.operation.report.counters.settled,2);assert.equal(record.operation.report.counters.comparable,0);assert.equal(record.operation.report.counters.unknown.interrupted,2);
   assert.deepEqual(record.operation.reservations,[]);assert.equal(record.operation.report.latency.primary.unknown,2);assert.equal(record.operation.report.latency.candidate.unknown,2);
-  const receipt=shadow.readShadowReplays(f.internal,'project',hash)[0];assert.deepEqual(receipt.receipt.identity.snapshot,snapshot);assert.equal(receipt.report.counters.comparable,0);
+  const receipt=shadow.readShadowReplays(f.internal,'project',hash)[0];assert.equal(receipt.report.protocol,version===2?2:undefined);assert.deepEqual(receipt.receipt.identity.snapshot,snapshot);assert.equal(receipt.report.counters.comparable,0);
 });
 
 
@@ -182,19 +182,95 @@ test('original stop identity follows actual status floor while ignored native CA
   f.sql.exec('DROP TRIGGER ignore_stop');const stopped=await controller.requestStop('project',accepted.operation.sessionId,accepted.operation.operationId,accepted.operation.controllerEpoch,()=>{});assert.equal(stopped.operation.stopRequested,true);assert.equal(activeSignal.aborted,true);await until(()=>f.read().operation.phase==='complete','bounded exact cleanup');
 });
 
-test('native compact replay round trip retains maximum safe identities, snapshot and policy within byte ceilings',async t=>{
+for(const version of [1,2])test(`report v${version}: native compact replay round trip retains maximum safe identities, snapshot and policy within byte ceilings`,async t=>{
   const f=await fixture(t),project='p'.repeat(128),maximum=Number.MAX_SAFE_INTEGER,configured={...policy(),revision:maximum,readPaths:Array.from({length:32},(_,i)=>'/'+String(i).padStart(3,'0')+'x'.repeat(252)),methods:['GET','HEAD'],maxSamplePercent:100,maxDurationMs:1800000,maxAttempts:10000,maxConcurrent:16,maxResponseBytes:65536,maxRequestMs:10000,maxReports:100};
-  f.sql.prepare('INSERT INTO clank_platform_projects(id) VALUES(?)').run(project);const current=await f.acquire(project);
+  f.sql.prepare('INSERT INTO clank_platform_projects(id) VALUES(?)').run(project);const current=await f.acquire(project);if(version===2){shadow.upgradeShadowReportSchema(f.internal,current);f.lease.enrollProviderShadow();}
   const base=f.operation(project,configured),operation={...base,sessionId:'s'.repeat(128),operationId:'o'.repeat(128),releaseId:'c'.repeat(128),primaryReleaseId:'r'.repeat(128),nodeId:'n'.repeat(128),controllerEpoch:maximum-4,retirementEpoch:maximum-4,primaryFence:maximum,credentialGeneration:maximum,capsuleSha256:hash('capsule'),phase:'complete',outcome:'authority-revoked',createdAt:maximum-1800000,expiresAt:maximum,updatedAt:maximum,
     primary:{projectId:project,releaseId:'r'.repeat(128),generation:maximum,fence:maximum,incarnation:randomUUID()},snapshot:{sha256:hash('snapshot'),bytes:2*1024*1024*1024-2*1024*1024-100*1024*1024-32,providerStartedAt:maximum,providerCompletedAt:maximum,platformObservedAt:maximum}};
+  if(version===2){operation.report=shadow.emptyShadowReport(2);operation.report=shadow.addShadowSkips(operation.report,Object.fromEntries(Object.keys(operation.report.skips).map(name=>[name,2147483647])),10000);}
   operation.retirement=f.retirement({operation});const serialized=JSON.stringify(operation),record=shadow.readShadowRecord({project_id:project,protocol:2,epoch:maximum,operation:serialized,updated_at:maximum},project,hash);
   // This is native receipt validation/roundtrip, not a claim that billions of
   // real sessions or a host clock near MAX_SAFE_INTEGER were executed.
-  const admissionOperation={...operation,capsuleSha256:null,primary:null,phase:'binding',outcome:null,snapshot:null,retirement:null,updatedAt:operation.createdAt};
+  const admissionOperation={...operation,report:version===2?shadow.emptyShadowReport(2):shadow.emptyShadowReport(),capsuleSha256:null,primary:null,phase:'binding',outcome:null,snapshot:null,retirement:null,updatedAt:operation.createdAt};
   const admission=shadow.readShadowRecord({project_id:project,protocol:2,epoch:operation.controllerEpoch,operation:JSON.stringify(admissionOperation),updated_at:admissionOperation.updatedAt},project,hash);
   f.internal.transaction(()=>{current();shadow.writeShadowReplay(f.internal,project,admission,[],hash);current()});
   const admitted=shadow.readShadowReplays(f.internal,project,hash);
   f.internal.transaction(()=>{current();shadow.writeShadowReplay(f.internal,project,record,admitted,hash);current()});
   const [roundtrip]=shadow.readShadowReplays(f.internal,project,hash),bytes=Buffer.byteLength(JSON.stringify(roundtrip.receipt)),full=Buffer.byteLength(JSON.stringify({identity:roundtrip.receipt.identity,report:roundtrip.report}));
   assert.equal(roundtrip.receipt.identity.primary.incarnation,operation.primary.incarnation);assert.deepEqual(roundtrip.receipt.identity.snapshot,operation.snapshot);assert.deepEqual(roundtrip.receipt.identity.policy,operation.policy);assert.equal(roundtrip.receipt.identity.epoch,maximum);assert.ok(bytes<=16384);assert.ok(full<=32768);assert.ok(bytes>10000);t.diagnostic(JSON.stringify({receiptBytes:bytes,identityAndReportBytes:full}));
+});
+
+test('report schema upgrade commits only its exact singleton with no DDL changes and retains supervisor protocol three',async t=>{
+  const f=await fixture(t),current=await f.acquire(),before=f.sql.prepare('SELECT * FROM sqlite_schema ORDER BY name').all(),identity=shadow.assertProviderShadowSchema(f.sql);
+  const next=shadow.upgradeShadowReportSchema(f.internal,current);assert.equal(next.version,3);assert.equal(next.enrollmentId,identity.enrollmentId);
+  assert.deepEqual(f.sql.prepare('SELECT * FROM sqlite_schema ORDER BY name').all(),before);f.lease.enrollProviderShadow();f.lease.enrollProviderCanaries();
+  assert.equal(f.sql.prepare('SELECT protocol FROM clank_platform_supervisor_state').get().protocol,3);assert.deepEqual(shadow.upgradeShadowReportSchema(f.internal,current),next);
+});
+
+for(const [label,body]of[
+  ['ignored','SELECT RAISE(IGNORE);'],['reverted',"UPDATE clank_platform_shadow_state SET schema_id='clank-platform-shadow/2';"],
+  ['identity replaced',"UPDATE clank_platform_shadow_state SET enrollment_id=printf('%064d',2);"],
+  ['project authority revoked','DELETE FROM clank_distributed_leases;'],['supervisor authority revoked','DELETE FROM clank_platform_supervisor_lease;'],
+])test('report schema native '+label+' write rolls back schema and authority without poisoning the committed floor',async t=>{
+  const f=await fixture(t),current=await f.acquire(),state=f.sql.prepare('SELECT * FROM clank_platform_shadow_state').all(),supervisor=f.sql.prepare('SELECT * FROM clank_platform_supervisor_lease').all(),project=f.sql.prepare('SELECT * FROM clank_distributed_leases').all();
+  f.sql.exec(`CREATE TRIGGER report_fault ${label==='ignored'?'BEFORE':'AFTER'} UPDATE OF schema_id ON clank_platform_shadow_state BEGIN ${body} END`);
+  assert.throws(()=>shadow.upgradeShadowReportSchema(f.internal,current));assert.deepEqual(f.sql.prepare('SELECT * FROM clank_platform_shadow_state').all(),state);assert.deepEqual(f.sql.prepare('SELECT * FROM clank_platform_supervisor_lease').all(),supervisor);assert.deepEqual(f.sql.prepare('SELECT * FROM clank_distributed_leases').all(),project);f.lease.assertCurrent();
+  f.sql.exec('DROP TRIGGER report_fault');shadow.upgradeShadowReportSchema(f.internal,current);f.lease.enrollProviderShadow();assert.equal(shadow.assertProviderShadowSchema(f.sql).version,3);
+});
+
+test('version-two native report cannot precede committed schema3, rewrite legacy evidence or change version mid-operation',async t=>{
+  const f=await fixture(t),current=await f.acquire(),legacy=f.save('project',null,f.operation(),current),complete=await shadow.retireShadow(f.adapter,'project',legacy,current,'interrupted');
+  const original=f.sql.prepare('SELECT receipt_json,report_json FROM clank_platform_shadow_reports').get();const operation={...f.operation(),maxReports:2,report:shadow.emptyShadowReport(2)};
+  assert.equal(operation.report.protocol,2);assert.throws(()=>f.save('project',complete,operation,current));assert.equal(f.read().serialized,complete.serialized);
+  shadow.upgradeShadowReportSchema(f.internal,current);f.lease.enrollProviderShadow();const newer=f.save('project',complete,operation,current);
+  assert.deepEqual(f.sql.prepare('SELECT receipt_json,report_json FROM clank_platform_shadow_reports WHERE session_id=?').get(legacy.operation.sessionId),original);
+  assert.throws(()=>f.save('project',newer,{...newer.operation,report:shadow.emptyShadowReport()},current));
+  const done=await shadow.retireShadow(f.adapter,'project',newer,current,'interrupted');assert.equal(done.operation.report.protocol,2);assert.deepEqual(done.operation.report.skips,shadow.emptyShadowReport(2).skips);
+  assert.deepEqual(f.sql.prepare('SELECT receipt_json,report_json FROM clank_platform_shadow_reports WHERE session_id=?').get(legacy.operation.sessionId),original);
+  f.sql.exec("UPDATE clank_platform_shadow_state SET schema_id='clank-platform-shadow/2'");assert.throws(()=>shadow.readShadowReplays(f.sql,'project',hash));assert.throws(()=>f.lease.assertCurrent(),{code:'SUPERVISOR_SHADOW_SCHEMA'});
+});
+
+test('version-two native canonical reports reject duplicate keys, alternate bytes, tampering and malformed skip vocabulary',async t=>{
+  const f=await fixture(t),current=await f.acquire();shadow.upgradeShadowReportSchema(f.internal,current);f.lease.enrollProviderShadow();
+  f.save('project',null,{...f.operation(),report:shadow.emptyShadowReport(2)},current);const row=f.sql.prepare('SELECT * FROM clank_platform_shadow_reports').get(),report=JSON.parse(row.report_json);
+  for(const altered of ['{"protocol":2,'+row.report_json.slice(1),' '+row.report_json,JSON.stringify({...report,skips:{...report.skips,ineligible:1}}),JSON.stringify({...report,skips:{...report.skips,private:1}})]){
+    f.sql.prepare('UPDATE clank_platform_shadow_reports SET report_json=?').run(altered);assert.throws(()=>shadow.readShadowReplays(f.internal,'project',hash));
+  }
+  f.sql.prepare('UPDATE clank_platform_shadow_reports SET report_json=?').run(row.report_json);assert.equal(JSON.stringify(shadow.readShadowReplays(f.internal,'project',hash)[0].report),row.report_json);
+});
+
+test('version-two maximum native identity and saturated skips remain within receipt/report bounds through pruning',async t=>{
+  const f=await fixture(t),project='p'.repeat(128);f.sql.prepare('INSERT INTO clank_platform_projects(id) VALUES(?)').run(project);const current=await f.acquire(project),configured={...policy(),readPaths:Array.from({length:32},(_,i)=>'/'+String(i).padStart(3,'0')+'x'.repeat(252))};
+  shadow.upgradeShadowReportSchema(f.internal,current);f.lease.enrollProviderShadow();
+  const op={...f.operation(project,configured),sessionId:'s'.repeat(128),operationId:'o'.repeat(128),releaseId:'c'.repeat(128),primaryReleaseId:'r'.repeat(128),report:shadow.emptyShadowReport(2)};
+  let record=f.save(project,null,op,current);record=f.save(project,record,{...record.operation,primary:{projectId:project,releaseId:op.primaryReleaseId,generation:1,fence:1,incarnation:randomUUID()},capsuleSha256:hash('capsule'),phase:'preparing'},current);
+  record=f.save(project,record,{...record.operation,phase:'observing',snapshot:{sha256:hash('snapshot'),bytes:4096,providerStartedAt:op.createdAt,providerCompletedAt:op.createdAt,platformObservedAt:op.createdAt}},current);
+  const skips=Object.fromEntries(Object.keys(record.operation.report.skips).map(name=>[name,2147483647]));record=f.save(project,record,{...record.operation,report:shadow.addShadowSkips(record.operation.report,skips,op.policy.maxAttempts)},current);
+  assert.throws(()=>f.save(project,record,{...record.operation,report:{...record.operation.report,skips:{...skips,withdrawn:0}}},current));
+  const complete=await shadow.retireShadow(f.adapter,project,record,current,'stopped'),before=shadow.readShadowReplays(f.internal,project,hash)[0];
+  const receiptBytes=Buffer.byteLength(JSON.stringify(before.receipt)),fullBytes=Buffer.byteLength(JSON.stringify({identity:before.receipt.identity,report:before.report}));assert.ok(receiptBytes<=16384&&receiptBytes>10000);assert.ok(fullBytes<=32768);assert.deepEqual(before.report.skips,skips);
+  const next=f.save(project,complete,{...f.operation(project),report:shadow.emptyShadowReport(2)},current);await shadow.retireShadow(f.adapter,project,next,current,'interrupted');
+  const retained=shadow.readShadowReplays(f.internal,project,hash).find(row=>row.receipt.identity.sessionId===op.sessionId);assert.deepEqual(retained.receipt,before.receipt);assert.equal(retained.report,null);
+  t.diagnostic(JSON.stringify({receiptBytes,identityAndReportBytes:fullBytes,maximumReadPaths:32,maximumPathBytes:256,skipMaximum:2147483647}));
+});
+
+
+test('report enrollment refuses a caller-owned transaction and unprepared schema-one catalog without effects',async t=>{
+  const f=await fixture(t),current=await f.acquire(),before=f.sql.prepare('SELECT * FROM clank_platform_shadow_state').all();
+  f.internal.transaction(()=>{assert.throws(()=>shadow.upgradeShadowReportSchema(f.internal,current));current()});assert.deepEqual(f.sql.prepare('SELECT * FROM clank_platform_shadow_state').all(),before);
+  // A fresh reader has no captured schema2 floor; /1 must still be explicitly prepared by staging first.
+  f.sql.exec("UPDATE clank_platform_shadow_state SET schema_id='clank-platform-shadow/1';ALTER TABLE clank_platform_releases DROP COLUMN upload_publication_receipt");
+  assert.throws(()=>shadow.upgradeShadowReportSchema(f.internal,()=>{}));assert.equal(f.sql.prepare('SELECT schema_id FROM clank_platform_shadow_state').get().schema_id,'clank-platform-shadow/1');
+});
+
+for(const reason of ['ineligible','sampled-out','capacity','attempt-limit','handoff-timeout','withdrawn'])test(`version-two binding report refuses coherent ${reason} skips before any observation`,async t=>{
+  const f=await fixture(t),current=await f.acquire();shadow.upgradeShadowReportSchema(f.internal,current);f.lease.enrollProviderShadow();
+  const record=f.save('project',null,{...f.operation(),report:shadow.emptyShadowReport(2)},current),row=f.sql.prepare('SELECT * FROM clank_platform_shadow_reports').get(),receipt=JSON.parse(row.receipt_json),report=JSON.parse(row.report_json);
+  report.skips[reason]=1;receipt.reportDigest=hash(JSON.stringify({identity:receipt.identity,report}));
+  const altered=JSON.stringify(receipt),mirror=JSON.stringify({protocol:1,count:1,sha256:hash(JSON.stringify([receipt]))});
+  f.sql.exec('BEGIN IMMEDIATE');f.sql.prepare('UPDATE clank_platform_shadow_reports SET receipt_json=?,report_json=?').run(altered,JSON.stringify(report));f.sql.prepare('UPDATE clank_platform_projects SET shadow_replay_receipt=?').run(mirror);f.sql.exec('COMMIT');
+  assert.equal(hash(JSON.stringify({identity:receipt.identity,report})),JSON.parse(f.sql.prepare('SELECT receipt_json FROM clank_platform_shadow_reports').get().receipt_json).reportDigest);
+  assert.equal(f.sql.prepare('SELECT shadow_replay_receipt FROM clank_platform_projects').get().shadow_replay_receipt,mirror);
+  assert.throws(()=>shadow.readShadowReplays(f.internal,'project',hash),{code:'SHADOW_STATE_INVALID'});
+  assert.throws(()=>shadow.assertShadowReplay(f.internal,'project',record,hash),{code:'SHADOW_STATE_INVALID'});
 });

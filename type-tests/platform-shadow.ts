@@ -27,3 +27,17 @@ const crossHost: 'verified' = receipt.snapshot!.crossHostFreshness;
 // @ts-expect-error The public stop uses a retained original integer epoch, never a string timestamp.
 const epoch: string = receipt.controllerEpoch;
 void [localElapsed, primary, secret, crossHost, epoch];
+
+if(receipt.report?.protocol===2){
+  const skips:number=receipt.report.skips['handoff-timeout'];
+  // @ts-expect-error Skip vocabulary is closed, never a persisted arbitrary map.
+  const unknown=receipt.report.skips['tenant-secret'];
+  void [skips,unknown];
+}else if(receipt.report){
+  // @ts-expect-error Historical reports have no fabricated version-two skips.
+  const fabricated:number=receipt.report.skips.ineligible;
+  void fabricated;
+}
+// @ts-expect-error Only legacy absent version and explicit protocol2 are valid report formats.
+const future:NonNullable<PlatformShadowSession['report']>={protocol:3,counters:receipt.report!.counters,latency:receipt.report!.latency};
+void future;
