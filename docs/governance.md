@@ -196,6 +196,9 @@ and CI.
 
 ## Durable previews, approvals, and receipts
 
+Actions can opt into [approval quorum policies](approval-quorums.md) for distinct
+current human approvers, required roles, requester separation and expiring votes.
+
 For application mutations that require review, configure `openBackend({ ... },
 { reviewedActions: { actions } })`. The backend mounts a browser approval inbox at
 `/__clank/approvals` (or the configured backend prefix), its JSON/event endpoints,
