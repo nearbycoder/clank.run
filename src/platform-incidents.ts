@@ -61,11 +61,31 @@ export async function openProjectIncidents(sql: SQLiteInternal, options: Platfor
 }) {
   const {randomUUID} = await import("node:crypto");
   const maxIncidents = integer(options.maxIncidents ?? 1000, 1, 100000), maxReceipts = integer(options.maxReceipts ?? 10000, 1, 100000);
-  const protocol = () => {
-    if (sql.prepare("SELECT protocol FROM clank_platform_incident_state WHERE singleton=1").get()?.protocol !== 1) fail(409, "INCIDENT_PROTOCOL_UNSUPPORTED", "Unsupported incident state protocol.");
+  const tables: Record<string, string> = {
+    clank_platform_incident_state: "singleton:INTEGER:0:1 protocol:INTEGER:1:0",
+    clank_platform_incidents: "sequence:INTEGER:0:1 id:TEXT:1:0 project_id:TEXT:1:0 title:TEXT:1:0 severity:TEXT:1:0 state:TEXT:1:0 owner_id:TEXT:0:0 version:INTEGER:1:0 created_at:INTEGER:1:0 updated_at:INTEGER:1:0 resolved_at:INTEGER:0:0 resolution:TEXT:0:0",
+    clank_platform_incident_notes: "sequence:INTEGER:0:1 incident_id:TEXT:1:0 author_id:TEXT:1:0 created_at:INTEGER:1:0 text:TEXT:1:0",
+    clank_platform_incident_links: "sequence:INTEGER:0:1 incident_id:TEXT:1:0 reference:TEXT:1:0 release_context:TEXT:0:0",
+    clank_platform_incident_receipts: "project_id:TEXT:1:1 actor_id:TEXT:1:2 operation_id:TEXT:1:3 request:TEXT:1:0 result:TEXT:1:0",
   };
-  if (sql.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_platform_incident_state'").get()) protocol();
-  sql.exec(`CREATE TABLE IF NOT EXISTS clank_platform_incident_state(singleton INTEGER PRIMARY KEY CHECK(singleton=1),protocol INTEGER NOT NULL);
+  const storageInvalid = () => fail(409, "INCIDENT_STORAGE_INVALID", "Retained incident storage is incomplete or invalid.");
+  const protocol = (pristine = false): boolean => {
+    const retained = Object.keys(tables).map(name => sql.prepare("SELECT type FROM sqlite_schema WHERE name=?").get(name));
+    if (pristine && retained.every(row => !row)) return false;
+    if (retained.some(row => row?.type !== "table")) storageInvalid();
+    for (const [name, shape] of Object.entries(tables)) {
+      const columns = sql.prepare("PRAGMA table_xinfo(" + name + ")").all();
+      if (columns.some(row => row.dflt_value !== null || row.hidden !== 0) || columns.map(row => [row.name, row.type, row.notnull, row.pk].join(":")).join(" ") !== shape) storageInvalid();
+    }
+    const rows = sql.prepare("SELECT singleton,protocol FROM clank_platform_incident_state").all();
+    if (rows.length !== 1 || rows[0].singleton !== 1) storageInvalid();
+    if (rows[0].protocol !== 1) fail(409, "INCIDENT_PROTOCOL_UNSUPPORTED", "Unsupported incident state protocol.");
+    return true;
+  };
+  protocol(true);
+  sql.transaction(() => {
+    if (protocol(true)) return;
+    sql.exec(`CREATE TABLE IF NOT EXISTS clank_platform_incident_state(singleton INTEGER PRIMARY KEY CHECK(singleton=1),protocol INTEGER NOT NULL);
     INSERT OR IGNORE INTO clank_platform_incident_state VALUES(1,1);
     CREATE TABLE IF NOT EXISTS clank_platform_incidents(sequence INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT UNIQUE NOT NULL,project_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,title TEXT NOT NULL,severity TEXT NOT NULL,state TEXT NOT NULL,owner_id TEXT,version INTEGER NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,resolved_at INTEGER,resolution TEXT);
     CREATE INDEX IF NOT EXISTS clank_platform_incidents_project ON clank_platform_incidents(project_id,sequence);
@@ -74,7 +94,8 @@ export async function openProjectIncidents(sql: SQLiteInternal, options: Platfor
     CREATE TABLE IF NOT EXISTS clank_platform_incident_links(sequence INTEGER PRIMARY KEY AUTOINCREMENT,incident_id TEXT NOT NULL REFERENCES clank_platform_incidents(id) ON DELETE CASCADE,reference TEXT NOT NULL,release_context TEXT,UNIQUE(incident_id,reference));
     CREATE INDEX IF NOT EXISTS clank_platform_incident_links_parent ON clank_platform_incident_links(incident_id,sequence);
     CREATE TABLE IF NOT EXISTS clank_platform_incident_receipts(project_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,actor_id TEXT NOT NULL,operation_id TEXT NOT NULL,request TEXT NOT NULL,result TEXT NOT NULL,PRIMARY KEY(project_id,actor_id,operation_id));`);
-  protocol();
+    protocol();
+  });
   let closed = false;
   const pending = new Set<AbortController>();
   const check = (authority: IncidentAuthority, extra?: Permission) => {
@@ -99,9 +120,23 @@ export async function openProjectIncidents(sql: SQLiteInternal, options: Platfor
   const capacity = () => {
     if (Number(sql.prepare("SELECT count(*) AS n FROM clank_platform_incident_receipts").get()?.n) >= maxReceipts) fail(409, "INCIDENT_RECEIPT_CAPACITY", "Incident receipt capacity is full.");
   };
-  const save = (projectId: string, authority: IncidentAuthority, operationId: string, request: string, result: ProjectIncident, kind: string) => {
-    sql.prepare("INSERT INTO clank_platform_incident_receipts VALUES(?,?,?,?,?)").run(projectId, authority.userId, operationId, request, JSON.stringify(result));
+  const one = (query: string, ...parameters: unknown[]) => {
+    const result = sql.prepare(query).run(...parameters);
+    if (Number(result.changes) !== 1) storageInvalid();
+    return result;
+  };
+  const same = (actual: unknown, expected: unknown) => { if (JSON.stringify(actual) !== JSON.stringify(expected)) storageInvalid(); };
+  const save = (projectId: string, authority: IncidentAuthority, operationId: string, request: string, result: ProjectIncident, kind: string, effect: () => void, extra?: Permission) => {
+    const serialized = JSON.stringify(result);
+    const verify = () => {
+      check(authority, extra); effect(); same(current(projectId, result.id), result);
+      same(sql.prepare("SELECT request,result FROM clank_platform_incident_receipts WHERE project_id=? AND actor_id=? AND operation_id=?").all(projectId, authority.userId, operationId), [{request, result: serialized}]);
+    };
+    one("INSERT INTO clank_platform_incident_receipts VALUES(?,?,?,?,?)", projectId, authority.userId, operationId, request, serialized);
+    verify();
     authority.audit("incident." + kind, {incidentId: result.id, version: result.version});
+    // Audit triggers and native write hooks must not invalidate an acknowledged effect.
+    verify();
     return result;
   };
   const requireOwner = (authority: IncidentAuthority, ownerId: string | null) => {
@@ -152,8 +187,9 @@ export async function openProjectIncidents(sql: SQLiteInternal, options: Platfor
         capacity(); requireOwner(authority, ownerId);
         if (Number(sql.prepare("SELECT count(*) AS n FROM clank_platform_incidents").get()?.n) >= maxIncidents || Number(sql.prepare("SELECT count(*) AS n FROM clank_platform_incidents WHERE project_id=?").get(projectId)?.n) >= 100) fail(409, "INCIDENT_CAPACITY", "Incident workspace capacity is full.");
         const id = randomUUID(), now = Date.now();
-        sql.prepare("INSERT INTO clank_platform_incidents(id,project_id,title,severity,state,owner_id,version,created_at,updated_at) VALUES(?,?,?,?,'open',?,1,?,?)").run(id, projectId, title, severity, ownerId, now, now);
-        return save(projectId, authority, operationId, canonical, current(projectId, id), "create");
+        const inserted = one("INSERT INTO clank_platform_incidents(id,project_id,title,severity,state,owner_id,version,created_at,updated_at) VALUES(?,?,?,?,'open',?,1,?,?)", id, projectId, title, severity, ownerId, now, now);
+        const result: ProjectIncident = {id, projectId, sequence: Number(inserted.lastInsertRowid), title, severity: severity as ProjectIncident["severity"], state: "open", ownerId, version: 1, createdAt: now, updatedAt: now, resolvedAt: null, resolution: null, noteCount: 0, linkCount: 0};
+        return save(projectId, authority, operationId, canonical, result, "create", () => requireOwner(authority, ownerId));
       });
     },
     async change(projectId: string, id: string, authority: IncidentAuthority, value: unknown): Promise<ProjectIncident> {
@@ -187,34 +223,47 @@ export async function openProjectIncidents(sql: SQLiteInternal, options: Platfor
         const replay = receipt(projectId, authority, operationId, canonical); if (replay) return replay;
         const incident = current(projectId, id); if (incident.version !== expectedVersion) fail(409, "INCIDENT_VERSION_STALE", "Refresh the current incident before changing it.");
         capacity(); const now = Date.now();
+        let result: ProjectIncident = {...incident, version: incident.version + 1, updatedAt: now};
+        let effect = () => {}, extra: Permission | undefined;
         switch (change.kind) {
-          case "note":
+          case "note": {
             if (incident.noteCount >= 100) fail(409, "INCIDENT_NOTE_CAPACITY", "Incident note capacity is full.");
-            sql.prepare("INSERT INTO clank_platform_incident_notes(incident_id,author_id,created_at,text) VALUES(?,?,?,?)").run(id, authority.userId, now, change.text); break;
-          case "assign": requireOwner(authority, change.ownerId); sql.prepare("UPDATE clank_platform_incidents SET owner_id=? WHERE id=?").run(change.ownerId, id); break;
+            const inserted = one("INSERT INTO clank_platform_incident_notes(incident_id,author_id,created_at,text) VALUES(?,?,?,?)", id, authority.userId, now, change.text);
+            result = {...result, noteCount: incident.noteCount + 1};
+            effect = () => same(sql.prepare("SELECT incident_id,author_id,created_at,text FROM clank_platform_incident_notes WHERE sequence=?").get(inserted.lastInsertRowid), {incident_id: id, author_id: authority.userId, created_at: now, text: change.text});
+            break;
+          }
+          case "assign": requireOwner(authority, change.ownerId); one("UPDATE clank_platform_incidents SET owner_id=? WHERE id=?", change.ownerId, id); result = {...result, ownerId: change.ownerId}; effect = () => requireOwner(authority, change.ownerId); break;
           case "resolve":
             if (incident.state !== "open") fail(409, "INCIDENT_STATE_STALE", "The incident is already resolved.");
-            sql.prepare("UPDATE clank_platform_incidents SET state='resolved',resolution=?,resolved_at=? WHERE id=?").run(change.resolution, now, id); break;
+            one("UPDATE clank_platform_incidents SET state='resolved',resolution=?,resolved_at=? WHERE id=?", change.resolution, now, id); result = {...result, state: "resolved", resolution: change.resolution, resolvedAt: now}; break;
           case "reopen":
             if (incident.state !== "resolved") fail(409, "INCIDENT_STATE_STALE", "The incident is already open.");
-            sql.prepare("UPDATE clank_platform_incidents SET state='open',resolution=NULL,resolved_at=NULL WHERE id=?").run(id); break;
+            one("UPDATE clank_platform_incidents SET state='open',resolution=NULL,resolved_at=NULL WHERE id=?", id); result = {...result, state: "open", resolution: null, resolvedAt: null}; break;
           case "link": {
             const fresh = releaseContext(projectId, change.reference);
             if (JSON.stringify(fresh) !== JSON.stringify(context) || change.reference.kind === "alert" && !hooks.alert(projectId, change.reference.id)) fail(409, "INCIDENT_REFERENCE_CHANGED", "Refresh the changed diagnostic reference.");
             if (incident.linkCount >= 50) fail(409, "INCIDENT_LINK_CAPACITY", "Incident link capacity is full.");
             const serialized = JSON.stringify(change.reference);
             if (sql.prepare("SELECT 1 FROM clank_platform_incident_links WHERE incident_id=? AND reference=?").get(id, serialized)) fail(409, "INCIDENT_LINK_EXISTS", "The incident already links this diagnostic.");
-            sql.prepare("INSERT INTO clank_platform_incident_links(incident_id,reference,release_context) VALUES(?,?,?)").run(id, serialized, context === null ? null : JSON.stringify(context)); break;
+            const release = context === null ? null : JSON.stringify(context);
+            const inserted = one("INSERT INTO clank_platform_incident_links(incident_id,reference,release_context) VALUES(?,?,?)", id, serialized, release);
+            result = {...result, linkCount: incident.linkCount + 1}; extra = permission(change.reference);
+            effect = () => same(sql.prepare("SELECT incident_id,reference,release_context FROM clank_platform_incident_links WHERE sequence=?").get(inserted.lastInsertRowid), {incident_id: id, reference: serialized, release_context: release});
+            break;
           }
           case "unlink": {
             const linked = sql.prepare("SELECT reference FROM clank_platform_incident_links WHERE incident_id=? AND sequence=?").get(id, change.sequence);
             if (!linked) fail(404, "INCIDENT_REFERENCE_NOT_FOUND", "Incident link not found.");
-            check(authority, permission(reference(JSON.parse(String(linked!.reference)))));
-            sql.prepare("DELETE FROM clank_platform_incident_links WHERE incident_id=? AND sequence=?").run(id, change.sequence); break;
+            extra = permission(reference(JSON.parse(String(linked!.reference)))); check(authority, extra);
+            one("DELETE FROM clank_platform_incident_links WHERE incident_id=? AND sequence=?", id, change.sequence);
+            result = {...result, linkCount: incident.linkCount - 1};
+            effect = () => { if (sql.prepare("SELECT 1 FROM clank_platform_incident_links WHERE incident_id=? AND sequence=?").get(id, change.sequence)) storageInvalid(); };
+            break;
           }
         }
-        sql.prepare("UPDATE clank_platform_incidents SET version=version+1,updated_at=? WHERE id=?").run(now, id);
-        return save(projectId, authority, operationId, canonical, current(projectId, id), change.kind);
+        one("UPDATE clank_platform_incidents SET version=version+1,updated_at=? WHERE id=? AND version=?", now, id, expectedVersion);
+        return save(projectId, authority, operationId, canonical, result, change.kind, effect, extra);
       });
     },
     async read(projectId: string, id: string, authority: IncidentAuthority, query: URLSearchParams): Promise<ProjectIncidentDetail> {
@@ -248,6 +297,17 @@ export async function openProjectIncidents(sql: SQLiteInternal, options: Platfor
         links.push(...await Promise.all(linkRows.slice(index, Math.min(index + 2, 8)).map(readLink)));
       }
       check(authority);
+      // Earlier groups may finish before a later await observes revocation or cleanup.
+      // Revalidate every published reference synchronously at this final boundary.
+      for (const link of links) {
+        const ref = link.reference;
+        if (ref === null) continue;
+        if (!authority.mayRead(permission(ref))) fail(403, "INCIDENT_ACCESS_CHANGED", "Diagnostic access changed. Refresh the workspace.");
+        const releaseId = ref.kind === "release" ? ref.id : "releaseId" in ref ? ref.releaseId : null;
+        if (ref.kind === "alert" ? !hooks.alert(projectId, ref.id) : releaseId !== null && !hooks.release(projectId, releaseId)?.available) {
+          Object.assign(link, {available: false, reason: "not-retained", diagnostic: null});
+        }
+      }
       if (current(projectId, id).version !== incident.version) fail(409, "INCIDENT_VERSION_STALE", "The incident changed during the diagnostic read. Refresh it.");
       return {incident, notes, nextNotes: noteRows.length > 25 ? notes.at(-1)!.sequence : null, links, nextLinks: linkRows.length > 8 ? links.at(-1)!.sequence : null};
     },
