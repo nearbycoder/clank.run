@@ -28,6 +28,8 @@ export interface SupervisorLease {
     assertCurrent(connection?: Pick<SQLiteInternal, "prepare">): undefined;
     /** Irreversibly require provider-canary-aware coordinators before publishing their first intent. */
     enrollProviderCanaries(): undefined;
+    /** Require shadow-aware coordinators after validating the prepared native schema. */
+    enrollProviderShadow(): undefined;
     status(state: PlatformSupervisorStatus["state"]): PlatformSupervisorStatus;
     release(): boolean;
     close(): void;

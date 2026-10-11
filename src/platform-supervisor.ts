@@ -1,4 +1,5 @@
 import type { SQLiteInternal } from "./sqlite-internal.ts";
+import { assertProviderShadowSchema } from "./managed-shadow.ts";
 
 export interface PlatformSupervisorOptions {
   /** Same-host coordinators must use the same operator-selected configuration identity. */
@@ -47,6 +48,8 @@ export interface SupervisorLease {
   assertCurrent(connection?:Connection):undefined;
   /** Irreversibly require provider-canary-aware coordinators before publishing their first intent. */
   enrollProviderCanaries():undefined;
+  /** Require shadow-aware coordinators after validating the prepared native schema. */
+  enrollProviderShadow():undefined;
   status(state:PlatformSupervisorStatus["state"]):PlatformSupervisorStatus;
   release():boolean;
   close():void;
@@ -76,8 +79,9 @@ export async function openSupervisorLease(databasePath:string,input:PlatformSupe
   try {
     await fs.chmod(catalog,0o600);
     native.exec("PRAGMA busy_timeout=250;PRAGMA trusted_schema=OFF;PRAGMA foreign_keys=ON;PRAGMA journal_mode=WAL;PRAGMA synchronous=FULL");
+    let shadowEnrollment:string|undefined;
     const transaction=<Value>(handler:()=>Value):Value=>{
-      native.exec("BEGIN IMMEDIATE");try{const value=handler();native.exec("COMMIT");return value;}catch(error){try{native.exec("ROLLBACK");}catch{}throw error;}
+      native.exec("BEGIN IMMEDIATE");const priorShadowEnrollment=shadowEnrollment;try{const value=handler();native.exec("COMMIT");return value;}catch(error){try{native.exec("ROLLBACK");}catch{}shadowEnrollment=priorShadowEnrollment;throw error;}
     };
     let closed=false,epoch=0,tokenHash:string|undefined,lastNow=Date.now();
     const owner=`supervisor-${proc.pid}-${nodeCrypto.randomUUID()}`;
@@ -85,7 +89,9 @@ export async function openSupervisorLease(databasePath:string,input:PlatformSupe
     const ensureOpen=()=>{if(closed)fail("SUPERVISOR_CLOSED","Supervisor leadership is closed.");};
     const assertConfiguration=(connection:Connection=native)=>{
       const row=connection.prepare("SELECT * FROM clank_platform_supervisor_state WHERE singleton=1").get();
-      if(row?.protocol!==1&&row?.protocol!==2)fail("SUPERVISOR_PROTOCOL","Unsupported supervisor protocol.");
+      if(row?.protocol!==1&&row?.protocol!==2&&row?.protocol!==3)fail("SUPERVISOR_PROTOCOL","Unsupported supervisor protocol.");
+      if(row.protocol===3){const retained=assertProviderShadowSchema(connection);if(shadowEnrollment&&retained!==shadowEnrollment)fail("SUPERVISOR_SHADOW_SCHEMA","Shadow enrollment identity changed.");shadowEnrollment=retained;}
+      else if(shadowEnrollment)fail("SUPERVISOR_PROTOCOL","Shadow capability cannot be downgraded.");
       if(row.configuration_id!==options.configurationId||row.configuration_revision!==options.configurationRevision
         ||row.lease_ms!==options.leaseMs||row.poll_ms!==options.pollIntervalMs)fail("SUPERVISOR_CONFIGURATION_CHANGED","Current supervisor configuration is required.");
     };
@@ -108,7 +114,8 @@ export async function openSupervisorLease(databasePath:string,input:PlatformSupe
       const configured=Boolean(native.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_platform_supervisor_state'").get()),retained=Boolean(native.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_platform_supervisor_lease'").get());
       if(configured!==retained)fail("SUPERVISOR_STATE_INVALID","Incomplete persisted supervisor ownership; preserve it for operator recovery.");
       if(configured){const protocol=native.prepare("SELECT protocol FROM clank_platform_supervisor_state WHERE singleton=1").get()?.protocol;
-        if(protocol!==1&&protocol!==2)fail("SUPERVISOR_PROTOCOL","Unsupported supervisor protocol.");}
+        if(protocol!==1&&protocol!==2&&protocol!==3)fail("SUPERVISOR_PROTOCOL","Unsupported supervisor protocol.");
+        if(protocol===3)shadowEnrollment=assertProviderShadowSchema(native);}
       native.exec(`CREATE TABLE IF NOT EXISTS clank_platform_supervisor_state(
         singleton INTEGER PRIMARY KEY CHECK(singleton=1),protocol INTEGER NOT NULL,configuration_id TEXT NOT NULL,
         configuration_revision INTEGER NOT NULL,lease_ms INTEGER NOT NULL,poll_ms INTEGER NOT NULL) STRICT;
@@ -117,7 +124,7 @@ export async function openSupervisorLease(databasePath:string,input:PlatformSupe
         owner TEXT,token_hash TEXT,expires_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,controller_pid INTEGER,controller_birth TEXT) STRICT;`);
       const prior=native.prepare("SELECT * FROM clank_platform_supervisor_state WHERE singleton=1").get();
       if(prior&&!native.prepare("SELECT 1 FROM clank_platform_supervisor_lease WHERE singleton=1").get())fail("SUPERVISOR_STATE_INVALID","Missing retained supervisor ownership; its epoch cannot be reset.");
-      if(prior&&((prior.protocol!==1&&prior.protocol!==2)||typeof prior.configuration_id!=="string"||! /^[A-Za-z][A-Za-z0-9._-]{0,127}$/u.test(prior.configuration_id)
+      if(prior&&((prior.protocol!==1&&prior.protocol!==2&&prior.protocol!==3)||typeof prior.configuration_id!=="string"||! /^[A-Za-z][A-Za-z0-9._-]{0,127}$/u.test(prior.configuration_id)
         ||!Number.isSafeInteger(prior.configuration_revision)||Number(prior.configuration_revision)<1
         ||!Number.isSafeInteger(prior.lease_ms)||Number(prior.lease_ms)<5000||Number(prior.lease_ms)>120000
         ||!Number.isSafeInteger(prior.poll_ms)||Number(prior.poll_ms)<50||Number(prior.poll_ms)>Math.floor(Number(prior.lease_ms)/3))) {
@@ -183,8 +190,21 @@ export async function openSupervisorLease(databasePath:string,input:PlatformSupe
           const changed=native.prepare("UPDATE clank_platform_supervisor_state SET protocol=2 WHERE singleton=1 AND protocol=1").run();
           if(Number(changed.changes)!==1)fail("SUPERVISOR_PROTOCOL","Provider canary capability enrollment was not applied.");
         }
-        if(native.prepare("SELECT protocol FROM clank_platform_supervisor_state WHERE singleton=1").get()?.protocol!==2)fail("SUPERVISOR_PROTOCOL","Provider canary capability enrollment was not retained.");
+        const retained=native.prepare("SELECT protocol FROM clank_platform_supervisor_state WHERE singleton=1").get()?.protocol;
+        if(retained!==2&&retained!==3)fail("SUPERVISOR_PROTOCOL","Provider canary capability enrollment was not retained.");
         assertCurrent();return undefined;
+      });},
+      enrollProviderShadow(){ensureOpen();return transaction(()=>{
+        assertCurrent();const identity=assertProviderShadowSchema(native);
+        if(shadowEnrollment&&identity!==shadowEnrollment)fail("SUPERVISOR_SHADOW_SCHEMA","Shadow enrollment identity changed.");
+        const prior=native.prepare("SELECT protocol FROM clank_platform_supervisor_state WHERE singleton=1").get()?.protocol;
+        if(prior!==3){
+          const changed=native.prepare("UPDATE clank_platform_supervisor_state SET protocol=3 WHERE singleton=1 AND protocol=?").run(prior);
+          if(Number(changed.changes)!==1)fail("SUPERVISOR_PROTOCOL","Shadow capability enrollment was not applied.");
+        }
+        if(native.prepare("SELECT protocol FROM clank_platform_supervisor_state WHERE singleton=1").get()?.protocol!==3)fail("SUPERVISOR_PROTOCOL","Shadow capability enrollment was not retained.");
+        if(assertProviderShadowSchema(native)!==identity)fail("SUPERVISOR_SHADOW_SCHEMA","Shadow enrollment identity changed.");
+        shadowEnrollment=identity;assertCurrent();return undefined;
       });},
       status(state){ensureOpen();assertConfiguration();const row=readLease();return Object.freeze({state,epoch:Number(row.epoch),expiresAt:Number(row.expires_at),responsibilities});},
       release(){ensureOpen();return transaction(()=>{assertConfiguration();const row=readLease();if(!tokenHash||row.epoch!==epoch||row.owner!==owner||row.token_hash!==tokenHash)return false;
@@ -246,7 +266,7 @@ export async function armSupervisorGuardian(root:string,lease:SupervisorLease):P
   try{await file.writeFile(JSON.stringify(record));await file.sync();}finally{await file.close();}
   const folder=await fs.open(directory,"r");try{await folder.sync();}finally{await folder.close();}
   lease.assertCurrent();
-  const specification={...identity,databasePath:lease.databasePath,fence,leaseMs:lease.options.leaseMs,pollMs:lease.options.pollIntervalMs};
+  const specification={...identity,shadowSchemaModule:new URL("./managed-shadow.js",import.meta.url).href,databasePath:lease.databasePath,fence,leaseMs:lease.options.leaseMs,pollMs:lease.options.pollIntervalMs};
   const child=childProcess.spawn(proc.execPath,["--disable-warning=ExperimentalWarning","--input-type=module","--eval",SUPERVISOR_GUARDIAN],{
     env:{...proc.env,CLANK_SUPERVISOR_GUARDIAN:btoa(unescape(encodeURIComponent(JSON.stringify(specification))))},stdio:["ignore","ignore","pipe","ipc"],
   });
@@ -283,13 +303,14 @@ const spec=JSON.parse(Buffer.from(process.env.CLANK_SUPERVISOR_GUARDIAN,'base64'
 const record=JSON.parse(readFileSync(spec.fence,'utf8'));
 if(process.ppid!==spec.controllerPid||record.controllerPid!==spec.controllerPid||record.controllerBirth!==spec.controllerBirth||record.epoch!==spec.epoch)throw new Error('Guardian process identity mismatch');
 const native=new DatabaseSync(spec.databasePath,{readOnly:true});native.exec('PRAGMA busy_timeout=250;PRAGMA trusted_schema=OFF');
-let stopping=false,lastNow=Date.now();
+const {assertProviderShadowSchema}=await import(spec.shadowSchemaModule);
+let stopping=false,lastNow=Date.now(),shadowEnrollment;
 const birth=()=>{try{const data=readFileSync('/proc/'+spec.controllerPid+'/stat','utf8'),fields=data.slice(data.lastIndexOf(')')+2).split(' ');return fields[0]==='Z'||fields[0]==='X'?null:fields[19];}catch(error){if(error.code==='ENOENT'||error.code==='ESRCH')return null;throw error;}};
 const save=phase=>{const temporary=spec.fence+'.tmp';writeFileSync(temporary,JSON.stringify({...record,phase,guardianPid:process.pid}),{mode:0o600});const fd=openSync(temporary,'r');try{fsyncSync(fd);}finally{closeSync(fd);}renameSync(temporary,spec.fence);const folder=openSync(dirname(spec.fence),'r');try{fsyncSync(folder);}finally{closeSync(folder);}};
 const clear=()=>{try{unlinkSync(spec.fence);}catch(error){if(error.code!=='ENOENT')throw error;}const folder=openSync(dirname(spec.fence),'r');try{fsyncSync(folder);}finally{closeSync(folder);}};
 // Renewals can commit while the guardian waits for its native read. Evaluate
 // that observed row against the clock after reading, retaining strict expiry.
-const current=()=>{const state=native.prepare('SELECT * FROM clank_platform_supervisor_state WHERE singleton=1').get(),lease=native.prepare('SELECT * FROM clank_platform_supervisor_lease WHERE singleton=1').get(),now=Date.now();if(now<lastNow)throw new Error('Clock regression');lastNow=now;return (state?.protocol===1||state?.protocol===2)&&state.configuration_id===spec.configurationId&&state.configuration_revision===spec.configurationRevision&&state.lease_ms===spec.leaseMs&&state.poll_ms===spec.pollMs&&lease?.epoch===spec.epoch&&lease.owner===spec.owner&&lease.token_hash===spec.tokenHash&&lease.controller_pid===spec.controllerPid&&lease.controller_birth===spec.controllerBirth&&lease.expires_at>now&&lease.updated_at<=now;};
+const current=()=>{native.exec('BEGIN');try{const state=native.prepare('SELECT * FROM clank_platform_supervisor_state WHERE singleton=1').get(),lease=native.prepare('SELECT * FROM clank_platform_supervisor_lease WHERE singleton=1').get();if(state?.protocol===3){const retained=assertProviderShadowSchema(native);if(shadowEnrollment&&retained!==shadowEnrollment)return false;shadowEnrollment=retained;}else if(shadowEnrollment)return false;const now=Date.now();if(now<lastNow)throw new Error('Clock regression');lastNow=now;return (state?.protocol===1||state?.protocol===2||state?.protocol===3)&&state.configuration_id===spec.configurationId&&state.configuration_revision===spec.configurationRevision&&state.lease_ms===spec.leaseMs&&state.poll_ms===spec.pollMs&&lease?.epoch===spec.epoch&&lease.owner===spec.owner&&lease.token_hash===spec.tokenHash&&lease.controller_pid===spec.controllerPid&&lease.controller_birth===spec.controllerBirth&&lease.expires_at>now&&lease.updated_at<=now;}finally{native.exec('ROLLBACK');}};
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const fence=async()=>{if(stopping)return;stopping=true;clearInterval(timer);try{if(birth()===spec.controllerBirth)process.kill(spec.controllerPid,'SIGKILL');const until=Date.now()+5000;while(birth()===spec.controllerBirth&&Date.now()<until)await pause(25);if(birth()===spec.controllerBirth)throw new Error('Coordinator cleanup unresolved');clear();native.close();process.exit(0);}catch{try{save('failed');}catch{}process.exit(72);}};
 const check=()=>{try{if(!process.connected||!current())void fence();}catch{void fence();}};
