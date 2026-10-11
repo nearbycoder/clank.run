@@ -1,0 +1,119 @@
+{
+  "remoteEvidenceIdentity": {
+    "bytes": 18552,
+    "sha256": "d7f757daec0d8891290db432c9420cdf7c013cb69399d8139005d7547f748559",
+    "device": 65041,
+    "inode": 79891
+  },
+  "localEvidenceSHA256": "d7f757daec0d8891290db432c9420cdf7c013cb69399d8139005d7547f748559",
+  "sourceTree": "76af7c6317d55ee17cd15bb5afa75050061a4bae",
+  "mainHead": "16350d35d496507c9e48ecf59d61d3d6e0bbee81",
+  "results": [
+    {
+      "version": "22.16.0",
+      "imageId": "sha256:63f353576d0e76c02b332bae8d4ed04b7a99bd6645904072043c117986ef5e7c",
+      "containerId": "f9f9075057e1e5a6fbf89cd24088a73df2d564d695e01fdc5b38da72bb97a0fb",
+      "nativeSecurity": {
+        "appArmor": "docker-default (enforce)",
+        "securityStatus": {
+          "CapEff": "0000000000000000",
+          "NoNewPrivs": "1",
+          "Seccomp": "2"
+        }
+      },
+      "refusals": [
+        "mac",
+        "binding",
+        "operation",
+        "sequence",
+        "extra",
+        "replay"
+      ],
+      "operations": [
+        "backup",
+        "inspect",
+        "verify"
+      ],
+      "snapshot": {
+        "integrity": "ok",
+        "records": [
+          [
+            1,
+            "first"
+          ],
+          [
+            2,
+            "second"
+          ]
+        ],
+        "sourceHashUnchanged": true,
+        "bytes": 16384,
+        "sha256": "202ff968a7d5ab0a528be92e51e811be436ec2c3cb0f6df6fb74c75d3a430ed7"
+      },
+      "cleanup": {
+        "containerRemoved": true,
+        "absenceOnOriginalDaemon": true,
+        "hostNaturalClose": true
+      }
+    },
+    {
+      "version": "26.10.0",
+      "imageId": "sha256:ec71e51c77c110408bf8eabcf5dcb24bd2c5620b708cb4bf0bdca13b75582ce2",
+      "containerId": "2c3bfc69b7ec14f964873494ef6c2efbd1a2a0d9054dc2efb36abb5d1a4746af",
+      "nativeSecurity": {
+        "appArmor": "docker-default (enforce)",
+        "securityStatus": {
+          "CapEff": "0000000000000000",
+          "NoNewPrivs": "1",
+          "Seccomp": "2"
+        }
+      },
+      "refusals": [
+        "mac",
+        "binding",
+        "operation",
+        "sequence",
+        "extra",
+        "replay"
+      ],
+      "operations": [
+        "backup",
+        "inspect",
+        "verify"
+      ],
+      "snapshot": {
+        "integrity": "ok",
+        "records": [
+          [
+            1,
+            "first"
+          ],
+          [
+            2,
+            "second"
+          ]
+        ],
+        "sourceHashUnchanged": true,
+        "bytes": 16384,
+        "sha256": "75a5acb753dbe0f7df5a7ece772b0a0fa7d247568771b2c344069ea601f2714e"
+      },
+      "cleanup": {
+        "containerRemoved": true,
+        "absenceOnOriginalDaemon": true,
+        "hostNaturalClose": true
+      }
+    }
+  ],
+  "guestAvailableBytes": 2881634304,
+  "reserveBytes": 2250000000,
+  "retainedFailures": [
+    "probe-execution-15.json",
+    "probe-execution-21.json"
+  ],
+  "qualification": "Actual default-security Docker clients crossed a private socket to unmodified default Linux namespace SQLite workers on paired native host runtimes. Diagnostic fixed operations only; no source grant, capture bootstrap, source-current authority, all-writer stop, activation, ingress, handoff or feature07 acceptance.",
+  "claimLimits": [
+    "No native worker namespace identity was independently sampled; exact unmodified default sandbox implementation and actual successful worker operations are retained.",
+    "No source-grant authority, current catalog revocation, original captured SQLite runtime, source bootstrap integration or provider-wide stop/activation/ingress proof.",
+    "Fixture storage is small synthetic data; no production quota/certification claim."
+  ]
+}

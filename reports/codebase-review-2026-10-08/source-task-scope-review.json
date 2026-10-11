@@ -1,0 +1,347 @@
+{
+  "reviewDate": "2026-10-11",
+  "basisHead": "16350d35d496507c9e48ecf59d61d3d6e0bbee81",
+  "scope": "Restrict genuine source initialization to fixed backup/inspect/verify requests; retain approved inputs across asynchronous admission. This prerequisite does not implement provider transport, readiness, writer stop, target activation or complete feature07.",
+  "finding": {
+    "severity": "P1",
+    "beforeBehavior": "Actual native workers inspect revision51 from an unapproved sibling SQLite file and stage a backup of it when given the genuine source token and existing source directory capabilities.",
+    "beforeNative": {
+      "22": {
+        "commandScope": "Two old-main native direct-path scope regressions.",
+        "exit": 1,
+        "log": "/tmp/clank-review-2026-10-08/source-task-projection-16350d3-01/before-native22-04.log",
+        "sha256": "934ac86226768599059235bffa2b022c5cb129af4a502fe53c1391ef6cfa85c4",
+        "counts": {
+          "tests": 2,
+          "pass": 0,
+          "fail": 2,
+          "cancelled": 0,
+          "skipped": 0
+        }
+      },
+      "24": {
+        "commandScope": "Two old-main native direct-path scope regressions.",
+        "exit": 1,
+        "log": "/tmp/clank-review-2026-10-08/source-task-projection-16350d3-01/before-native24-04.log",
+        "sha256": "3fa009f38e9c33a7b123927a18c480683d4ec687f3f8834ef309d80f3372515c",
+        "counts": {
+          "tests": 2,
+          "pass": 0,
+          "fail": 2,
+          "cancelled": 0,
+          "skipped": 0
+        }
+      },
+      "26": {
+        "commandScope": "Two old-main native direct-path scope regressions.",
+        "exit": 1,
+        "log": "/tmp/clank-review-2026-10-08/source-task-projection-16350d3-01/before-native26-04.log",
+        "sha256": "93068efbb23c3e1d545ac2e49d5b2e91151b54bdb4943f9feab08953cdb60bdd",
+        "counts": {
+          "tests": 2,
+          "pass": 0,
+          "fail": 2,
+          "cancelled": 0,
+          "skipped": 0
+        }
+      }
+    }
+  },
+  "additionalReview": {
+    "scope": "Isolated native regression of unpublished initial projection candidate; default namespace workers, genuine constructor-minted source token and private directory capabilities. Provider fixture uses scripted Docker domain and native created catalog rows; no readiness/production provider authorization claim.",
+    "before": {
+      "22": {
+        "path": "/tmp/clank-review-2026-10-08/source-task-projection-16350d3-01/mutation-before-native22-12.log",
+        "sha256": "982d4d42ecaeb8110284d4a720ff460c7d5e19521767063245cca608600c0a10",
+        "counts": {
+          "tests": 2,
+          "pass": 0,
+          "fail": 2,
+          "cancelled": 0,
+          "skipped": 0
+        }
+      },
+      "24": {
+        "path": "/tmp/clank-review-2026-10-08/source-task-projection-16350d3-01/mutation-before-native24-12.log",
+        "sha256": "f694cc871cb80b7f563599154a9096fb014b4cd31b7994efb42a5d3f8efa45da",
+        "counts": {
+          "tests": 2,
+          "pass": 0,
+          "fail": 2,
+          "cancelled": 0,
+          "skipped": 0
+        }
+      },
+      "26": {
+        "path": "/tmp/clank-review-2026-10-08/source-task-projection-16350d3-01/mutation-before-native26-12.log",
+        "sha256": "3df85e02747ae00003ad49f429fe26d0565e0f9a3ffe48cb496a9780c5cb5d7c",
+        "counts": {
+          "tests": 2,
+          "pass": 0,
+          "fail": 2,
+          "cancelled": 0,
+          "skipped": 0
+        }
+      }
+    },
+    "after": {
+      "22": {
+        "path": "/tmp/clank-review-2026-10-08/source-task-projection-16350d3-01/mutation-after-native22-13.log",
+        "sha256": "ea8c0cbaf2a35025c5ede46d33c68c62973a9005d13acaccbdea7f195f011fc9",
+        "counts": {
+          "tests": 2,
+          "pass": 2,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 0
+        }
+      },
+      "24": {
+        "path": "/tmp/clank-review-2026-10-08/source-task-projection-16350d3-01/mutation-after-native24-13.log",
+        "sha256": "e9405a8edfaef8ef49c3cd577563ed7430644080c3b40be19f54a887a2012d29",
+        "counts": {
+          "tests": 2,
+          "pass": 2,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 0
+        }
+      },
+      "26": {
+        "path": "/tmp/clank-review-2026-10-08/source-task-projection-16350d3-01/mutation-after-native26-13.log",
+        "sha256": "b1aa3a80488afd17d6a66a3713f7d242457319f0b2e433ddd51b6046b0765c85",
+        "counts": {
+          "tests": 2,
+          "pass": 2,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 0
+        }
+      }
+    },
+    "findings": {
+      "argumentMutation": "After scope validation and during scheduler admission, change caller argument from exact generated snapshot revision73 to unapproved sibling SQLite revision51. Initial candidate returns51; revised candidate returns73 from retained approved path.",
+      "directoryMutation": "Replace caller base capability with its structural copy during admission. Initial candidate sees the replacement and fails; revised candidate uses its original genuine retained capability and the native worker returns73."
+    },
+    "candidateSourceSha256": "775647fd352be5ab156de88ad7795d4295203198ea65742ce1e3bf05e6f1951d",
+    "candidateCompiledSha256": "f9870335e5e43031278eadcac71f3e55404ee02eb689281d98c369ac91b4f686",
+    "oldCompiledSha256": "da56c35282fc4f861e39fd91f7c608705c49e9da7160ae982cc56dce41b21e10",
+    "claim": "Two cases pass/refuse correctly after immutable projection; final adoption and all checks remain pending."
+  },
+  "change": {
+    "source": "src/sqlite-task.ts",
+    "allowedOperations": [
+      "migrations.stageSQLiteBackup",
+      "inspection.inspectSQLite",
+      "inspection.verifySQLite"
+    ],
+    "boundInputs": "Exact original source path, generated backup identity, canonical temporary UUID, operation-specific snapshot/verification path, four genuine retained directory capabilities, native directory device/inode/UID/mode checks. Capture own data before awaits and retain frozen copies through worker admission.",
+    "internalProjection": [
+      "protocol",
+      "operation",
+      "backupId",
+      "temporaryId"
+    ],
+    "publicApiChanges": false,
+    "persistentSchemaChanges": false,
+    "runtimeProfileChanges": false
+  },
+  "verification": {
+    "copiedNativeSourceRuntime": {
+      "22": {
+        "commandScope": "Complete final-source runtime component selection, default namespace workers, scripted provider Docker-domain/catalog setup; copied exact candidate runtime.",
+        "exit": 0,
+        "log": "/tmp/clank-review-2026-10-08/source-task-projection-16350d3-01/final-source-native22-15.log",
+        "sha256": "245580416162ac46a085849162871dd921ec0c8e3213ae9724612b0e88645bcf",
+        "counts": {
+          "tests": 103,
+          "pass": 103,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 0
+        }
+      },
+      "24": {
+        "commandScope": "Complete final-source runtime component selection, default namespace workers, scripted provider Docker-domain/catalog setup; copied exact candidate runtime.",
+        "exit": 0,
+        "log": "/tmp/clank-review-2026-10-08/source-task-projection-16350d3-01/final-source-native24-15.log",
+        "sha256": "c0074fa6f638088467e8c319ab2d47aeb7e1fe9dc2fe0f337656c0bbc78d9a15",
+        "counts": {
+          "tests": 103,
+          "pass": 103,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 0
+        }
+      },
+      "26": {
+        "commandScope": "Complete final-source runtime component selection, default namespace workers, scripted provider Docker-domain/catalog setup; copied exact candidate runtime.",
+        "exit": 0,
+        "log": "/tmp/clank-review-2026-10-08/source-task-projection-16350d3-01/final-source-native26-15.log",
+        "sha256": "87040d65457b0685b980adc0a892629fc2686229d09bafe1c07756821f5da9aa",
+        "counts": {
+          "tests": 103,
+          "pass": 103,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 0
+        }
+      }
+    },
+    "newCases": 14,
+    "finalAdoption": {
+      "exactTestedSourceFiles": {
+        "src/sqlite-task.ts": "775647fd352be5ab156de88ad7795d4295203198ea65742ce1e3bf05e6f1951d",
+        "tests/fixtures/provider-handoff-runtime.mjs": "7633972675220d3b5fd74a4c68fa0c670867b7c8c4fbdd41b9efae8bc8faa3a3",
+        "tests/provider-handoff-runtime.test.mjs": "428149f23c9480961dfbe40217eef430a25d3e264112b62e5e4b81d4d5527462"
+      },
+      "pairedNode22And26Outputs": 320,
+      "allOutputsMatchCopiedNativeCandidate": true,
+      "changedDistributionFiles": [
+        "sqlite-task.js"
+      ],
+      "compiledSourceTaskSha256": "f9870335e5e43031278eadcac71f3e55404ee02eb689281d98c369ac91b4f686"
+    },
+    "hostedChecks": "Required on final reviewed publication.",
+    "finalAudits": {
+      "types": {
+        "command": [
+          "/usr/bin/node",
+          "scripts/type-contracts.mjs",
+          "--typescript",
+          "/tmp/clank-maintenance-type-tools/node_modules/typescript/lib/typescript.js",
+          "--type-roots",
+          "/tmp/clank-maintenance-type-tools/node_modules/@types"
+        ],
+        "exit": 0,
+        "log": "/tmp/clank-review-2026-10-08/source-task-projection-16350d3-01/final-types-20.log",
+        "sha256": "a9d29fdbcd742a859fd291765c09c9e21ee9ce75835bc35ffb02782826971acc",
+        "lastLines": [
+          "Source types: 149 existing diagnostics, no new diagnostics (baseline 154).",
+          "Packed consumer types: 54 positive/negative fixtures and all imported declarations passed.",
+          "Packed OpenAPI examples: accepted/rejected requests matched the exported runtime contract."
+        ],
+        "counts": {}
+      },
+      "docs": {
+        "command": [
+          "/usr/bin/node",
+          "scripts/docs-audit.mjs"
+        ],
+        "exit": 0,
+        "log": "/tmp/clank-review-2026-10-08/source-task-projection-16350d3-01/final-docs-20.log",
+        "sha256": "00b37c625be4e83cbcec42c3f629f2db050ed047aa65cb0d491b18b74e69e78c",
+        "lastLines": [
+          "Documentation audit passed: 109 Markdown files, 375 local links, 104 indexed guides, 146 synchronized declaration files, and 162 package exports."
+        ],
+        "counts": {}
+      },
+      "security": {
+        "command": [
+          "/usr/bin/node",
+          "scripts/security-audit.mjs"
+        ],
+        "exit": 0,
+        "log": "/tmp/clank-review-2026-10-08/source-task-projection-16350d3-01/final-security-20.log",
+        "sha256": "9fcc7ebefd396137127705c3be9cd5c0a539ea2cee51ccd143fffb6f339328b1",
+        "lastLines": [
+          "security: GitHub Actions are immutable and least-privilege oriented",
+          "security: publish allowlist contains 449 exact files / 6955556 bounded bytes",
+          "security: published text files contain no high-confidence credential material",
+          "security: current repository files contain no high-confidence credential material",
+          "security: complete reachable Git history contains no high-confidence credential material",
+          "Security audit passed."
+        ],
+        "counts": {}
+      },
+      "ordinary-workers": {
+        "command": [
+          "/usr/bin/node",
+          "--test",
+          "tests/sqlite-sandbox.test.mjs",
+          "tests/migrations-deploy.test.mjs",
+          "tests/release-package-budget.test.mjs"
+        ],
+        "exit": 0,
+        "log": "/tmp/clank-review-2026-10-08/source-task-projection-16350d3-01/final-ordinary-workers-20.log",
+        "sha256": "f25ced3534130171561da27ec82441acafc285c784e156caee3c09fa9a7dc843",
+        "lastLines": [
+          "\u2139 pass 32",
+          "\u2139 fail 0",
+          "\u2139 cancelled 0",
+          "\u2139 skipped 0",
+          "\u2139 todo 0",
+          "\u2139 duration_ms 769.340169"
+        ],
+        "counts": {
+          "tests": 32,
+          "pass": 32,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 0
+        }
+      }
+    },
+    "initialCandidateCompleteCheck": {
+      "exit": 0,
+      "sha256": "f60247e593d2ba4a4c59321ce4be921ea9995cad4740eea24b59118063fd4838",
+      "counts": {
+        "tests": 3546,
+        "pass": 3509,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 37
+      },
+      "qualification": "Complete first-candidate build/coverage/packed conformance/security passed before the two mutation regressions strengthened the unpublished candidate. This is not substituted for the final-source complete gate."
+    },
+    "finalCompleteGate": "Final-source complete local and hosted checks must pass before protected merge; their terminal evidence is retained at the delivery boundary.",
+    "package": {
+      "files": 449,
+      "bytes": 6955556,
+      "ceilingBytes": 8388608,
+      "dependencies": 0
+    }
+  },
+  "retainedFixtureFailures": [
+    {
+      "logs": "before-native22/24/26-02.log",
+      "qualification": "The initial fs.access hook was installed after builtin ESM export synchronization; probe never ran. These are fixture failures, not source-defect reproductions."
+    },
+    {
+      "logs": "before-native22/24/26-03.log",
+      "qualification": "The second probe ran after the outer source task had acquired the scheduler lane; nested same-tenant work waited until deadline. No successful foreign read/copy is claimed. The adopted probe runs before outer admission."
+    }
+  ],
+  "featureAcceptance": {
+    "accepted": 29,
+    "pending": [
+      7,
+      9,
+      10,
+      13,
+      14,
+      17,
+      30,
+      36,
+      37,
+      38,
+      40
+    ]
+  },
+  "previousProtectedDelivery": {
+    "pullRequest": "https://github.com/nearbycoder/clank.run/pull/374",
+    "main": "16350d35d496507c9e48ecf59d61d3d6e0bbee81",
+    "tree": "76af7c6317d55ee17cd15bb5afa75050061a4bae",
+    "hostedChecksPassed": 8,
+    "runtimeAndPackagedCountsEach": {
+      "tests": 3535,
+      "pass": 3498,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 37
+    },
+    "checkoutsSynced": true,
+    "originalFilesPreserved": 23,
+    "openPRsAtBoundary": []
+  }
+}

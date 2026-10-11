@@ -38,6 +38,79 @@ const cached=runtime.database[SQLITE_INTERNAL].prepare("INSERT INTO clank_meta(_
 
 let held=false,spawns=0;const queuedInputs=[],queueTasks=[];
 const gate=async label=>{if(held)return;held=true;report({phase:'held',label,spawns});const command=JSON.parse((await lines.next()).value);if(command.close)runtime.close();};
+if(config.sourceTask){
+ let token;const pins=[];const freeze=Object.freeze;
+ Object.freeze=function(value){
+  const result=freeze(value);
+  if(value?.path===config.database&&Object.hasOwn(value,'token')&&typeof value.control==='function')token=value.token;
+  if(value?.path?.startsWith(config.app)&&typeof value.fd==='number'&&typeof value.close==='function'&&value.anchor===`/proc/self/fd/${value.fd}`)pins.push(value);
+  return result;
+ };
+ const spawn=childProcess.spawn;childProcess.spawn=(...args)=>{spawns++;return spawn(...args);};syncBuiltinESMExports();
+ const acquire=SQLiteTaskScheduler.prototype.acquire;let exercised=false;
+ SQLiteTaskScheduler.prototype.acquire=async function(tenant){
+  if(tenant!==config.app||exercised)return acquire.call(this,tenant);
+  exercised=true;Object.freeze=freeze;
+  assert.ok(token);const stage=pins.find(pin=>pin.path.includes('/base/.stage-bk_'));assert.ok(stage);
+  const id=stage.path.split('/.stage-')[1],base=join(config.app,'.clank-source-recovery-'+config.bootstrap.binding.sourceIncarnation,'base');
+  const directories=[config.app,join(config.app,'.clank-source-recovery-'+config.bootstrap.binding.sourceIncarnation),base,stage.path].map(path=>pins.find(pin=>pin.path===path));
+  assert.ok(directories.every(Boolean));
+  const snapshot=join(base,'.snapshot-'+id+'.sqlite'),verified=join(base,'.verified-'+id+'.sqlite'),temporaryId=crypto.randomUUID();
+  const backup=[config.database,snapshot,snapshot+'.tmp-'+temporaryId];
+  const request=runSQLiteTask[SQLITE_INTERNAL]?.sourceRequest;
+  const before=spawns;
+  if(config.sourceTask==='queued-argument-mutation'||config.sourceTask==='queued-directory-mutation'){
+   const foreign=join(config.app,'unapproved.sqlite');
+   for(const [file,revision] of [[snapshot,73],[foreign,51]]){const db=new DatabaseSync(file);try{db.exec("CREATE TABLE clank_meta(_key TEXT PRIMARY KEY,_value INTEGER); INSERT INTO clank_meta VALUES('global_version',"+revision+")");}finally{db.close();}}
+   const snapshotIdentity=fs.statSync(snapshot),args=[snapshot],mutableDirectories=[...directories];
+   SQLiteTaskScheduler.prototype.acquire=async function(tenant){
+    if(config.sourceTask==='queued-argument-mutation')args[0]=foreign;
+    else mutableDirectories[2]={...mutableDirectories[2]};
+    return acquire.call(this,tenant);
+   };
+   const result=await runSQLiteTask('inspection','inspectSQLite',args,mutableDirectories,token);
+   report({phase:'source-task-mutation-result',case:config.sourceTask,revision:result.revision});
+   assert.equal(result.revision,73,'worker must use the immutable approved task scope');
+   assert.equal(spawns,before+1);const current=fs.statSync(snapshot);assert.equal(current.dev,snapshotIdentity.dev);assert.equal(current.ino,snapshotIdentity.ino);fs.unlinkSync(snapshot);
+   SQLiteTaskScheduler.prototype.acquire=acquire;
+  }else if(config.sourceTask==='foreign-inspection'||config.sourceTask==='foreign-backup'){
+   // Actual ordinary native file, inside the already-mounted source parent.
+   // The old opaque token could read/copy it through its general worker API.
+   const foreign=join(config.app,'unapproved.sqlite'),db=new DatabaseSync(foreign);
+   try{db.exec("CREATE TABLE clank_meta(_key TEXT PRIMARY KEY,_value INTEGER); INSERT INTO clank_meta VALUES('global_version',51)");}finally{db.close();}
+   const invoke=async()=>{
+    const result=config.sourceTask==='foreign-inspection'?await runSQLiteTask('inspection','inspectSQLite',[foreign],directories,token):await runSQLiteTask('migrations','stageSQLiteBackup',[foreign,snapshot,backup[2]],directories,token);
+    report({phase:'unapproved-source-task',case:config.sourceTask,result:result??'completed',temporaryExists:fs.existsSync(backup[2])});return result;
+   };
+   await assert.rejects(invoke,/Private source/);
+  }else{
+   assert.equal(typeof request,'function');
+   if(config.sourceTask==='projection'){
+    for(const [module,operation,args,opcode,nonce] of [['migrations','stageSQLiteBackup',backup,'backup',temporaryId],['inspection','inspectSQLite',[snapshot],'inspect',null],['inspection','verifySQLite',[verified],'verify',null]]){
+     const result=await request(token,module,operation,args,directories);
+     assert.deepEqual(result,{protocol:'clank-source-sqlite-task/1',operation:opcode,backupId:id,temporaryId:nonce});assert.equal(Object.isFrozen(result),true);assert.ok(Buffer.byteLength(JSON.stringify(result))<256);assert.equal(JSON.stringify(result).includes(config.app),false);
+    }
+   }else if(config.sourceTask==='fake-token')await assert.rejects(request({},'inspection','inspectSQLite',[snapshot],directories),/genuine private/);
+   else if(config.sourceTask==='operation')await assert.rejects(runSQLiteTask('jobs','mutatePlatformJob',[{databasePath:config.database}],directories,token),/fixed initialization operation/);
+   else if(config.sourceTask==='accessor'){
+    let getters=0;const args=[];Object.defineProperty(args,'0',{get(){getters++;throw Error('invoked accessor');}});
+    await assert.rejects(request(token,'inspection','inspectSQLite',args,directories),/bounded own path/);assert.equal(getters,0);
+   }else if(config.sourceTask==='directory-accessor'){
+    let getters=0;const caps=[...directories];Object.defineProperty(caps,'2',{get(){getters++;throw Error('invoked directory accessor');}});
+    await assert.rejects(request(token,'inspection','inspectSQLite',[snapshot],caps),/own capability data/);assert.equal(getters,0);
+   }else if(config.sourceTask==='copied-directory')await assert.rejects(request(token,'inspection','inspectSQLite',[snapshot],directories.map(pin=>({...pin}))),/directory capability/);
+   else if(config.sourceTask==='extra-directory')await assert.rejects(request(token,'inspection','inspectSQLite',[snapshot],[...directories,directories[0]]),/exact retained directories/);
+   else if(config.sourceTask==='wrong-role')await assert.rejects(request(token,'inspection','verifySQLite',[snapshot],directories),/differs from its initialization operation/);
+   else if(config.sourceTask==='temporary')await assert.rejects(request(token,'migrations','stageSQLiteBackup',[...backup.slice(0,2),snapshot+'.tmp-not-a-uuid'],directories),/backup paths cannot be rebound/);
+   else if(config.sourceTask==='directory-replacement'){
+    const retained=base+'.retained';fs.renameSync(base,retained);fs.mkdirSync(base,{mode:0o700});
+    try{await assert.rejects(request(token,'inspection','inspectSQLite',[snapshot],directories),/retained directory identity changed/);}finally{fs.rmdirSync(base);fs.renameSync(retained,base);}
+   }else throw Error('Unknown source task fixture');
+  }
+  assert.equal(spawns,before+(config.sourceTask.startsWith('queued-')?1:0),'refusal must precede worker admission; valid mutation test owns one inspection');
+  report({phase:'source-task-checked',case:config.sourceTask,spawns,passed:true});return acquire.call(this,tenant);
+ };
+}
 if(config.fault){
  const functions={readdir:'repository-read',appendFile:'encryption',writeFile:'manifest',rename:'rename'};
  for(const [name,label] of Object.entries(functions)){

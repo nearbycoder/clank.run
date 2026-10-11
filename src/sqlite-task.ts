@@ -100,6 +100,108 @@ const WORKER_MODULES: Record<SQLiteTaskModule, string> = {
   inspection: "./sqlite-inspection-worker.js",
 };
 
+/** Private transport projection, not source authority or a worker execution API. */
+interface SourceSQLiteTaskRequest {
+  readonly protocol: "clank-source-sqlite-task/1";
+  readonly operation: "backup" | "inspect" | "verify";
+  readonly backupId: string;
+  readonly temporaryId: string | null;
+}
+
+interface SourceSQLiteTaskProjection {
+  readonly request: SourceSQLiteTaskRequest;
+  readonly arguments: readonly string[];
+  readonly directories: readonly PinnedSQLiteDirectory[];
+}
+
+// Source initialization needs only its first backup and the two independent
+// checks of that backup. Do not turn its opaque token into a general SQL/file
+// capability when those operations move to a provider-side worker channel.
+async function projectSourceTask(
+  authority: any,
+  module: SQLiteTaskModule,
+  operation: string,
+  values: readonly unknown[],
+  directories: readonly PinnedSQLiteDirectory[],
+): Promise<SourceSQLiteTaskProjection> {
+  const current = authority.current;
+  current();
+  const opcode = module === "migrations" && operation === "stageSQLiteBackup" ? "backup"
+    : module === "inspection" && operation === "inspectSQLite" ? "inspect"
+    : module === "inspection" && operation === "verifySQLite" ? "verify" : undefined;
+  const count = opcode === "backup" ? 3 : 1;
+  if (!opcode || !Array.isArray(values) || values.length !== count
+    || Reflect.ownKeys(values).length !== count + 1) {
+    throw new Error("Private source tasks require a fixed initialization operation.");
+  }
+  const args: string[] = [];
+  for (let index = 0; index < count; index++) {
+    const field = Object.getOwnPropertyDescriptor(values, String(index));
+    if (!field || !("value" in field) || typeof field.value !== "string"
+      || !field.value || field.value.length > 4096 || field.value.includes("\0")) {
+      throw new Error("Private source task arguments require bounded own path data.");
+    }
+    args.push(field.value);
+  }
+  if (!Array.isArray(directories) || directories.length !== 4
+    || Reflect.ownKeys(directories).length !== 5) {
+    throw new Error("Private source tasks require their exact retained directories.");
+  }
+  const retained: PinnedSQLiteDirectory[] = [];
+  for (let index = 0; index < 4; index++) {
+    const field = Object.getOwnPropertyDescriptor(directories, String(index));
+    if (!field || !("value" in field)) throw new Error("Private source directories require own capability data.");
+    assertPinnedSQLiteDirectory(field.value);
+    retained.push(field.value);
+  }
+  const fsName = "node:fs", pathName = "node:path";
+  const [fs, path] = await Promise.all([import(fsName), import(pathName)]);
+  current();
+  const process = (globalThis as any).process;
+  if (process.platform !== "linux" || context?.getStore() === "trusted-process") {
+    throw new Error("Private source workers require default Linux namespace isolation.");
+  }
+  const binding = authority.binding;
+  const parent = path.dirname(authority.path);
+  const root = path.join(parent, ".clank-source-recovery-" + binding.sourceIncarnation);
+  const base = path.join(root, "base");
+  const filename = path.basename(args[opcode === "backup" ? 1 : 0]!);
+  const prefix = opcode === "verify" ? ".verified-" : ".snapshot-";
+  if (!filename.startsWith(prefix) || !filename.endsWith(".sqlite")) {
+    throw new Error("Private source task file differs from its initialization operation.");
+  }
+  const backupId = filename.slice(prefix.length, -".sqlite".length);
+  const identifier = /^bk_([1-9][0-9]{0,15})_[A-Za-z0-9_-]{24}$/u.exec(backupId);
+  if (!identifier || !Number.isSafeInteger(Number(identifier[1]))) {
+    throw new Error("Private source task backup identity is invalid.");
+  }
+  const file = path.join(base, filename);
+  let temporaryId: string | null = null;
+  if (opcode === "backup") {
+    temporaryId = args[2]!.slice((file + ".tmp-").length);
+    if (args[0] !== authority.path || args[1] !== file || args[2] !== file + ".tmp-" + temporaryId
+      || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(temporaryId)) {
+      throw new Error("Private source backup paths cannot be rebound.");
+    }
+  } else if (args[0] !== file) {
+    throw new Error("Private source inspection path cannot be rebound.");
+  }
+  const expected = [parent, root, base, path.join(base, ".stage-" + backupId)];
+  for (let index = 0; index < expected.length; index++) {
+    const directory = retained[index]!;
+    if (directory.path !== expected[index]) throw new Error("Private source directory scope differs.");
+    const held = fs.fstatSync(directory.fd), visible = fs.lstatSync(directory.path);
+    if (!held.isDirectory() || !visible.isDirectory() || held.dev !== visible.dev || held.ino !== visible.ino
+      || held.uid !== binding.uid || visible.uid !== binding.uid
+      || (held.mode & 0o022) !== 0 || (visible.mode & 0o022) !== 0) {
+      throw new Error("Private source retained directory identity changed.");
+    }
+  }
+  current();
+  const request: SourceSQLiteTaskRequest = Object.freeze({ protocol: "clank-source-sqlite-task/1", operation: opcode, backupId, temporaryId });
+  return Object.freeze({ request, arguments: Object.freeze(args), directories: Object.freeze(retained) });
+}
+
 // The bootstrap is fixed framework code. Requests travel through stdin, never
 // through shell interpolation or command arguments. Do not inherit NODE_OPTIONS,
 // application secrets, inspectors, preload hooks, or parent process arguments.
@@ -137,7 +239,16 @@ export async function runSQLiteTask<T>(
 ): Promise<T> {
   const authority=sourceToken===undefined?undefined:((await import("./backend.ts")).openBackend as any)[SQLITE_INTERNAL].sourceContext(sourceToken);
   const current=()=>authority?.current();
-  current();const tenant=await taskTenant(module,operation,args);current();
+  current();
+  if (authority) {
+    const projection = await projectSourceTask(authority, module, operation, args, directories);
+    // Retain approved own data across admission/import waits. Caller arrays may
+    // change after validation; they must never rebind the eventual worker.
+    args = projection.arguments;
+    directories = projection.directories;
+  }
+  current();
+  const tenant=await taskTenant(module,operation,args);current();
   const release = await scheduler.acquire(tenant);
   let sandbox: Awaited<ReturnType<typeof prepareSQLiteSandbox>> | undefined;
   try {
@@ -252,3 +363,12 @@ export async function runSQLiteTask<T>(
     try { await sandbox?.close(); } finally { release(); }
   }
 }
+
+Object.defineProperty(runSQLiteTask, SQLITE_INTERNAL, { value: Object.freeze({
+  async sourceRequest(token: object, module: SQLiteTaskModule, operation: string,
+    args: readonly unknown[], directories: readonly PinnedSQLiteDirectory[]): Promise<SourceSQLiteTaskRequest> {
+    const { openBackend } = await import("./backend.ts");
+    const authority = (openBackend as any)[SQLITE_INTERNAL].sourceContext(token);
+    return (await projectSourceTask(authority, module, operation, args, directories)).request;
+  },
+}) });

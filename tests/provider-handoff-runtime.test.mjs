@@ -44,6 +44,13 @@ async function child(t,f,mode='normal',extra={}){
  return {async kill(){p.kill('SIGKILL');const result=await exit;assert.equal(result.code,null);assert.equal(result.signal,'SIGKILL');clearTimeout(timer);assert.equal(fs.existsSync('/proc/'+p.pid),false);return result;},next:()=>queue.length?Promise.resolve(queue.shift()):new Promise((resolve,reject)=>waiters.push({resolve,reject})),send:value=>p.stdin.write(JSON.stringify(value)+'\n'),async done(){p.stdin.end();const result=await exit;assert.equal(result.code,0,result.stderr);assert.equal(result.signal,null);clearTimeout(timer);}};
 }
 const cases=[['created bootstrap initializes capture but admits no ordinary writes','normal'],['accessor bootstrap refuses without invoking its getter','malformed'],['closing during the first await invalidates the reserved initialization','close'],['revoked catalog refuses before retained source initialization','refuse']];
+for(const sourceTask of ['projection','foreign-inspection','foreign-backup','fake-token','operation','accessor','copied-directory','extra-directory','wrong-role','temporary','directory-replacement','queued-argument-mutation','queued-directory-mutation','directory-accessor'])test('native private source task scope '+sourceTask,async t=>{
+ const f=await fixture(t),p=await child(t,f,'source-task',{sourceTask});
+ if(sourceTask.startsWith('queued-'))assert.deepEqual(await p.next(),{phase:'source-task-mutation-result',case:sourceTask,revision:73});
+ assert.deepEqual(await p.next(),{phase:'source-task-checked',case:sourceTask,spawns:sourceTask.startsWith('queued-')?1:0,passed:true});
+ assert.equal((await p.next()).phase,'initialized');p.send({});assert.deepEqual(await p.next(),{ok:true,records:0});await p.done();
+ const db=new DatabaseSync(f.database,{readOnly:true});try{assert.equal(db.prepare('SELECT sequence FROM clank_pitr_state').get().sequence,0);assert.equal(db.prepare('SELECT count(*) AS n FROM clank_pitr_journal').get().n,0);}finally{db.close();}
+});
 for(const [name,mode] of cases)test(name,async t=>{
  const f=await fixture(t);if(mode==='refuse')f.mutate(db=>db.exec("UPDATE clank_provider_handoff_source_grant SET state='revoked'"));
  const p=await child(t,f,mode),first=await p.next();
