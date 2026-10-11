@@ -141,6 +141,10 @@ export async function applyTransfer(databasePath:string,request:any,keyBytes:num
       const original=transferInspection(database,crypto,{identity:request.identity},request);
       if(original.replayed){database.exec("COMMIT");return original;}
       if(Number(database.prepare("SELECT count(*) AS n FROM clank_pitr_transfer_receipts").get().n)>=10000)throw new Error("Transfer receipt capacity is exhausted.");
+      // Every enrolled field and prior acknowledgment must survive this transaction.
+      // Checking only the new receipt misses control triggers that rewrite older data.
+      const retainedEnrollment={...transferState(database,crypto,{identity:request.identity}).row};
+      const retainedReceipts=database.prepare("SELECT * FROM clank_pitr_transfer_receipts ORDER BY sequence LIMIT 10000").all();
       let state=capturedState(database,crypto);
       for(const encoded of batch.envelopes){
         const {digest,...entry}=JSON.parse(encoded);
@@ -169,6 +173,11 @@ export async function applyTransfer(databasePath:string,request:any,keyBytes:num
       const cursor=JSON.stringify(cursorOf(state)),updated=database.prepare("UPDATE clank_pitr_transfer_state SET cursor=? WHERE id=1 AND cursor=?").run(cursor,JSON.stringify(request.expectedCursor));
       const receipt=database.prepare("INSERT INTO clank_pitr_transfer_receipts VALUES(?,?,?,?)").run(batch.through.sequence,request.batchSha256,JSON.stringify(request.expectedCursor),cursor);
       if(Number(updated.changes)!==1||Number(receipt.changes)!==1)throw new Error("Transfer cursor or receipt was not durably retained.");
+      const retained=transferState(database,crypto,{identity:request.identity});
+      const expectedReceipts=[...retainedReceipts,{sequence:batch.through.sequence,fingerprint:request.batchSha256,after_cursor:JSON.stringify(request.expectedCursor),through_cursor:cursor}]
+        .sort((a:any,b:any)=>a.sequence-b.sequence);
+      if(JSON.stringify(retained.row)!==JSON.stringify({...retainedEnrollment,cursor})||JSON.stringify(retained.state)!==JSON.stringify(state)
+        ||JSON.stringify(database.prepare("SELECT * FROM clank_pitr_transfer_receipts ORDER BY sequence LIMIT 10001").all())!==JSON.stringify(expectedReceipts))throw new Error("Transfer retained enrollment, capture or receipt metadata changed.");
       const accepted=transferInspection(database,crypto,{identity:request.identity},request);
       if(!accepted.replayed||String(database.prepare("PRAGMA integrity_check").get()?.integrity_check)!=="ok")throw new Error("Transfer acknowledgment or integrity check failed.");
       database.exec("COMMIT");return {...accepted,appliedEntries:batch.envelopes.length,replayed:false};

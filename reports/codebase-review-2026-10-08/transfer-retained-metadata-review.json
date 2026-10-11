@@ -1,0 +1,330 @@
+{
+  "reviewDate": "2026-10-11",
+  "scope": "Retain enrollment, full native capture state and every prior receipt before acknowledging a stopped transfer batch. No source admission, source stop or target activation is implemented by this repair.",
+  "basisHead": "76d2b2a487754cbaa14b33684024d3109defc09a",
+  "protectedMainBase": "adf7a4da0a7da61c5b0fdb817cb0b5907fc06c4a",
+  "finding": {
+    "severity": "P1",
+    "trigger": "A native AFTER INSERT receipt trigger rewrites the archive identity, initial cursor, older acknowledgments or final capture time.",
+    "beforeBehavior": "The actual transfer returned appliedEntries=1/replayed=false and published the changed metadata into the stopped destination.",
+    "impact": "A successful acknowledgment could invalidate the original enrollment or break an earlier exact retry.",
+    "faults": [
+      "archive identity alteration",
+      "initial cursor alteration",
+      "prior receipt deletion",
+      "prior receipt alteration",
+      "prior receipt insertion",
+      "final capture timestamp alteration"
+    ],
+    "beforeNativeRuns": {
+      "22": {
+        "command": [
+          "/tmp/node-v22.16.0-linux-x64/bin/node",
+          "--test",
+          "--experimental-test-coverage",
+          "--test-reporter=spec",
+          "--test-name-pattern=native retained",
+          "tests/point-in-time-transfer.test.mjs"
+        ],
+        "exit": 1,
+        "counts": {
+          "tests": 6,
+          "pass": 0,
+          "fail": 6,
+          "cancelled": 0,
+          "skipped": 0
+        },
+        "log": "/tmp/clank-review-2026-10-08/transfer-retained-metadata-review-01/before-native22-07.log",
+        "sha256": "6b5969ebff0471fa63fcce9d258741d3e484cc2c1a8f5e12c0bc8451b7954b57"
+      },
+      "24": {
+        "command": [
+          "/tmp/node-v24.21.0-linux-x64/bin/node",
+          "--test",
+          "--experimental-test-coverage",
+          "--test-reporter=spec",
+          "--test-name-pattern=native retained",
+          "tests/point-in-time-transfer.test.mjs"
+        ],
+        "exit": 1,
+        "counts": {
+          "tests": 6,
+          "pass": 0,
+          "fail": 6,
+          "cancelled": 0,
+          "skipped": 0
+        },
+        "log": "/tmp/clank-review-2026-10-08/transfer-retained-metadata-review-01/before-native24-07.log",
+        "sha256": "7d51a5352e960ebf5fdb356b6942299025ad2d0d8e9fbcaced98e4297ea346ed"
+      },
+      "26": {
+        "command": [
+          "/usr/bin/node",
+          "--test",
+          "--experimental-test-coverage",
+          "--test-reporter=spec",
+          "--test-name-pattern=native retained",
+          "tests/point-in-time-transfer.test.mjs"
+        ],
+        "exit": 1,
+        "counts": {
+          "tests": 6,
+          "pass": 0,
+          "fail": 6,
+          "cancelled": 0,
+          "skipped": 0
+        },
+        "log": "/tmp/clank-review-2026-10-08/transfer-retained-metadata-review-01/before-native26-07.log",
+        "sha256": "6cab88d643d37a2ce6a33182ef293bf48c72f544f8c25b0b0e0a59ad5d94c1f6"
+      }
+    },
+    "nativeDiagnosticReadbacks": {
+      "perRuntime": 6,
+      "runtimes": [
+        "22",
+        "24",
+        "26"
+      ],
+      "source": "Each old run logs the returned acknowledgment and independent native retained rows."
+    }
+  },
+  "change": {
+    "source": "src/point-in-time-worker.ts",
+    "behavior": "Capture the retained enrollment and bounded prior receipts in the replay transaction. After writing the intended cursor and receipt, compare every enrollment field, the complete expected capture row and the exact prior-plus-new receipt set before COMMIT. Any mismatch rolls back before stage publication.",
+    "bounds": "Existing 10000-receipt capacity remains; prior reads limit10000 and final reads limit10001 detect an extra row. Worker limits and deadlines remain.",
+    "publicContractChanges": false,
+    "persistentSchemaChanges": false,
+    "runtimeProfileChanges": false
+  },
+  "verification": {
+    "adoptedNativeCoverageRuns": {
+      "22": {
+        "command": [
+          "/tmp/node-v22.16.0-linux-x64/bin/node",
+          "--test",
+          "--experimental-test-coverage",
+          "--test-reporter=spec",
+          "tests/point-in-time-transfer.test.mjs",
+          "tests/point-in-time-native-transfer.test.mjs"
+        ],
+        "exit": 0,
+        "counts": {
+          "tests": 34,
+          "pass": 34,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 0
+        },
+        "sha256": "193f76ec0a993ae0e0ab3ac0d89ad5f540758372715b1bbc63a827d6dd42f641",
+        "lastLines": null
+      },
+      "24": {
+        "command": [
+          "/tmp/node-v24.21.0-linux-x64/bin/node",
+          "--test",
+          "--experimental-test-coverage",
+          "--test-reporter=spec",
+          "tests/point-in-time-transfer.test.mjs",
+          "tests/point-in-time-native-transfer.test.mjs"
+        ],
+        "exit": 0,
+        "counts": {
+          "tests": 34,
+          "pass": 34,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 0
+        },
+        "sha256": "cf6f48ff4ca84559241b2ef90558b7e377eaf08f3881c411b143547067e79c93",
+        "lastLines": null
+      },
+      "26": {
+        "command": [
+          "/usr/bin/node",
+          "--test",
+          "--experimental-test-coverage",
+          "--test-reporter=spec",
+          "tests/point-in-time-transfer.test.mjs",
+          "tests/point-in-time-native-transfer.test.mjs"
+        ],
+        "exit": 0,
+        "counts": {
+          "tests": 34,
+          "pass": 34,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 0
+        },
+        "sha256": "88f719773e23a1c8270ce246d711c3c6b0321373b83a82d374a41e31650f0574",
+        "lastLines": null
+      }
+    },
+    "componentProof": "32 component cases per runtime include six native fault/refusal/unchanged-original/exact retry cases. Their existing fixture explicitly selects trusted-process; it makes no namespace claim.",
+    "namespaceProof": "Two additional actual default Linux namespace cases per runtime inspect independent source/target namespace identities, committed transfer and source SIGKILL continuity. They leave the destination stopped.",
+    "pairedBuild": {
+      "outputs": 320,
+      "node22And26Identical": true,
+      "changedFromPublished373": [
+        "point-in-time-worker.js"
+      ],
+      "sourceSha256": "65ce3893e2d81868b60608ac01fbd29065e27239c8538516a3e4ae5fe5734bf1",
+      "testSha256": "abe9f125c7c0a4a8b09ce04e9cec7a2e019608b408c82b6d4969061d0a9bb8af",
+      "compiledModuleSha256": "76f62aa3827b29c1742442c5c6a882b930ff56c8b6980fedc5f0db35095a7b98"
+    },
+    "adoptedOutputsMatchCandidate": 320,
+    "packedTypes": {
+      "command": [
+        "node",
+        "scripts/type-contracts.mjs",
+        "--typescript",
+        "/tmp/clank-maintenance-type-tools/node_modules/typescript/lib/typescript.js",
+        "--type-roots",
+        "/tmp/clank-maintenance-type-tools/node_modules/@types"
+      ],
+      "exit": 0,
+      "sha256": "a9d29fdbcd742a859fd291765c09c9e21ee9ce75835bc35ffb02782826971acc",
+      "lastLines": [
+        "Source types: 149 existing diagnostics, no new diagnostics (baseline 154).",
+        "Packed consumer types: 54 positive/negative fixtures and all imported declarations passed.",
+        "Packed OpenAPI examples: accepted/rejected requests matched the exported runtime contract."
+      ]
+    },
+    "documentation": {
+      "command": [
+        "node",
+        "scripts/docs-audit.mjs"
+      ],
+      "exit": 0,
+      "sha256": "00b37c625be4e83cbcec42c3f629f2db050ed047aa65cb0d491b18b74e69e78c",
+      "lastLines": [
+        "Documentation audit passed: 109 Markdown files, 375 local links, 104 indexed guides, 146 synchronized declaration files, and 162 package exports."
+      ]
+    },
+    "security": {
+      "command": [
+        "node",
+        "scripts/security-audit.mjs"
+      ],
+      "exit": 0,
+      "counts": {},
+      "sha256": "ecbc34aa4417480915863436f8f7d6058adebe18adaf3552b6628a3615eb6b60",
+      "lastLines": [
+        "security: published text files contain no high-confidence credential material",
+        "security: current repository files contain no high-confidence credential material",
+        "security: complete reachable Git history contains no high-confidence credential material",
+        "Security audit passed."
+      ]
+    },
+    "package": {
+      "files": 449,
+      "bytes": 6950588,
+      "ceilingBytes": 8388608,
+      "dependencies": 0
+    },
+    "retainedFailures": [
+      {
+        "log": "before-native26-02.log",
+        "exit": 127,
+        "qualification": "A guessed runtime path was absent; no tests executed."
+      },
+      {
+        "logs": "candidate-transfer-native22/24/26-05.log",
+        "perRuntime": {
+          "reported": 32,
+          "pass": 26,
+          "fail": 6,
+          "cancelled": 0,
+          "skipped": 0
+        },
+        "qualification": "The new cases had passed refusal, rollback and exact retry checks, then used a destination-only receipt query on the independent source. That fixture comparison now reads only application rows; production source did not change."
+      },
+      {
+        "log": "candidate-security-10.log",
+        "exit": 1,
+        "qualification": "Private git archive lacked a Git repository. Package and credential scans passed before git history discovery failed. The adopted genuine checkout security audit passes with reachable history."
+      }
+    ],
+    "hostedChecks": "Required on the final publication; local evidence is not substituted for hosted CI."
+  },
+  "priorProtectedDelivery": {
+    "merged": {
+      "sha": "adf7a4da0a7da61c5b0fdb817cb0b5907fc06c4a",
+      "merged": true,
+      "message": "Pull Request successfully merged"
+    },
+    "headReviewed": "76d2b2a487754cbaa14b33684024d3109defc09a",
+    "mainTree": "c86b3ca56d3624805fc218bd7e7b5a2e3bcf738d",
+    "checkouts": {
+      "/home/nearby/Sites/clank": {
+        "head": "adf7a4da0a7da61c5b0fdb817cb0b5907fc06c4a",
+        "tree": "c86b3ca56d3624805fc218bd7e7b5a2e3bcf738d",
+        "protectedFiles": 16,
+        "status": "?? reports/security-audit-2026-10-03/\n?? reports/security-audit-post-233-2026-09-20/\n?? verify-daily-log-oauth.mjs\n"
+      },
+      "/home/nearby/.vnc/codex-home/.codex/worktrees/d164/clank": {
+        "head": "adf7a4da0a7da61c5b0fdb817cb0b5907fc06c4a",
+        "tree": "c86b3ca56d3624805fc218bd7e7b5a2e3bcf738d",
+        "protectedFiles": 7,
+        "status": "?? reports/codebase-review-2026-10-08/document-review-desktop.jpg\n?? reports/codebase-review-2026-10-08/document-review-mobile.jpg\n?? reports/codebase-review-2026-10-08/hydration-desktop.png\n?? reports/codebase-review-2026-10-08/hydration-mobile.png\n?? reports/codebase-review-2026-10-08/translation-desktop.jpg\n?? reports/codebase-review-2026-10-08/translation-mobile.jpg\n?? reports/codebase-review-2026-10-08/typecheck.txt\n"
+      }
+    },
+    "protectedLocalFiles": 23,
+    "allEightHostedChecksSuccess": true,
+    "runtimeAndPackagedCountsEach": {
+      "tests": 3529,
+      "pass": 3492,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 37
+    },
+    "packedConformance": true,
+    "openPRsAtBoundary": [],
+    "acceptedFeatures": 29,
+    "pendingFeatures": 11
+  },
+  "independentBrowserObservation": {
+    "sourceHead": "76d2b2a487754cbaa14b33684024d3109defc09a",
+    "platformModuleSha256": "4640fecaae16965b5575f5a0ad932086bc14b9d0ee5602bf9d910d7b632c120b",
+    "origin": "http://127.0.0.1:40225",
+    "root": "/tmp/clank-environment-8jWouF",
+    "tabId": "2069471689",
+    "nativePublicObservation": {
+      "title": "Customer service health",
+      "description": "Approved information for customers.",
+      "component": "Checkout operational",
+      "updates": "No public updates have been published.",
+      "preferencesLink": "/status/customer-health/preferences"
+    },
+    "authenticationFixture": "Actual AuthServer session; synthetic signed UV assertion, no hardware claim",
+    "operatorNavigation": "/fixture/as/owner",
+    "operatorBoundary": "Chrome net::ERR_BLOCKED_BY_CLIENT before authenticated form observation",
+    "browserPublicationAccepted": false,
+    "nativeFinalCounts": {
+      "posts": 0,
+      "pageVersion": 2,
+      "updates": 0,
+      "subscribers": 0,
+      "notifications": 0
+    },
+    "featureCounts": {
+      "accepted": 29,
+      "pending": 11
+    }
+  },
+  "featureAcceptance": {
+    "accepted": 29,
+    "pending": [
+      7,
+      9,
+      10,
+      13,
+      14,
+      17,
+      30,
+      36,
+      37,
+      38,
+      40
+    ]
+  }
+}
