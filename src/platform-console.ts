@@ -1,4 +1,4 @@
-import { createProjectCostView } from "./project-costs.ts";
+import { createProjectCostClient, createProjectCostView } from "./project-costs.ts";
 import type { AuthRequest, DefaultAuthProfile } from "./auth.ts";
 import { createClankThemeStylesheet, getClankTheme } from "./ui-theme.ts";
 import { sortConsoleProjects } from "./platform-console-project-sort.ts";
@@ -384,10 +384,11 @@ const q=(selector,root=document)=>root.querySelector(selector);const qa=(selecto
  const tableCell=(label,text,className)=>{const node=el("td",className,text);node.dataset.label=label;return node};
  const labelTableCell=(node,label)=>{node.dataset.label=label;return node};
 const clear=(node)=>{while(node.firstChild)node.removeChild(node.firstChild)};
+const createProjectCostClient=${createProjectCostClient.toString()};
 const createProjectCostView=${createProjectCostView.toString()};
 let costView=null,costViewProject=null;
 function clearCostView(){if(costView)costView.dispose();costView=null;costViewProject=null;const panel=q("#project-cost-panel");if(panel)panel.hidden=true}
-function mountProjectCosts(project){const panel=q("#project-cost-panel");if(!initial.projectCostsEnabled||state.projectTab!=="settings"){clearCostView();return}if(costView&&!costView.disposed&&costViewProject===project.id)return;clearCostView();panel.hidden=false;costViewProject=project.id;const costClient={read:async(id,month)=>(await api("/api/projects/"+encodeURIComponent(id)+"/costs?month="+encodeURIComponent(month))).report,history:async(id,month)=>(await api("/api/projects/"+encodeURIComponent(id)+"/costs/history?month="+encodeURIComponent(month))).snapshots,reconcile:async(id,input)=>(await api("/api/projects/"+encodeURIComponent(id)+"/costs/reconcile",{method:"POST",body:input})).snapshot,policy:async(id,input)=>(await api("/api/projects/"+encodeURIComponent(id)+"/costs/policy",{method:"POST",body:input})).policy,override:async(id,input)=>(await api("/api/projects/"+encodeURIComponent(id)+"/costs/override",{method:"POST",body:input})).override};costView=createProjectCostView(panel,{client:costClient,projectId:project.id,getAccountId:()=>initial.authenticated&&state.currentProject===project.id&&state.projectTab==="settings"&&state.dashboard&&state.dashboard.account.id||null,canManage:()=>!initial.impersonation&&state.projectData&&["owner","admin"].includes(state.projectData.detail.access.role)})}
+function mountProjectCosts(project){const panel=q("#project-cost-panel");if(!initial.projectCostsEnabled||state.projectTab!=="settings"){clearCostView();return}if(costView&&!costView.disposed&&costViewProject===project.id)return;clearCostView();panel.hidden=false;costViewProject=project.id;const costClient=createProjectCostClient({headers:()=>({"x-clank-csrf":initial.csrfToken||""})});costView=createProjectCostView(panel,{client:costClient,projectId:project.id,getAccountId:()=>initial.authenticated&&state.currentProject===project.id&&state.projectTab==="settings"&&state.dashboard&&state.dashboard.account.id||null,canManage:()=>!initial.impersonation&&state.projectData&&["owner","admin"].includes(state.projectData.detail.access.role)})}
 const sortConsoleProjects=${sortConsoleProjects.toString()};
 const filterConsoleProjectStatus=${filterConsoleProjectStatus.toString()};
 const filterConsoleProjectWorkspace=${filterConsoleProjectWorkspace.toString()};

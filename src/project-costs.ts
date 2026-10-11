@@ -163,6 +163,39 @@ export function createProjectCostMcpTools<Context>(resolveClient: (context: Cont
 
 /** Exact operation IDs are retained across ambiguous transport failures. */
 export function createProjectCostClient(options: ProjectCostClientOptions = {}): ProjectCostClient {
+  // Kept local so this function remains safe to embed through toString().
+  const acknowledge = (kind: string, project: string, input: any, value: any): void => {
+    const object = (v: any) => v !== null && typeof v === "object" && !Array.isArray(v);
+    const shape = (v: any, keys: string[]) => object(v) && Object.keys(v).length === keys.length && keys.every(key => Object.hasOwn(v, key));
+    const integer = (v: any, min = 0, max = Number.MAX_SAFE_INTEGER) => Number.isSafeInteger(v) && v >= min && v <= max;
+    const decimal = (v: any, digits = 49) => typeof v === "string" && /^(?:0|[1-9][0-9]*)$/u.test(v) && v.length <= digits;
+    const opaque = (v: any) => typeof v === "string" && /^[A-Za-z0-9_.-]{1,128}$/u.test(v);
+    const fail = () => { throw new Error("Cost acknowledgment is uncertain. Retry the unchanged operation."); };
+    if (!object(input) || !object(value) || !integer(input.expectedVersion, 0, Number.MAX_SAFE_INTEGER - 1) || value.version !== input.expectedVersion + 1 || typeof input.reason !== "string" || !input.reason.trim() || new TextEncoder().encode(input.reason).byteLength > 1_024 || /[\u0000-\u001f\u007f]/u.test(input.reason) || value.reason !== input.reason) fail();
+    if (kind === "policy") {
+      if (!shape(value, ["version", "currency", "limitMinor", "warningPercent", "admission", "maxMeasurementAgeMs", "updatedAt", "reason"]) || !integer(value.updatedAt) || !/^[A-Z]{3}$/u.test(value.currency) || !decimal(value.limitMinor, 36) || !integer(value.warningPercent, 1, 100) || !["observe", "deny-at-observed-limit"].includes(value.admission) || !integer(value.maxMeasurementAgeMs, 1_000, 86_400_000) || ["currency", "limitMinor", "warningPercent", "admission", "maxMeasurementAgeMs"].some(key => value[key] !== input[key])) fail();
+    } else if (kind === "override") {
+      if (!shape(value, ["version", "policyVersion", "expiresAt", "createdAt", "reason", "active"]) || !integer(value.policyVersion, 1) || value.policyVersion !== input.policyVersion || !integer(value.expiresAt) || value.expiresAt !== input.expiresAt || !integer(value.createdAt) || typeof value.active !== "boolean") fail();
+    } else if (kind === "reconcile") {
+      const meters = ["storageByteMilliseconds", "transferBytes", "runtimeMilliseconds"];
+      if (!shape(value, ["protocol", "projectId", "month", "version", "observedUntil", "reconciledAt", "source", "sourceRevision", "rateCard", "components", "knownAmountMinor", "amountMinor", "reason"]) || value.protocol !== "clank-project-costs/1" || value.projectId !== project || value.month !== input.month || !/^20[0-9]{2}-(?:0[1-9]|1[0-2])$/u.test(value.month) || !integer(value.observedUntil) || !integer(value.reconciledAt, value.observedUntil) || !opaque(value.source) || !opaque(value.sourceRevision)) fail();
+      const card = value.rateCard;
+      if (!shape(card, ["id", "revision", "currency", "effectiveFrom", "rates"]) || !opaque(card.id) || !integer(card.revision, 1) || !/^[A-Z]{3}$/u.test(card.currency) || !integer(card.effectiveFrom) || !shape(card.rates, meters) || !Array.isArray(value.components) || value.components.length !== meters.length) fail();
+      let known = 0n, complete = true;
+      for (let index = 0; index < meters.length; index++) {
+        const meter = meters[index], rate = card.rates[meter], part = value.components[index];
+        if (!shape(rate, ["amountMinor", "perUnits"]) || !integer(rate.amountMinor, 0, 1_000_000_000_000) || !integer(rate.perUnits, 1, 1_000_000_000_000_000) || !shape(part, ["meter", "units", "complete", "numerator", "denominator", "amountMinor"]) || part.meter !== meter || part.denominator !== rate.perUnits || typeof part.complete !== "boolean") fail();
+        if (part.units === null) { if (part.complete || part.numerator !== null || part.amountMinor !== null) fail(); complete = false; }
+        else {
+          if (!decimal(part.units, 36) || !decimal(part.numerator) || !decimal(part.amountMinor)) fail();
+          const numerator = BigInt(part.units) * BigInt(rate.amountMinor), amount = (numerator + BigInt(rate.perUnits) - 1n) / BigInt(rate.perUnits);
+          if (part.numerator !== numerator.toString() || part.amountMinor !== amount.toString()) fail();
+          known += amount; complete = complete && part.complete;
+        }
+      }
+      if (value.knownAmountMinor !== known.toString() || value.amountMinor !== (complete ? known.toString() : null)) fail();
+    } else fail();
+  };
   const timeout = options.timeoutMs ?? 15_000;
   if (!Number.isSafeInteger(timeout) || timeout < 500 || timeout > 60_000) throw new TypeError("Invalid cost transport timeout.");
   const id = (value: string) => {
@@ -207,6 +240,10 @@ export function createProjectCostClient(options: ProjectCostClientOptions = {}):
         const error = new Error("Cost access changed or the operation was rejected. Refresh before retrying.") as Error & {status: number};
         error.status = response.status; throw error;
       }
+      if (body !== undefined) {
+        const kind = suffix.slice(1);
+        acknowledge(kind, projectId, JSON.parse(body), result[kind === "reconcile" ? "snapshot" : kind]);
+      }
       return result;
     } finally { clearTimeout(timer!); if (controller.signal.aborted) void reader?.cancel().catch(() => {}); reader?.releaseLock(); }
   };
@@ -221,6 +258,39 @@ export function createProjectCostClient(options: ProjectCostClientOptions = {}):
 
 /** Native controls with version-pinned drafts and unchanged-operation retries. */
 export function createProjectCostView(root: HTMLElement, options: ProjectCostViewOptions): ProjectCostView {
+  // Kept local so this function remains safe to embed through toString().
+  const acknowledge = (kind: string, project: string, input: any, value: any): void => {
+    const object = (v: any) => v !== null && typeof v === "object" && !Array.isArray(v);
+    const shape = (v: any, keys: string[]) => object(v) && Object.keys(v).length === keys.length && keys.every(key => Object.hasOwn(v, key));
+    const integer = (v: any, min = 0, max = Number.MAX_SAFE_INTEGER) => Number.isSafeInteger(v) && v >= min && v <= max;
+    const decimal = (v: any, digits = 49) => typeof v === "string" && /^(?:0|[1-9][0-9]*)$/u.test(v) && v.length <= digits;
+    const opaque = (v: any) => typeof v === "string" && /^[A-Za-z0-9_.-]{1,128}$/u.test(v);
+    const fail = () => { throw new Error("Cost acknowledgment is uncertain. Retry the unchanged operation."); };
+    if (!object(input) || !object(value) || !integer(input.expectedVersion, 0, Number.MAX_SAFE_INTEGER - 1) || value.version !== input.expectedVersion + 1 || typeof input.reason !== "string" || !input.reason.trim() || new TextEncoder().encode(input.reason).byteLength > 1_024 || /[\u0000-\u001f\u007f]/u.test(input.reason) || value.reason !== input.reason) fail();
+    if (kind === "policy") {
+      if (!shape(value, ["version", "currency", "limitMinor", "warningPercent", "admission", "maxMeasurementAgeMs", "updatedAt", "reason"]) || !integer(value.updatedAt) || !/^[A-Z]{3}$/u.test(value.currency) || !decimal(value.limitMinor, 36) || !integer(value.warningPercent, 1, 100) || !["observe", "deny-at-observed-limit"].includes(value.admission) || !integer(value.maxMeasurementAgeMs, 1_000, 86_400_000) || ["currency", "limitMinor", "warningPercent", "admission", "maxMeasurementAgeMs"].some(key => value[key] !== input[key])) fail();
+    } else if (kind === "override") {
+      if (!shape(value, ["version", "policyVersion", "expiresAt", "createdAt", "reason", "active"]) || !integer(value.policyVersion, 1) || value.policyVersion !== input.policyVersion || !integer(value.expiresAt) || value.expiresAt !== input.expiresAt || !integer(value.createdAt) || typeof value.active !== "boolean") fail();
+    } else if (kind === "reconcile") {
+      const meters = ["storageByteMilliseconds", "transferBytes", "runtimeMilliseconds"];
+      if (!shape(value, ["protocol", "projectId", "month", "version", "observedUntil", "reconciledAt", "source", "sourceRevision", "rateCard", "components", "knownAmountMinor", "amountMinor", "reason"]) || value.protocol !== "clank-project-costs/1" || value.projectId !== project || value.month !== input.month || !/^20[0-9]{2}-(?:0[1-9]|1[0-2])$/u.test(value.month) || !integer(value.observedUntil) || !integer(value.reconciledAt, value.observedUntil) || !opaque(value.source) || !opaque(value.sourceRevision)) fail();
+      const card = value.rateCard;
+      if (!shape(card, ["id", "revision", "currency", "effectiveFrom", "rates"]) || !opaque(card.id) || !integer(card.revision, 1) || !/^[A-Z]{3}$/u.test(card.currency) || !integer(card.effectiveFrom) || !shape(card.rates, meters) || !Array.isArray(value.components) || value.components.length !== meters.length) fail();
+      let known = 0n, complete = true;
+      for (let index = 0; index < meters.length; index++) {
+        const meter = meters[index], rate = card.rates[meter], part = value.components[index];
+        if (!shape(rate, ["amountMinor", "perUnits"]) || !integer(rate.amountMinor, 0, 1_000_000_000_000) || !integer(rate.perUnits, 1, 1_000_000_000_000_000) || !shape(part, ["meter", "units", "complete", "numerator", "denominator", "amountMinor"]) || part.meter !== meter || part.denominator !== rate.perUnits || typeof part.complete !== "boolean") fail();
+        if (part.units === null) { if (part.complete || part.numerator !== null || part.amountMinor !== null) fail(); complete = false; }
+        else {
+          if (!decimal(part.units, 36) || !decimal(part.numerator) || !decimal(part.amountMinor)) fail();
+          const numerator = BigInt(part.units) * BigInt(rate.amountMinor), amount = (numerator + BigInt(rate.perUnits) - 1n) / BigInt(rate.perUnits);
+          if (part.numerator !== numerator.toString() || part.amountMinor !== amount.toString()) fail();
+          known += amount; complete = complete && part.complete;
+        }
+      }
+      if (value.knownAmountMinor !== known.toString() || value.amountMinor !== (complete ? known.toString() : null)) fail();
+    } else fail();
+  };
   const account = options.getAccountId(), projectId = options.projectId, client = options.client;
   if (!account || !/^[A-Za-z0-9_-]{8,128}$/u.test(projectId)) throw new TypeError("A signed-in cost view needs its current project.");
   const month = options.month ?? new Date().toISOString().slice(0, 7);
@@ -308,11 +378,11 @@ export function createProjectCostView(root: HTMLElement, options: ProjectCostVie
     if (disposed || busy || !pending || !manage()) return;
     try {
       currentAccount(); busy = true; disable();
-      const request = pending;
-      if (request.kind === "reconcile") await client.reconcile(projectId, request.input as ProjectCostReconcileInput);
-      else if (request.kind === "policy") await client.policy(projectId, request.input as ProjectCostPolicyInput);
-      else await client.override(projectId, request.input as ProjectCostOverrideInput);
-      currentAccount(); pending = undefined; dirty = false; await refreshView(); currentAccount();
+      const request = pending, input = JSON.parse(JSON.stringify(request.input));
+      const result = request.kind === "reconcile" ? await client.reconcile(projectId, input)
+        : request.kind === "policy" ? await client.policy(projectId, input) : await client.override(projectId, input);
+      currentAccount(); acknowledge(request.kind, projectId, request.input, result);
+      pending = undefined; dirty = false; await refreshView(); currentAccount();
       status.focus({preventScroll: true});
     } catch (error) { if (!disposed) errorMessage(error, true); }
     finally { busy = false; if (!disposed) disable(); }
