@@ -1,3 +1,7 @@
+/** @internal Separate POST target evidence; never anonymous observation or authentication. */
+export declare function captureCanonicalRequestTarget(method: unknown, target: unknown): ((request: Request) => void) | undefined;
+/** @internal Assertion-only exact native object/method/URL evidence; clones carry none. */
+export declare function hasCanonicalRequestTarget(request: Request): boolean;
 /** Shared browser/server-safe security helpers used by Clank internals. */
 /** @internal Native transport proof; never inherited by Request.clone(). */
 export interface ExactRequest { readonly method: "GET" | "HEAD"; readonly path: string; readonly accept: string | null; }

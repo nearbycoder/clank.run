@@ -590,9 +590,18 @@ function shadowObservationOwner(options:{
       const candidate:ShadowObservationFacts={complete:false,bytes:0,elapsed:null,statusClass:null,mediaType:null};
       const abort=new AbortController();let ordinal:number|null=null,handed=false,submitted=false,finished=false,timedOut=false,reason:ShadowUnknownReason|null|undefined,wake:(()=>void)|undefined,reader:ReadableStreamDefaultReader<Uint8Array>|undefined,received:Response|undefined;
       let cancelHandoff:(()=>void)|undefined,resolveFlight!:()=>void;
+      let readFlight:Promise<ReadableStreamReadResult<Uint8Array>>|undefined,cancelFlight:Promise<void>|undefined,cancellationWanted=false,cancellationQueued=false,cancellationSubmitted=false;
+      const cancelBody=()=>{
+        if(cancellationSubmitted||(!reader&&!received?.body))return;
+        cancellationSubmitted=true;
+        try{cancelFlight=Promise.resolve(reader?reader.cancel():received!.body!.cancel()).then(()=>undefined,()=>undefined);}
+        catch{cancelFlight=Promise.resolve();}
+      };
+      // Primary callbacks only schedule cancellation; the actual body/reader operation is detached.
+      const requestCancellation=()=>{cancellationWanted=true;if(cancellationQueued||cancellationSubmitted)return;cancellationQueued=true;schedule(()=>{cancellationQueued=false;if(!finished)cancelBody();});};
       const pair={deadline,cancel:()=>terminal('cancelled'),flight:new Promise<void>(resolve=>{resolveFlight=resolve;})};pairs.add(pair);options.global.add(pair);
       const notify=()=>{const ready=wake;wake=undefined;ready?.();};
-      const terminal=(value:ShadowUnknownReason|null)=>{if(reason!==undefined||finished)return;reason=value;if(value!==null)abort.abort();notify();if(!handed)start();};
+      const terminal=(value:ShadowUnknownReason|null)=>{if(reason!==undefined||finished)return;reason=value;if(value!==null){abort.abort();requestCancellation();}notify();if(!handed)start();};
       const completed=()=>{if(primary.complete&&candidate.complete)terminal(primary.mediaType&&candidate.mediaType&&primary.statusClass&&candidate.statusClass?null:'content-type-invalid');};
       const timeout=()=>{const remaining=deadline-performance.now();if(remaining>0){timer=setTimeout(timeout,Math.ceil(remaining));return;}timedOut=true;terminal(ordinal===null?'not-submitted':!submitted?'not-submitted':candidate.complete?'primary-incomplete':'candidate-timeout');};
       let timer=setTimeout(timeout,Math.max(0,Math.ceil(deadline-performance.now())));
@@ -609,20 +618,23 @@ function shadowObservationOwner(options:{
           const allocated=current.operation.report.counters.reserved+1;
           options.change(op=>({...op,reservations:[...op.reservations,allocated],report:normalizeShadowReport({...op.report,counters:{...op.report.counters,reserved:allocated}},policy.maxAttempts),updatedAt:Math.max(Date.now(),op.updatedAt)}),guard);ordinal=allocated;
           check();submitted=true;const submittedAt=performance.now();
-          const response=received=await submit.call(capability,exact,abort.signal,check);check();
+          const response=received=await submit.call(capability,exact,abort.signal,check);if(cancellationWanted)cancelBody();check();
           candidate.statusClass=Math.floor(response.status/100);candidate.mediaType=shadowObservationMedia(response.headers.get('content-type'));
           if(response.redirected||response.headers.has('content-encoding'))throw new Error('Shadow candidate transport differs.');
-          if(!response.body||exact.method==='HEAD'||response.status===204||response.status===304){candidate.complete=true;candidate.elapsed=Math.max(0,performance.now()-submittedAt);if(response.body)await response.body.cancel();check();}
-          else{reader=response.body.getReader();while(true){check();const next=await reader.read();check();if(next.done){candidate.complete=true;candidate.elapsed=Math.max(0,performance.now()-submittedAt);break;}candidate.bytes+=next.value.byteLength;if(candidate.bytes>policy.maxResponseBytes){terminal('candidate-oversized');break;}}}
+          if(!response.body||exact.method==='HEAD'||response.status===204||response.status===304){candidate.complete=true;candidate.elapsed=Math.max(0,performance.now()-submittedAt);if(response.body){cancelBody();await cancelFlight;}check();}
+          else{reader=response.body.getReader();if(cancellationWanted)cancelBody();while(true){check();readFlight=reader.read();void readFlight.catch(()=>undefined);const next=await readFlight;readFlight=undefined;check();if(next.done){candidate.complete=true;candidate.elapsed=Math.max(0,performance.now()-submittedAt);break;}candidate.bytes+=next.value.byteLength;if(candidate.bytes>policy.maxResponseBytes){terminal('candidate-oversized');break;}}}
           completed();while(reason===undefined){await new Promise<void>(resolve=>{wake=resolve;});check();completed();}
         }catch(error){
           if(ordinal===null){skip('withdrawn');try{live();}catch{options.stop('authority-revoked');}}
           else if(reason===undefined){try{live();terminal(submitted?'candidate-error':'not-submitted');}catch{terminal('authority-lost');options.stop('authority-revoked');}}
         }finally{
           abort.abort();cancelHandoff?.();
-          // Actual completion remains tracked; a nonsettling native cancellation keeps the slot/barrier.
-          if(reader){try{await reader.cancel();}catch{}finally{reader.releaseLock();}}
-          else if(received?.body){try{await received.body.cancel();}catch{}}
+          // Submit independently of a pending read, then retain both actual operations through cleanup.
+          // A nonsettling read or cancellation keeps the existing slot and exact-owner barrier.
+          cancellationWanted=true;cancelBody();
+          if(readFlight)await readFlight.then(()=>undefined,()=>undefined);
+          if(cancelFlight)await cancelFlight;
+          reader?.releaseLock();
           if(ordinal!==null){
             native();if(reason===undefined)reason=submitted?'candidate-error':'not-submitted';
             try{options.live();}catch{if(reason===null||reason===undefined)reason='authority-lost';}

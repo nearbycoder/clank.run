@@ -58,7 +58,7 @@ async function fixture(t,options={}){
  };
  const request=({project='projecttest',path='/catalog',method='GET',headers={},firstByte}={})=>new Promise((resolve,reject)=>{const req=httpRequest(new URL(path,server.url),{method,headers:{host:project+'.test',...headers}},res=>{const chunks=[];res.on('data',chunk=>{firstByte?.();firstByte=null;chunks.push(chunk)});res.on('end',()=>resolve({status:res.statusCode,body:Buffer.concat(chunks).toString()}));res.on('error',reject)});req.on('error',reject);req.end()});
  t.after(async()=>{for(const item of [...testGates,...gates])item.resolve();await controller.close();await server.close();for(const native of[primary,candidate]){native.closeAllConnections();await new Promise(resolve=>native.close(resolve))}orchestrator.close();database.close();sql.close();lease.close();await rm(root,{recursive:true,force:true})});
- return{root,sql,internal,controller,lease,read,start,request,events,errors,url:server.url,gate:()=>{const item=gate();gates.push(item);return item},revoke:()=>{admitted=false},target,route};
+ return{root,sql,internal,controller,lease,read,start,request,events,errors,url:server.url,gate:()=>{const item=gate();gates.push(item);return item},revoke:()=>{admitted=false},target,route,assertDetached:()=>assert.equal(callbackDepth,0,'Candidate cancellation must not run in a primary callback')};
 }
 const hashToken=value=>createHash('sha256').update(value).digest('base64url');
 
@@ -212,4 +212,65 @@ test('rejected native response without a reader retains cancellation occupancy a
  assert.equal(f.events.length,17);assert.equal(f.read().operation.phase,'observing');assert.deepEqual(f.read().operation.reservations,[1]);assert.equal(f.read().operation.report.counters.settled,0);
  await until(()=>f.controller.elapsed('projecttest',initial.operation.sessionId)===null,'exact tombstone removed after actual tracked drain');
  const recovered=await f.controller.recover('projecttest');assert.equal(recovered.operation.phase,'complete');assert.equal(recovered.operation.retirement.phase,'retired');assert.deepEqual(recovered.operation.reservations,[]);assert.equal(recovered.operation.report.counters.unknown.interrupted,1);assert.equal(f.events.length,17);
+});
+
+
+for(const firstReleased of ['read','cancel'])test('deadline independently cancels native reader and retains both observed completions: '+firstReleased+' first',async t=>{
+ const body=gate(),readRelease=gate(),cancelRelease=gate(),nativeFetch=globalThis.fetch;
+ let intercepted=false,readStarted=false,readDelivered=false,cancelStarted=false,cancelDelivered=false,nativeReadSettled=false,nativeCancelSettled=false;
+ const f=await fixture(t,{productionRequest:true,policy:{maxRequestMs:400,maxConcurrent:16,maxDurationMs:30000},candidate:async(req,res)=>{res.setHeader('content-type','application/json');res.write('prefix');await body.promise;res.end('suffix')}});
+ t.after(()=>{globalThis.fetch=nativeFetch});
+ globalThis.fetch=async(...args)=>{
+  const response=await nativeFetch(...args);
+  if(!intercepted&&String(args[0]).startsWith(f.target+'/candidate/')){
+   intercepted=true;const getReader=response.body.getReader.bind(response.body);
+   response.body.getReader=(...values)=>{const reader=getReader(...values),read=reader.read.bind(reader),cancel=reader.cancel.bind(reader);let count=0;
+    reader.read=(...input)=>{const actual=read(...input);if(++count!==2)return actual;readStarted=true;
+     // Synchronization only: retain the actual native outcome; never fabricate EOF or rejection.
+     return actual.then(async value=>{nativeReadSettled=true;await readRelease.promise;readDelivered=true;return value},async error=>{nativeReadSettled=true;await readRelease.promise;readDelivered=true;throw error});};
+    reader.cancel=async(...input)=>{f.assertDetached();cancelStarted=true;try{return await cancel(...input)}finally{nativeCancelSettled=true;await cancelRelease.promise;cancelDelivered=true}};
+    return reader;
+   };
+  }
+  return response;
+ };
+ const initial=await f.start();assert.deepEqual(await f.request(),{status:200,body:'primary'});await until(()=>readStarted,'actual second native read starts');
+ await until(()=>cancelStarted,'deadline submits real cancellation independently of held read outcome');
+ await until(()=>nativeReadSettled&&nativeCancelSettled,'both actual native operations settle while acknowledgement delivery is held');
+ assert.equal(readDelivered,false);assert.equal(cancelDelivered,false);assert.deepEqual(f.read().operation.reservations,[1]);assert.equal(f.read().operation.report.counters.settled,0);
+ await f.controller.requestStop('projecttest',initial.operation.sessionId,initial.operation.operationId,initial.operation.controllerEpoch,()=>{});
+ await until(()=>f.errors.some(error=>String(error).includes('cleanup remains uncertain')),'bounded close refuses retained actual cleanup');
+ await until(()=>f.sql.prepare('SELECT count(*) n FROM clank_distributed_leases WHERE resource=?').get('project:projecttest').n===0,'bounded close releases only native project lease');
+ await assert.rejects(f.controller.recover('projecttest'),error=>error.code==='SHADOW_BUSY');await assert.rejects(f.controller.start('projecttest',initial.operation,()=>{}),error=>error.code==='SHADOW_BUSY');
+ await assert.rejects(f.controller.requestStop('projecttest',initial.operation.sessionId,initial.operation.operationId,initial.operation.controllerEpoch,()=>{}));
+ await f.start('projecttest1',{maxRequestMs:5000});await Promise.all(Array.from({length:16},()=>f.request({project:'projecttest1'})));
+ await until(()=>f.read('projecttest1').operation.report.counters.reserved+f.read('projecttest1').operation.report.skips.capacity===16,'held native reader occupies one of sixteen global slots');
+ assert.equal(f.read('projecttest1').operation.report.counters.reserved,15);assert.equal(f.read('projecttest1').operation.report.skips.capacity,1);
+ (firstReleased==='read'?readRelease:cancelRelease).resolve();await until(()=>firstReleased==='read'?readDelivered:cancelDelivered,'only first actual outcome is delivered');
+ assert.equal(firstReleased==='read'?cancelDelivered:readDelivered,false);assert.deepEqual(f.read().operation.reservations,[1]);assert.equal(f.read().operation.report.counters.settled,0);
+ await assert.rejects(f.controller.recover('projecttest'),error=>error.code==='SHADOW_BUSY');await f.request({project:'projecttest1'});
+ await until(()=>f.read('projecttest1').operation.report.skips.capacity===2,'one settled operation cannot release global occupancy');assert.equal(f.read('projecttest1').operation.report.counters.reserved,15);
+ readRelease.resolve();cancelRelease.resolve();await until(()=>readDelivered&&cancelDelivered,'both observed native outcomes delivered');
+ await until(()=>f.controller.elapsed('projecttest',initial.operation.sessionId)===null,'exact tombstone released only after both outcomes');
+ body.resolve();await until(()=>f.read('projecttest1').operation.report.counters.settled===15,'other owner native candidates complete');
+ const recovered=await f.controller.recover('projecttest');assert.equal(recovered.operation.phase,'complete');assert.equal(recovered.operation.retirement.phase,'retired');assert.equal(recovered.operation.report.counters.unknown.interrupted,1);assert.deepEqual(recovered.operation.reservations,[]);
+ await f.request({project:'projecttest1'});await until(()=>f.read('projecttest1').operation.report.counters.settled===16,'released slot admits only a fresh request');assert.equal(f.events.length,17);
+});
+
+test('late native headers consume cancellation intent without acquiring a reader',async t=>{
+ const body=gate(),headersRelease=gate(),cancelRelease=gate(),nativeFetch=globalThis.fetch;let intercepted=false,headersReceived=false,cancelStarted=false,cancelDelivered=false,reads=0;
+ const f=await fixture(t,{productionRequest:true,policy:{maxRequestMs:200},candidate:async(req,res)=>{res.setHeader('content-type','application/json');res.write('prefix');await body.promise;res.end('suffix')}});
+ t.after(()=>{globalThis.fetch=nativeFetch});
+ globalThis.fetch=async(...args)=>{const response=await nativeFetch(...args);if(!intercepted&&String(args[0]).startsWith(f.target+'/candidate/')){
+  intercepted=true;headersReceived=true;const getReader=response.body.getReader.bind(response.body),cancel=response.body.cancel.bind(response.body);
+  response.body.getReader=(...values)=>{reads++;return getReader(...values)};
+  response.body.cancel=async(...values)=>{f.assertDetached();cancelStarted=true;try{return await cancel(...values)}finally{await cancelRelease.promise;cancelDelivered=true}};
+  await headersRelease.promise;
+ }return response};
+ const initial=await f.start();assert.deepEqual(await f.request(),{status:200,body:'primary'});await until(()=>headersReceived,'actual native response received before held delivery');
+ await f.controller.requestStop('projecttest',initial.operation.sessionId,initial.operation.operationId,initial.operation.controllerEpoch,()=>{});
+ await until(()=>f.errors.some(error=>String(error).includes('cleanup remains uncertain')),'original bound expires with outstanding response');
+ headersRelease.resolve();await until(()=>cancelStarted,'late received body is actually cancelled');assert.equal(reads,0);assert.equal(cancelDelivered,false);assert.equal(f.events.length,1);assert.deepEqual(f.read().operation.reservations,[1]);
+ await assert.rejects(f.controller.recover('projecttest'),error=>error.code==='SHADOW_BUSY');cancelRelease.resolve();await until(()=>cancelDelivered,'late body cancellation settles');
+ await until(()=>f.controller.elapsed('projecttest',initial.operation.sessionId)===null,'late cleanup releases exact owner');const recovered=await f.controller.recover('projecttest');assert.equal(recovered.operation.phase,'complete');assert.equal(recovered.operation.report.counters.unknown.interrupted,1);assert.equal(reads,0);assert.equal(f.events.length,1);body.resolve();
 });

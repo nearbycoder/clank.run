@@ -1,5 +1,6 @@
 import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
+import {DatabaseSync} from 'node:sqlite';
 import {createHash,createHmac,randomUUID} from 'node:crypto';
 import {openPlatform} from '../../dist/platform.js';
 import {serve} from '../../dist/node.js';
@@ -15,7 +16,13 @@ const root=process.env.CLANK_SUPERVISOR_FIXTURE_ROOT,options=JSON.parse(process.
 if(!root || !process.send)throw new Error('Owned shadow controller root and IPC required.');
 const send=value=>{if(process.connected)process.send(value,()=>{})};
 const hash=value=>createHash('sha256').update(value).digest('hex');
-let platform,server,owner,lease,guardian,database,orchestrator,leaseTimer,projectLease,projectTimer;
+let platform,server,owner,lease,guardian,database,orchestrator,leaseTimer,projectLease,projectTimer,nativeHeaderMutation,observeNativeReply=false,nativeReply=null,serializationFault;
+// Fault only after the real framework has serialized a JSON-RPC envelope.
+// The independent native connection changes actual credential state, never the response.
+const faultSerialized=value=>{if(!serializationFault||value?.jsonrpc!=='2.0')return;const fault=serializationFault;serializationFault=undefined;const db=new DatabaseSync(join(root,'control.sqlite'));try{const result=db.prepare('UPDATE clank_platform_tokens SET revoked_at=? WHERE id=? AND revoked_at IS NULL').run(Date.now(),fault.tokenId);if(result.changes!==1)throw new Error('Owned serialization revocation did not affect one real credential.');}finally{db.close()}};
+const originalStringify=JSON.stringify,originalResponseJson=Response.json;
+JSON.stringify=function(...args){const result=originalStringify.apply(JSON,args);faultSerialized(args[0]);return result};
+Response.json=function(...args){const response=originalResponseJson.apply(Response,args);faultSerialized(args[0]);return response};
 const close=async()=>{
   if(platform){await server.close();await platform.close();return;}
   await owner?.close();await server?.close();clearInterval(projectTimer);if(projectLease)await orchestrator.releaseLease(projectLease);
@@ -61,10 +68,15 @@ if(process.env.CLANK_SHADOW_NATIVE_OWNER==='1'){
   send({kind:'ready',pid:process.pid,birth:lease.processBirth,record,url:server?.url});
 }else{
   platform=await openPlatform({dataDirectory:root,publicUrl:'http://127.0.0.1:42431',hostingProfile:'trusted',sqliteIsolation:'trusted-process',signup:false,...options,onError:error=>send({kind:'platform-error',error:String(error)})});
-  server=await serve(platform.handle,{hostname:'127.0.0.1',port:0});send({kind:'ready',pid:process.pid,birth:await linuxProcessBirth(process.pid),url:server.url,status:platform.supervisor()});
+  server=await serve(async request=>{const observe=observeNativeReply;observeNativeReply=false;const pending=platform.handle(request);if(nativeHeaderMutation&&new URL(request.url).pathname.endsWith('/shadow/mcp')){const change=nativeHeaderMutation;nativeHeaderMutation=undefined;request.headers.set(...change);}const response=await pending;if(observe)nativeReply={status:response.status,bodyUsed:request.bodyUsed};return response;},{hostname:'127.0.0.1',port:0});send({kind:'ready',pid:process.pid,birth:await linuxProcessBirth(process.pid),url:server.url,status:platform.supervisor()});
 }
 process.on('message',message=>void(async()=>{
   if(message?.kind==='stop'){await close();send({kind:'stopped',id:message.id});process.disconnect();return}
+  if(message?.kind==='direct-unread-request'&&platform){let pulls=0;const input=new Request(message.url,{method:'POST',headers:message.headers,body:new ReadableStream({pull(){pulls++;throw new Error('Unsupported direct transport body was read.')}},{highWaterMark:0}),duplex:'half'});const response=await platform.handle(input);send({kind:'response',id:message.id,status:response.status,body:await response.text(),pulls});return}
+  if(message?.kind==='revoke-mcp-serialization'){serializationFault={tokenId:message.tokenId};send({kind:'armed',id:message.id});return}
+  if(message?.kind==='observe-next-native-reply'){nativeReply=null;observeNativeReply=true;send({kind:'armed',id:message.id});return}
+  if(message?.kind==='native-reply'){send({kind:'observed',id:message.id,reply:nativeReply});return}
+  if(message?.kind==='mutate-native-header'&&platform){nativeHeaderMutation=message.header;send({kind:'armed',id:message.id});return}
   if(message?.kind==='status'){send({kind:'status',id:message.id,status:platform?.supervisor()});return}
   if(message?.kind==='request'&&platform){const input=new Request(message.url,{method:message.method,headers:message.headers,...(message.body===null?{}:{body:Buffer.from(message.body,'base64')})});const pending=platform.handle(input);if(message.mutateHeader)input.headers.set(...message.mutateHeader);const response=await pending;send({kind:'response',id:message.id,status:response.status,headers:[...response.headers],body:Buffer.from(await response.arrayBuffer()).toString('base64')});}
 })().catch(error=>send({kind:'error',id:message?.id,error:String(error)})));

@@ -2,6 +2,7 @@ import { openNodeEvacuations, type NodeEvacuationPlan, type EvacuationProject, t
 import { shadowStatusQuery, parseShadowCursorToken, shadowCursorToken, selectShadowHistory, type ShadowHistoryView, type ShadowCursor, createShadowCandidateRequest, assertProviderShadowSchema, shadowSchemaIdentity, upgradeShadowReportSchema, readShadowRecord, assertShadowReplay, readShadowReplays, saveShadowRecord, retireShadow,
   normalizeShadowPolicy, narrowShadowPolicy, createShadowController, emptyShadowReport, normalizeShadowReview, parseShadowReviewToken, shadowReviewToken, shadowReviewSelection, expandShadowReviewSelection, shadowReviewDigest, assertShadowReviewReplay,
   type ShadowReviewPayload, type ShadowSessionPolicy, type ShadowReplayView, type ShadowReport, type ShadowPhase, type PlatformShadowPolicy, type ShadowRecord, type ShadowOperation, type ShadowOutcome, type ShadowLifecycleAdapter } from "./managed-shadow.ts";
+import { createMcpServer, McpToolError } from "./mcp.ts";
 import { createManagedCanary, validateManagedCanary, type ManagedCanaryOptions } from "./managed-canary.ts";
 import { decodeReleaseAttestation, verifyReleaseAttestation, type ReleaseAttestation, type ReleaseAttestationPolicy } from "./release-attestation.ts";
 import { createOperationalMonitor, type OperationalSignal, type PlatformOperationsOptions } from "./operations-monitor.ts";
@@ -125,6 +126,7 @@ import { platformConsolePage } from "./platform-console.ts";
 import { platformMarketingPage } from "./platform-marketing.ts";
 import {
   readRequestBytes,
+  hasCanonicalRequestTarget,
   requestOriginAllowed,
   RequestInputError,
   readJsonRequest,
@@ -1558,6 +1560,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     }
   } catch (error) { storage.auth.close(); storage.database.close(); throw error; }
   const machineResponseGuards = new WeakMap<Request, () => void>();
+  const shadowMcpResponseGuards = new WeakMap<Request, () => void>();
   const evacuations = openNodeEvacuations(storage.internal);
   const requireNoEvacuation = (projectId: string) => { if (evacuations.activeForProject(projectId)) throw new PlatformError(409, "PROJECT_EVACUATING", "Resume or cancel the node evacuation before changing this project."); };
   storage.internal.exec("CREATE TABLE IF NOT EXISTS clank_platform_release_attestations (release_id TEXT PRIMARY KEY REFERENCES clank_platform_releases(id) ON DELETE CASCADE, attestation TEXT NOT NULL, verified_at INTEGER NOT NULL)");
@@ -5533,6 +5536,49 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     // point-in-time data, while principal and supervisor authority remain current.
     authorized();return{body,assertCurrent:authorized};
   };
+  const shadowMcp=async(request:Request,projectId:string,identity:Readonly<{url:string;method:string;headers:string}>)=>{
+    if(request.method!=="POST")throw new PlatformError(405,"SHADOW_MCP_METHOD","Shadow MCP accepts POST only.");
+    const transport=()=>{
+      if(normalizeHostname(new URL(request.url).hostname)!==publicHostname)throw new PlatformError(403,"SHADOW_MCP_HOST","Shadow MCP is available only on the control host.");
+      if(!hasCanonicalRequestTarget(request))throw new PlatformError(403,"SHADOW_MCP_TRANSPORT_UNAVAILABLE","Shadow MCP requires the native canonical request transport.");
+      if(request.url!==identity.url || request.method!==identity.method || JSON.stringify([...request.headers])!==identity.headers)throw new PlatformError(403,"SHADOW_REQUEST_CHANGED","Shadow request identity changed.");
+      if(request.headers.has("cookie") || !/^Bearer (?:clnk|prct|clsa)_[A-Za-z0-9_-]{40,200}$/u.test(request.headers.get("authorization")??""))throw new PlatformError(401,"SHADOW_MCP_BEARER_REQUIRED","Shadow MCP requires an explicit bearer credential without cookies.");
+      const origin=request.headers.get("origin"),site=request.headers.get("sec-fetch-site");
+      if(origin!==null && origin!==new URL(publicUrl).origin || site!==null && !["same-origin","same-site","none"].includes(site))throw new PlatformError(403,"ORIGIN_MISMATCH","Cross-origin request rejected.");
+    };
+    transport();const supervisor=leadership,principal=await requirePlatformPrincipal(storage,request,serviceAccounts);let publication:(()=>void)|undefined;
+    const current=()=>{
+      transport();if(closed || leadership!==supervisor)throw new PlatformError(503,"PLATFORM_CLOSED","Platform authority is unavailable.");supervisor?.assertCurrent();
+      requireCurrentPlatformPrincipal(storage,principal);
+      if(!principal.tokenId || principal.impersonation || principal.projectId && principal.projectId!==projectId)throw new PlatformError(403,"TOKEN_SCOPE_DENIED","Shadow MCP requires exact project read authority.");
+      if(principal.projectId && !principal.permissions.includes("read"))throw new PlatformError(403,"TOKEN_SCOPE_DENIED","Shadow MCP requires explicit read permission.");
+      accessibleProject(storage.internal,projectId,principal,"read");publication?.();
+    };
+    current();
+    // Request-local, stateless framework instance. Admission precedes its body
+    // parser, and no project lease is held while an authenticated body waits.
+    const server=createMcpServer({name:"clank-shadow-status",sessions:false,maxRequestBytes:8192,maxResponseBytes:1048576,
+      allowedOrigins:[new URL(publicUrl).origin],authenticate:async()=>{current();return{context:undefined,scopes:new Set(["agent:read"])};},
+      tools:[{name:"shadow_status",description:"Read retained shadow transport observations and exact cleanup status; never start, stop or promote.",requiredScope:"agent:read",
+        annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false},
+        inputSchema:{type:"object",properties:{sessionId:{type:"string",pattern:"^[A-Za-z0-9_-]{1,128}$"},limit:{type:"integer",minimum:1,maximum:20},before:{type:"string",maxLength:512}},additionalProperties:false,oneOf:[{required:["sessionId"],maxProperties:1},{not:{required:["sessionId"]}}]},
+        async invoke(value){
+          current();let sessionId:string|undefined,search="";
+          try {
+            const input=plainObject(value);
+            if(Object.hasOwn(input,"sessionId")){exact(input,["sessionId"]);sessionId=shadowRequestId(input.sessionId);}
+            else{exact(input,["limit","before"]);const fields:string[]=[];
+              if(Object.hasOwn(input,"limit")){if(!Number.isSafeInteger(input.limit) || Number(input.limit)<1 || Number(input.limit)>20)throw new Error();fields.push("limit="+input.limit);}
+              if(Object.hasOwn(input,"before")){if(typeof input.before!=="string" || !input.before || input.before.length>512 || !/^[A-Za-z0-9_.-]+$/u.test(input.before))throw new Error();fields.push("before="+input.before);}
+              search=fields.length?"?"+fields.join("&"):"";
+            }
+          }catch{throw new McpToolError("SHADOW_INPUT_INVALID","Use an exact sessionId or bounded limit/before fields.");}
+          const result=await readShadowStatus(principal,projectId,search,sessionId,request,identity);current();publication=result.assertCurrent;current();return JSON.parse(result.body);
+        }}]});
+    shadowMcpResponseGuards.set(request,current);
+    try{const response=await server.handle(request);current();return response;}
+    finally{server.close();}
+  };
   const shadowReviewedArtifacts=async(project:ProjectRow,candidate:ReleaseRow,primary:ReleaseRow,policy:ShadowSessionPolicy,nodeId:string,current:()=>void)=>{
     current();if(candidate.config.jobs || !policy.readPaths.includes(candidate.config.health.path))throw new PlatformError(409,"SHADOW_CANDIDATE_INELIGIBLE","Shadow requires a reviewed public health path and no declared jobs.");
     await providerPromotionCertificate(project,nodeId);current();
@@ -7873,7 +7919,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     if (closed) return problem(503, "PLATFORM_CLOSED", "Platform is closed.");
     try {
       const url = new URL(request.url);
-      const shadowReadIdentity=request.method==="GET" && /^\/api\/projects\/[^/]+\/shadow(?:\/[^/]+)?$/u.test(url.pathname)
+      const shadowMcpProject=/^\/api\/projects\/([A-Za-z0-9_-]{8,128})\/shadow\/mcp$/u.exec(url.pathname)?.[1];
+      const shadowReadIdentity=shadowMcpProject || request.method==="GET" && /^\/api\/projects\/[^/]+\/shadow(?:\/[^/]+)?$/u.test(url.pathname)
         ?Object.freeze({url:request.url,method:request.method,headers:JSON.stringify([...request.headers])}):undefined;
       // Caddy calls this permission endpoint over loopback, so it must be
       // handled before Host-based application dispatch. The secret is still
@@ -9101,6 +9148,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           ...await storageDiagnostics(),
         });
       }
+
+      if(shadowMcpProject)return await shadowMcp(request,shadowMcpProject,shadowReadIdentity!);
 
       const principal = await requirePlatformPrincipal(storage, request, serviceAccounts);
       if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) requireCurrentPlatformPrincipal(storage, principal);
@@ -11656,8 +11705,9 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
 
   const handle = async (request: Request): Promise<Response> => {
     const response = await handleRequest(request);
-    if(response.status<400) {
-      try {machineResponseGuards.get(request)?.();} catch(error) {
+    const responseGuard=shadowMcpResponseGuards.get(request)??(response.status<400?machineResponseGuards.get(request):undefined);
+    if(responseGuard) {
+      try {responseGuard();} catch(error) {
         if(error instanceof ServiceAccountError || error instanceof PlatformError) return problem(error.status,error.code,error.message);
         return problem(401,'SERVICE_ACCOUNT_INVALID_CREDENTIAL','Refresh service account authority before continuing.');
       }
