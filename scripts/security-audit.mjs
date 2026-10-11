@@ -184,8 +184,8 @@ for (const expected of ["README.md", "SECURITY.md", "LICENSE", "dist/index.js", 
 // Proposal #309 adds exactly one optional policy runtime and its declaration.
 // Proposal #313 adds exactly platform-supervisor.js and its declaration.
 // Accepted main has419 paths; organization policy adds its runtime/declaration,
-// and temporary preview grants add their runtime/declaration. The6MiB cap stays fixed.
-if ((packResult?.entryCount ?? 0) > 423) fail("Published package unexpectedly exceeds 423 files.");
+// and temporary preview grants add four runtime/declaration paths. The6MiB cap stays fixed.
+if ((packResult?.entryCount ?? 0) > 425) fail("Published package unexpectedly exceeds 425 files.");
 if ((packResult?.unpackedSize ?? 0) > 6 * 1024 * 1024) fail("Published package unexpectedly exceeds 6 MiB unpacked.");
 pass(`publish allowlist contains ${packResult?.entryCount ?? 0} bounded files`);
 
