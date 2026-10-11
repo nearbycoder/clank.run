@@ -5,6 +5,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {fork} from 'node:child_process';
 import {once} from 'node:events';
+import {DatabaseSync} from 'node:sqlite';
 import {defineAuth,defineBackend,defineDatabase,defineTable,openBackend,s} from '../dist/index.js';
 import {defineReviewedAction,renderApprovalInbox} from '../dist/reviewed-actions.js';
 const origin='http://127.0.0.1:42507',native=Symbol.for('clank.sqlite.internal'),company='quorum_company_01';
@@ -162,6 +163,20 @@ test('unknown retained quorum protocols fail closed without deleting historical 
   const f=await fixture(t),plan=f.plan();f.vote(plan,f.left);const sql=f.runtime.database[native];
   sql.prepare('UPDATE clank_reviewed_quorum_state SET protocol=2').run();
   await assert.rejects(f.reopen(),error=>error.code==='QUORUM_PROTOCOL');
+});
+for(const damaged of ['receipts','votes','state','plans','events','receipt-view','vote-column','singleton','clock'])test('incomplete retained quorum '+damaged+' refuses before bootstrap or history retirement',async t=>{
+  const f=await fixture(t),plan=f.plan();f.vote(plan,f.left);f.vote(plan,f.right);const sql=f.runtime.database[native];
+  const tables={receipts:'clank_reviewed_receipts',votes:'clank_reviewed_votes',state:'clank_reviewed_quorum_state',plans:'clank_reviewed_plans',events:'clank_reviewed_events'};
+  if(tables[damaged])sql.exec('DROP TABLE '+tables[damaged]);
+  else if(damaged==='receipt-view')sql.exec('DROP TABLE clank_reviewed_receipts; CREATE VIEW clank_reviewed_receipts AS SELECT NULL AS id,NULL AS plan,NULL AS owner,NULL AS receipt');
+  else if(damaged==='vote-column')sql.exec('ALTER TABLE clank_reviewed_votes RENAME COLUMN actor TO substituted_actor');
+  else if(damaged==='singleton')sql.exec('DELETE FROM clank_reviewed_quorum_state');
+  else sql.exec('UPDATE clank_reviewed_quorum_state SET clock=-1');
+  const snapshot=()=>{const db=new DatabaseSync(f.path,{readOnly:true});try{
+    const schema=db.prepare("SELECT name,type,sql FROM sqlite_schema WHERE name LIKE 'clank_reviewed_%' ORDER BY name").all();
+    return {schema,rows:schema.filter(row=>row.type==='table').map(({name})=>({name,rows:db.prepare('SELECT * FROM '+name+' ORDER BY rowid').all()}))};
+  }finally{db.close();}};
+  const before=snapshot();await assert.rejects(f.reopen(),error=>error.code==='QUORUM_STATE'&&error.status===503);assert.deepEqual(snapshot(),before);
 });
 test('async or untracked membership callbacks cannot create a durable quorum plan',async t=>{
   for(const membership of [async()=>null,()=>({scope:company,role:'reviewer',version:'v1',policyVersion:'p1'})]) {

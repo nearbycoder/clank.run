@@ -1,5 +1,7 @@
 # Approval quorum policies
 
+Once quorum storage is enrolled, startup checks the five retained table shapes and singleton state before bootstrap and again inside its transaction. Missing or altered storage returns `QUORUM_STATE` without recreating history or retiring surviving votes. Unsupported protocols still return `QUORUM_PROTOCOL`. This does not certify arbitrary SQL constraints or recovery after all enrollment evidence is erased.
+
 An application can require several distinct human approvals before a reviewed action
 changes its data. Quorums extend the existing [reviewed-action workflow](governance.md),
 including record-bound previews, its native browser inbox and exact committed receipts.

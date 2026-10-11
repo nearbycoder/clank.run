@@ -131,8 +131,32 @@ export function openReviewedActions(database: SQLiteDatabase<any>, authRuntime: 
       if (authRuntimeDatabase(authRuntime) !== database) throw new TypeError("Approval quorums require auth and membership in the same native database.");
     }
   }
-  const retainedQuorum = Boolean(sql.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_reviewed_quorum_state'").get());
-  if (retainedQuorum && sql.prepare('SELECT protocol FROM clank_reviewed_quorum_state WHERE singleton=1').get()?.protocol !== 1) throw new AuthError('QUORUM_PROTOCOL', 'Unsupported retained approval quorum protocol.', 503);
+  const retainedQuorumState = () => {
+    const names = new Map(sql.prepare("SELECT name,type FROM sqlite_schema WHERE name LIKE 'clank_reviewed_%'").all().map(row => [String(row.name), String(row.type)]));
+    const plans = sql.prepare('PRAGMA table_info(clank_reviewed_plans)').all();
+    if (!names.has('clank_reviewed_quorum_state') && !names.has('clank_reviewed_votes') && !plans.some(column => column.name === 'quorum')) return;
+    const layouts: Record<string, readonly (readonly [string, string, number, number])[]> = {
+      clank_reviewed_plans: [['id','TEXT',0,1],['owner','TEXT',1,0],['action','TEXT',1,0],['definition','TEXT',1,0],['input','TEXT',1,0],['preview','TEXT',1,0],['revision','INTEGER',1,0],['status','TEXT',1,0],['created','INTEGER',1,0],['expires','INTEGER',1,0],['approved_by','TEXT',0,0],['approved_session','TEXT',0,0],['dependencies','TEXT',0,0],['quorum','TEXT',0,0]],
+      clank_reviewed_receipts: [['id','TEXT',0,1],['plan','TEXT',1,0],['owner','TEXT',1,0],['receipt','TEXT',1,0]],
+      clank_reviewed_events: [['sequence','INTEGER',0,1],['plan','TEXT',1,0],['actor','TEXT',1,0],['transition','TEXT',1,0],['at','INTEGER',1,0]],
+      clank_reviewed_quorum_state: [['singleton','INTEGER',0,1],['protocol','INTEGER',1,0],['clock','INTEGER',1,0]],
+      clank_reviewed_votes: [['plan','TEXT',1,1],['actor','TEXT',1,2],['record','TEXT',1,0],['invalidated','INTEGER',1,0]],
+    };
+    for (const [name, layout] of Object.entries(layouts)) {
+      const columns = sql.prepare(`PRAGMA table_info(${name})`).all();
+      if (names.get(name) !== 'table' || columns.length !== layout.length || columns.some((column, index) => {
+        const expected = layout[index]!;
+        return column.name !== expected[0] || column.type !== expected[1] || column.notnull !== expected[2] || column.pk !== expected[3];
+      })) throw new AuthError('QUORUM_STATE', 'Retained approval quorum storage is incomplete.', 503);
+    }
+    const states = sql.prepare('SELECT singleton,protocol,clock FROM clank_reviewed_quorum_state').all();
+    if (states.length !== 1 || states[0]!.singleton !== 1) throw new AuthError('QUORUM_STATE', 'Retained approval quorum state is incomplete.', 503);
+    if (states[0]!.protocol !== 1) throw new AuthError('QUORUM_PROTOCOL', 'Unsupported retained approval quorum protocol.', 503);
+    if (!Number.isSafeInteger(states[0]!.clock) || Number(states[0]!.clock) < 0 || Number(states[0]!.clock) > 4102444800000) throw new AuthError('QUORUM_STATE', 'Invalid retained approval clock.', 503);
+  };
+  retainedQuorumState();
+  sql.transaction(() => {
+    retainedQuorumState();
   sql.exec(`CREATE TABLE IF NOT EXISTS clank_reviewed_plans (
     id TEXT PRIMARY KEY, owner TEXT NOT NULL, action TEXT NOT NULL, definition TEXT NOT NULL,
     input TEXT NOT NULL, preview TEXT NOT NULL, revision INTEGER NOT NULL, status TEXT NOT NULL,
@@ -143,10 +167,10 @@ export function openReviewedActions(database: SQLiteDatabase<any>, authRuntime: 
   sql.exec("CREATE INDEX IF NOT EXISTS clank_reviewed_plans_owner ON clank_reviewed_plans(owner, created)");
   sql.exec("CREATE TABLE IF NOT EXISTS clank_reviewed_receipts (id TEXT PRIMARY KEY, plan TEXT NOT NULL UNIQUE, owner TEXT NOT NULL, receipt TEXT NOT NULL)");
   sql.exec("CREATE TABLE IF NOT EXISTS clank_reviewed_events (sequence INTEGER PRIMARY KEY AUTOINCREMENT, plan TEXT NOT NULL, actor TEXT NOT NULL, transition TEXT NOT NULL, at INTEGER NOT NULL)");
-  sql.transaction(() => {
     sql.exec(`CREATE TABLE IF NOT EXISTS clank_reviewed_quorum_state(singleton INTEGER PRIMARY KEY CHECK(singleton=1),protocol INTEGER NOT NULL,clock INTEGER NOT NULL);
       INSERT OR IGNORE INTO clank_reviewed_quorum_state VALUES(1,1,0);
       CREATE TABLE IF NOT EXISTS clank_reviewed_votes(plan TEXT NOT NULL,actor TEXT NOT NULL,record TEXT NOT NULL,invalidated INTEGER NOT NULL CHECK(invalidated IN(0,1)),PRIMARY KEY(plan,actor));`);
+    retainedQuorumState();
     const legacyFence="CREATE TRIGGER clank_reviewed_quorum_legacy BEFORE UPDATE OF quorum,approved_session ON clank_reviewed_plans WHEN OLD.quorum IS NOT NULL AND (NEW.quorum IS NOT OLD.quorum OR NEW.approved_session IS NOT NULL) BEGIN SELECT RAISE(ABORT,'Native quorum metadata is immutable and requires all current votes.'); END";
     if (!sql.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_reviewed_quorum_legacy'").get()) sql.exec(legacyFence);
     if (sql.prepare("SELECT sql FROM sqlite_schema WHERE name='clank_reviewed_quorum_legacy'").get()?.sql!==legacyFence) throw new AuthError('QUORUM_STATE','The native legacy quorum fence does not match its protocol.',503);
