@@ -184,6 +184,56 @@ function bridgeCatalog(c:Context,db:any,root:Row,project:Row,reservations:Row[])
   }else if(reservations.some(r=>r.catalog_id===project.catalog_id))fail("Provider handoff reservation has no retained grant.");
   return {version:row.version,...records};
 }
+/** Private bootstrap reader. It never admits a request or writes provider state. */
+export async function openProviderSourceReader(encoded:string){
+  if(typeof encoded!=="string"||new TextEncoder().encode(encoded).length>16384)fail("Invalid source bootstrap.");
+  const input=JSON.parse(encoded);if(JSON.stringify(input)!==encoded)fail("Source bootstrap must use canonical JSON.");encoded="";
+  if(!exact(input,["protocol","binding","bindingSha256","containerId","catalogPath","grantSecret","controlSecret","recoveryKey"])||input.protocol!=="clank-provider-source-bootstrap/1"||input.catalogPath!=="/run/clank-source/catalog.sqlite"||!match(input.bindingSha256,DIGEST)||!match(input.containerId,DIGEST))fail("Invalid source bootstrap.");
+  const fsName="node:fs",pathName="node:path",sqliteName="node:sqlite",cryptoName="node:crypto";
+  const [fs,path,{DatabaseSync},crypto]=await Promise.all([import(fsName),import(pathName),import(sqliteName),import(cryptoName)]);
+  const process=(globalThis as any).process,Buffer=(globalThis as any).Buffer,secrets:Uint8Array[]=[];
+  const hash=(value:string|Uint8Array)=>crypto.createHash("sha256").update(value).digest("hex");
+  const c={fs,path,Database:DatabaseSync,hash,pins:[],marked:true} as unknown as Context;
+  let closed=false,version=0,recorded="";
+  const close=()=>{if(closed)return;closed=true;for(const key of secrets)key.fill(0);releasePins(c,0);};
+  try{
+    if(process.platform!=="linux"||!process.getuid?.()||!process.getgid?.())fail("Source bootstrap requires its fixed native non-root user.");
+    for(const name of ["grantSecret","controlSecret","recoveryKey"]){const text=input[name];if(!match(text,/^[A-Za-z0-9_-]{43}$/u))fail("Invalid source bootstrap key.");const key=Buffer.from(text,"base64url");secrets.push(key);delete input[name];if(key.length!==32||key.toString("base64url")!==text)fail("Invalid source bootstrap key.");}
+    const value=input.binding,capture=value?.capture;
+    if(!exact(value,["protocol","enablementId","indexId","catalogId","domainSha256","projectId","releaseId","generation","capsuleSha256","sourceIncarnation","grantId","role","instance","imageId","uid","gid","capture"])||![value.enablementId,value.indexId,value.catalogId].every(v=>match(v,UUID))||!match(value.domainSha256,DIGEST)||!match(value.projectId,ID)||value.uid!==process.getuid()||value.gid!==process.getgid()||!exact(capture,["keyId","keySha256","maxTransactionBytes","maxStateBytes","maxJournalEntries","maxJournalBytes"]))fail("Invalid source bootstrap identity.");
+    const maxima=[8388608,134217728,100000,1073741824],names=["maxTransactionBytes","maxStateBytes","maxJournalEntries","maxJournalBytes"];
+    for(let i=0;i<names.length;i++){const n=capture[names[i]];if(!positive(n)||n>maxima[i]||n<(i===2?1:1024))fail("Invalid source capture capacity.");}
+    const root={index_id:value.indexId,domain_sha256:value.domainSha256,bridge:{enablement_id:value.enablementId,limits:{maxCaptureTransactionBytes:capture.maxTransactionBytes,maxCaptureStateBytes:capture.maxStateBytes,maxJournalEntries:capture.maxJournalEntries,maxJournalBytes:capture.maxJournalBytes}}};
+    const binding=freezeValue(grantBinding(value,root,{catalog_id:value.catalogId,project_id:value.projectId})),json=boundedJSON(binding,4096);
+    if(json!==JSON.stringify(value)||hash(json)!==input.bindingSha256||hash(secrets[2])!==binding.capture.keySha256)fail("Source bootstrap binding or key mismatch.");
+    const parent=pin(c,"/run/clank-source",true),file=pin(c,input.catalogPath,false,BRIDGE_CATALOG_MAX);
+    const current=()=>{
+      if(closed)fail("Source bootstrap reader is closed.");
+      for(const p of c.pins){assertPin(c,p);if(fs.fstatSync(p.fd).gid!==binding.gid||fs.lstatSync(p.path).gid!==binding.gid)fail("Source catalog group changed.");}
+      if(fs.realpathSync(parent.path)!==parent.path||fs.realpathSync(file.path)!==file.path||entries(c,parent,2).some(name=>name!=="catalog.sqlite"))fail("Source catalog namespace changed.");
+    };
+    const assertCurrent=()=>{
+      current();let db:any;
+      try{
+        db=new DatabaseSync(`${parent.anchor}/catalog.sqlite`,{readOnly:true});
+        // Before first WAL access, EXCLUSIVE uses no shared-memory sidecar.
+        // Unknown or locked WAL still refuses; never checkpoint or retry writable.
+        db.exec("PRAGMA locking_mode=EXCLUSIVE; PRAGMA query_only=ON; PRAGMA busy_timeout=0; PRAGMA trusted_schema=OFF");
+        if(db.prepare("PRAGMA journal_mode").get()?.journal_mode!=="delete")fail("Source catalog requires DELETE journal mode.");
+        db.exec("BEGIN");strictSchema(c,db,BRIDGE_CATALOG);
+        const meta=singleton(db,"clank_provider_handoff_catalog"),state=singleton(db,"clank_provider_handoff_bridge_state"),records=bridgeRecords(db),grant=records.grant;
+        if(meta.id!==1||meta.protocol!==1||meta.index_id!==binding.indexId||meta.catalog_id!==binding.catalogId||meta.project_id!==binding.projectId||meta.domain_sha256!==binding.domainSha256||meta.barrier_sha256!==null||db.prepare("SELECT 1 FROM clank_provider_handoff_barrier LIMIT 1").get())fail("Source catalog identity or barrier refuses initialization.");
+        const mirror=hash(boundedJSON(records,BRIDGE_CATALOG_MAX));
+        if(state.id!==1||state.protocol!==2||state.enablement_id!==binding.enablementId||!positive(state.version)||state.version<3||state.records_sha256!==mirror||state.version<version||state.version===version&&mirror!==recorded)fail("Source catalog mirror or version changed.");
+        // Later readiness/control states require their owning transition validator.
+        if(records.transfer||records.operations.length||records.spools.length||!grant||grant.id!==1||grant.protocol!==2||grant.grant_id!==binding.grantId||grant.binding_json!==json||grant.binding_sha256!==input.bindingSha256||grant.grant_secret_sha256!==hash(secrets[0])||grant.control_secret_sha256!==hash(secrets[1])||!["created","started"].includes(grant.state)||grant.container_id!==input.containerId||grant.readiness_json!==null||grant.readiness_sha256!==null)fail("Source grant does not permit bootstrap initialization.");
+        db.exec("COMMIT");current();version=state.version;recorded=mirror;
+      }finally{db?.close();}
+      current();
+    };
+    assertCurrent();return Object.freeze({binding,key:secrets[2],assertCurrent,close});
+  }catch(error){close();throw error;}
+}
 function bridgeCurrent(bridge:ProviderHandoffBridge,live=false):BridgeContext&{context:Context}{
   const registered=bridges.get(bridge);if(!registered)fail("A genuine private provider bridge is required.");const c=current(registered.owner);
   if(!["bridge-live","cleanup-only"].includes(c.mode)||live&&c.mode!=="bridge-live")fail("A current live provider bridge is required.");return {...registered,context:c};

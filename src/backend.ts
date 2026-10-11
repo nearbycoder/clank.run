@@ -474,9 +474,24 @@ interface DatabaseSyncConstructor {
 
 // Only openSQLite can register the actual native object. Compatible structural
 // connections keep ordinary database support without gaining source ownership.
-const nativeSQLiteHandles = new WeakSet<DatabaseSyncLike>();
-const sourceSQLiteDatabases = new WeakMap<object, () => void>();
-const sourceBackendRuntimes = new WeakMap<object, () => void>();
+const nativeSQLiteHandles = new WeakMap<DatabaseSyncLike, {identity():void;close():void}>();
+type SourceDatabase = {
+  path:string; identity():void; idle():void;
+  reserve(state:SourceInitialization):void;
+  capture(factory:NonNullable<import("./sqlite-internal.ts").SQLiteInternal["captureTransactions"]> extends (factory:infer F)=>void?F:never):void;
+  control<Value>(handler:()=>Value):Value;
+};
+type SourceInitialization = {
+  phase:"initializing"|"initialized"|"failed"|"closed";
+  current():void; write():void;
+  reader?:Awaited<ReturnType<typeof import("./provider-handoff.ts").openProviderSourceReader>>;
+  flight?:Promise<void>; recovery?:{close():Promise<void>};
+};
+const sourceSQLiteDatabases = new WeakMap<object, SourceDatabase>();
+const sourceBackendRuntimes = new WeakMap<object, {identity():void;database:object}>();
+const sourceInitializations = new WeakMap<object, SourceInitialization>();
+const sourceContexts = new WeakMap<object, any>();
+let sourceBootstrapConsumed=false;
 
 /** Capture identities without invoking application getters or exposing registration. */
 function unchangedSourceObjects(roots: readonly unknown[], deep = true): () => void {
@@ -620,17 +635,45 @@ export async function openSQLite<Schema extends DatabaseSchema<any>>(
   const moduleName = "node:sqlite";
   const sqlite = await import(moduleName) as unknown as { DatabaseSync: DatabaseSyncConstructor };
   const path = await prepareSQLitePath(options.path ?? ":memory:");
-  const native = new sqlite.DatabaseSync(path);
-  nativeSQLiteHandles.add(native);
-  let database: SQLiteDatabase<Schema> | undefined;
+  const fsName="node:fs",pathName="node:path";
+  const [fs,paths]=await Promise.all([import(fsName),import(pathName)]);
+  let native:DatabaseSyncLike|undefined,database:SQLiteDatabase<Schema>|undefined;
+  const pins:number[]=[];
+  const release=()=>{for(const fd of pins.splice(0))fs.closeSync(fd);};
+  let sourceIdentity:()=>void=()=>{throw new Error("Native source identity requires an unambiguous file-backed Linux database.");};
   try {
+    let unchanged:(()=>void)|undefined,before:Map<number,any>|undefined,file:any,parent:string|undefined,directory:any;
+    const descriptors=()=>{let names:string[];try{names=fs.readdirSync("/proc/self/fd");}catch{return undefined;}const result=new Map<number,any>();for(const name of names){try{const fd=Number(name);result.set(fd,fs.fstatSync(fd));}catch{/* Directory enumeration can list its already closed descriptor. */}}return result;};
+    if(path!==":memory:"&&(globalThis as any).process?.platform==="linux"&&fs.realpathSync(path)===path){
+      parent=paths.dirname(path);pins.push(fs.openSync(parent,fs.constants.O_RDONLY|fs.constants.O_DIRECTORY|fs.constants.O_NOFOLLOW));
+      directory=fs.fstatSync(pins[0]);file=fs.lstatSync(path);
+      unchanged=()=>{const actual=fs.lstatSync(parent!),current=fs.lstatSync(path),held=fs.fstatSync(pins[0]);if(!file.isFile()||!directory.isDirectory()||!current.isFile()||!actual.isDirectory()||current.dev!==file.dev||current.ino!==file.ino||[actual,held].some(value=>value.dev!==directory.dev||value.ino!==directory.ino))throw new Error("Native source file identity changed.");};
+      unchanged();before=descriptors();
+    }
+    // Observe only the FD opened by this synchronous genuine constructor. Never
+    // open/close an extra database FD: that can release SQLite's process locks.
+    // Hostile same-process code is outside this private registration boundary.
+    native = new sqlite.DatabaseSync(path);
+    if(unchanged&&before){
+      const observed=descriptors(),added=observed?[...observed].filter(([fd,value])=>!before!.has(fd)&&value.isFile()):[];
+      unchanged();const canonical=native.prepare("PRAGMA database_list").all().find(row=>row.name==="main")?.file;
+      if(canonical!==path)throw new Error("Native source canonical file changed.");
+      if(added.length===1){
+        const [fd,opened]=added[0]!;
+        if(opened.dev!==file.dev||opened.ino!==file.ino||fs.readlinkSync(`/proc/self/fd/${fd}`)!==path)throw new Error("Native source opened a different file identity.");
+        sourceIdentity=()=>{unchanged!();const held=fs.fstatSync(fd),actual=fs.lstatSync(path),owner=fs.fstatSync(pins[0]),uid=(globalThis as any).process.getuid();if(!held.isFile()||held.dev!==file.dev||held.ino!==file.ino||fs.readlinkSync(`/proc/self/fd/${fd}`)!==path||[held,actual,owner].some(value=>value.uid!==uid||(value.mode&0o077)!==0)||held.nlink!==1)throw new Error("Native source retained identity or private namespace changed.");};
+      }
+      else release();
+      // SQLite may reuse a deferred native descriptor. Ambiguity preserves
+      // ordinary opens but cannot mint a source capability by inference.
+    }else release();
+    nativeSQLiteHandles.set(native,{identity:sourceIdentity,close:release});
     database = createSQLiteDatabase(schema, native, { ...options, path });
     if (path !== ":memory:") await hardenSQLiteFiles(path);
     return database;
   } catch (error) {
-    if (database) database.close();
-    else native.close();
-    nativeSQLiteHandles.delete(native);
+    try{if(database)database.close();else native?.close();}
+    finally{if(native)nativeSQLiteHandles.delete(native);release();}
     throw error;
   }
 }
@@ -767,6 +810,8 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
   let activeChanges: ReturnType<typeof changesForTransaction> | undefined;
   let readActive = false;
   let nativeControlActive = false;
+  let sourceInitialization:SourceInitialization|undefined;
+  let sourceControlActive=false;
   let snapshotToken: object | undefined;
   let synchronizing = false;
   const listeners = new Set<(change: DatabaseChange) => void>();
@@ -1341,6 +1386,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
       throw new Error("Nested database transactions are not supported; call helpers with the current database context.");
     }
     if (recoveryRequired && !capture) throw new Error("This database requires point-in-time recovery capture before admitting writes.");
+    if(sourceInitialization)writeGuard?.();
     synchronizeChanges(undefined, true);
     transactionActive = true;
     snapshotToken = {};
@@ -1481,6 +1527,56 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
     throw new Error("Could not establish a stable SQLite read snapshot.");
   };
 
+  const nativeControl=<Value>(handler:()=>Value,privateCapture=false):Value=>{
+    assertNativeIdle();
+    if(typeof handler!=="function")throw new TypeError("Native source control requires a synchronous callback.");
+    if(privateCapture)sourceInitialization!.current();
+    nativeControlActive=true;sourceControlActive=privateCapture;
+    try{
+      const value=handler();
+      if(value&&typeof(value as unknown as PromiseLike<unknown>).then==="function"){
+        void Promise.resolve(value).catch(()=>undefined);throw new TypeError("Native source control must complete synchronously.");
+      }
+      if(privateCapture)sourceInitialization!.current();return value;
+    }finally{sourceControlActive=false;nativeControlActive=false;}
+  };
+  const installCapture=(factory:Parameters<NonNullable<import("./sqlite-internal.ts").SQLiteInternal["captureTransactions"]>>[0],privateCapture=false):void=>{
+        ensureOpen();
+        if (capture || transactionActive || readActive || sourceInitialization&&!privateCapture) throw new Error("Recovery capture requires an idle database and can only be installed once.");
+        if (!native.createSession) throw new Error("Point-in-time recovery requires Node SQLite session support.");
+        // Capture uses the same native handle but must not bypass an installed
+        // owner guard during bootstrap, asynchronous continuation or commit.
+        // Exact rollback remains available for cleanup after authority loss.
+        const assertCaptureCurrent = () => {
+          if (closed) throw new Error("SQLite database is closed.");
+          if(privateCapture&&sourceControlActive)sourceInitialization!.current();else writeGuard?.();
+        };
+        if(privateCapture)sourceInitialization!.current();else assertCaptureCurrent();
+        const create = () => factory({ path,
+          exec(sql) {
+            if (closed) throw new Error("SQLite database is closed.");
+            if (!/^\s*ROLLBACK\s*;?\s*$/iu.test(sql)) assertCaptureCurrent();
+            native.exec(sql);
+          },
+          prepare(sql) {
+            assertCaptureCurrent();
+            const statement = native.prepare(sql);
+            const invoke = <Value>(handler: () => Value): Value => {
+              assertCaptureCurrent();
+              return handler();
+            };
+            return { all: (...args) => invoke(() => statement.all(...args)), get: (...args) => invoke(() => statement.get(...args)), run: (...args) => invoke(() => statement.run(...args)) };
+          },
+          createSession(options) {
+            assertCaptureCurrent();const session=native.createSession!(options);
+            return privateCapture?{changeset(){assertCaptureCurrent();return session.changeset();},close(){session.close();}}:session;
+          },
+          assertNativeIdle,
+          withNativeControl: handler => nativeControl(handler,privateCapture),
+        });
+        capture=privateCapture?nativeControl(create,true):create();
+  };
+
   const database: SQLiteDatabase<Schema> = {
     schema,
     inspectDatabaseQueries() { ensureOpen(); return Object.freeze([...sqlDiagnostics.values()]); },
@@ -1513,15 +1609,14 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
       listeners.clear();
       statements.clear();
       sqlDiagnostics.clear();
-      capture?.close();
-      native.close();
-      nativeSQLiteHandles.delete(native);
-      sourceSQLiteDatabases.delete(database);
+      try{capture?.close();}finally{
+        try{native.close();}finally{nativeSQLiteHandles.get(native)?.close();nativeSQLiteHandles.delete(native);sourceSQLiteDatabases.delete(database);}
+      }
     },
     [SQLITE_INTERNAL]: {
       guardWrites(guard) {
         ensureOpen();
-        if (writeGuard || transactionActive || readActive || typeof guard !== "function") throw new Error("Native write authority requires an idle database and can only be installed once.");
+        if (writeGuard || sourceInitialization || transactionActive || readActive || typeof guard !== "function") throw new Error("Native write authority requires an idle database and can only be installed once.");
         const connection=Object.freeze({prepare:(sql:string)=>native.prepare(sql)});
         writeGuard=()=>{
           const value=guard(connection);
@@ -1529,50 +1624,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
         };
         try { writeGuard(); } catch(error) { writeGuard=undefined; throw error; }
       },
-      captureTransactions(factory) {
-        ensureOpen();
-        if (capture || transactionActive || readActive) throw new Error("Recovery capture requires an idle database and can only be installed once.");
-        if (!native.createSession) throw new Error("Point-in-time recovery requires Node SQLite session support.");
-        // Capture uses the same native handle but must not bypass an installed
-        // owner guard during bootstrap, asynchronous continuation or commit.
-        // Exact rollback remains available for cleanup after authority loss.
-        const assertCaptureCurrent = () => {
-          if (closed) throw new Error("SQLite database is closed.");
-          writeGuard?.();
-        };
-        assertCaptureCurrent();
-        capture = factory({ path,
-          exec(sql) {
-            if (closed) throw new Error("SQLite database is closed.");
-            if (!/^\s*ROLLBACK\s*;?\s*$/iu.test(sql)) assertCaptureCurrent();
-            native.exec(sql);
-          },
-          prepare(sql) {
-            assertCaptureCurrent();
-            const statement = native.prepare(sql);
-            const invoke = <Value>(handler: () => Value): Value => {
-              assertCaptureCurrent();
-              return handler();
-            };
-            return { all: (...args) => invoke(() => statement.all(...args)), get: (...args) => invoke(() => statement.get(...args)), run: (...args) => invoke(() => statement.run(...args)) };
-          },
-          createSession(options) { assertCaptureCurrent(); return native.createSession!(options); },
-          assertNativeIdle,
-          withNativeControl<Value>(handler: () => Value): Value {
-            assertNativeIdle();
-            if (typeof handler !== "function") throw new TypeError("Native source control requires a synchronous callback.");
-            nativeControlActive = true;
-            try {
-              const value = handler();
-              if (value && typeof (value as unknown as PromiseLike<unknown>).then === "function") {
-                void Promise.resolve(value).catch(() => undefined);
-                throw new TypeError("Native source control must complete synchronously.");
-              }
-              return value;
-            } finally { nativeControlActive = false; }
-          },
-        });
-      },
+      captureTransactions(factory) { installCapture(factory); },
       get inTransaction() {
         return transactionActive;
       },
@@ -1640,7 +1692,14 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
   }
   if (nativeSQLiteHandles.has(native)) {
     const unchanged = unchangedSourceObjects([database, database[SQLITE_INTERNAL]], false);
-    sourceSQLiteDatabases.set(database, () => { unchanged(); assertNativeIdle(); });
+    const identity=()=>{unchanged();if(closed)throw new Error("SQLite database is closed.");nativeSQLiteHandles.get(native)!.identity();};
+    sourceSQLiteDatabases.set(database, {path,identity,idle(){identity();assertNativeIdle();},
+      reserve(state){
+        identity();assertNativeIdle();
+        if(capture||writeGuard||sourceInitialization||recoveryRequired||native.prepare("SELECT 1 FROM sqlite_schema WHERE name GLOB 'clank_pitr_*' LIMIT 1").get())throw new Error("Source initialization requires pristine capture and guard slots.");
+        if(String(native.prepare("PRAGMA journal_mode").get()?.journal_mode)!=="wal"||![2,3].includes(Number(native.prepare("PRAGMA synchronous").get()?.synchronous)))throw new Error("Source initialization requires WAL with FULL or EXTRA durability.");
+        sourceInitialization=state;writeGuard=()=>state.write();
+      },capture:factory=>installCapture(factory,true),control:handler=>nativeControl(handler,true)});
   }
   return database;
 }
@@ -3062,6 +3121,8 @@ export async function openBackend<
       if (closed) return;
       closed = true;
       sourceBackendRuntimes.delete(runtime);
+      const source=sourceInitializations.get(runtime);
+      if(source){source.phase="closed";source.reader?.close();void source.flight?.finally(()=>source.recovery?.close()).catch(()=>undefined);}
       for (const disconnect of [...liveDisconnects]) disconnect();
       liveDisconnects.clear();
       stopChanges();
@@ -3077,7 +3138,7 @@ export async function openBackend<
     },
   };
   const unchangedRuntime = unchangedSourceObjects([runtime], false);
-  sourceBackendRuntimes.set(runtime, () => {
+  sourceBackendRuntimes.set(runtime, {database,identity() {
     ensureOpen();
     unchangedRuntime();
     unchangedDefinition();
@@ -3090,8 +3151,8 @@ export async function openBackend<
     }
     const assertDatabase = sourceSQLiteDatabases.get(database);
     if (!assertDatabase) throw new Error("Source ownership requires a genuine openSQLite backend database.");
-    assertDatabase();
-  });
+    assertDatabase.identity();
+  }});
   return runtime;
 }
 
@@ -3102,7 +3163,41 @@ Object.defineProperty(openBackend, SQLITE_INTERNAL, { value: Object.freeze({
   assertSourceRuntime(runtime: object): void {
     const assertRuntime = sourceBackendRuntimes.get(runtime);
     if (!assertRuntime) throw new Error("Source ownership requires a genuine live backend runtime.");
-    assertRuntime();
+    assertRuntime.identity();sourceSQLiteDatabases.get(assertRuntime.database)!.idle();
+  },
+  sourceContext(token:object){const context=sourceContexts.get(token);if(!context)throw new Error("A genuine private source initialization is required.");context.current();return context;},
+  initializeSourceRuntime(runtime:object):Promise<void>{
+    const registered=sourceBackendRuntimes.get(runtime);
+    if(!registered)throw new Error("Source initialization requires a genuine live backend runtime.");
+    registered.identity();const database=sourceSQLiteDatabases.get(registered.database)!;database.idle();
+    if(sourceInitializations.has(runtime))throw new Error("Source initialization has already been attempted.");
+    const state:SourceInitialization={phase:"initializing",current(){
+      registered.identity();if(state.phase!=="initializing"&&state.phase!=="initialized"||!state.reader)throw new Error("Source initialization is unavailable.");state.reader.assertCurrent();
+    },write(){state.current();throw new Error("Source bootstrap grants no ordinary write permission.");}};
+    database.reserve(state);sourceInitializations.set(runtime,state);
+    const token=Object.freeze({});
+    const context=Object.freeze({token,database:registered.database,path:database.path,current:()=>state.current(),write:()=>state.write(),control:database.control,capture:database.capture,
+      get binding(){state.current();return state.reader!.binding;},get key(){state.current();return state.reader!.key;}});
+    sourceContexts.set(token,context);
+    let encoded:string;
+    try{
+      const slot=Symbol.for("clank.provider.source.bootstrap.v1"),descriptor=Reflect.getOwnPropertyDescriptor(globalThis,slot);
+      if(!descriptor||sourceBootstrapConsumed)throw new Error("Source bootstrap is absent or consumed.");
+      sourceBootstrapConsumed=true;
+      if(!Reflect.deleteProperty(globalThis,slot)||Reflect.getOwnPropertyDescriptor(globalThis,slot))throw new Error("Source bootstrap could not be consumed.");
+      if(!("value" in descriptor)||descriptor.writable!==false||descriptor.enumerable!==false||descriptor.configurable!==true||typeof descriptor.value!=="string"||new TextEncoder().encode(descriptor.value).length>16384)throw new Error("Source bootstrap must be bounded own data.");
+      encoded=descriptor.value;
+    }catch(error){state.phase="failed";sourceContexts.delete(token);throw error;}
+    state.flight=(async()=>{
+      const {openProviderSourceReader}=await import("./provider-handoff.ts");registered.identity();
+      if(state.phase!=="initializing")throw new Error("Source initialization was closed.");
+      const pending=openProviderSourceReader(encoded);encoded="";
+      const reader=await pending;
+      try{registered.identity();if(state.phase!=="initializing")throw new Error("Source initialization was closed.");state.reader=reader;state.current();}catch(error){reader.close();throw error;}
+      const {openPointInTimeRecovery}=await import("./point-in-time.ts");state.current();
+      state.recovery=await (openPointInTimeRecovery as any)[SQLITE_INTERNAL].initializeSource(token);state.current();state.phase="initialized";
+    })().catch(error=>{if(state.phase!=="closed")state.phase="failed";state.reader?.close();sourceContexts.delete(token);throw error;});
+    return state.flight;
   },
 }) });
 

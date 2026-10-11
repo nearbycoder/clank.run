@@ -1,3 +1,5 @@
+import { SQLITE_INTERNAL } from "./sqlite-internal.ts";
+async function sourceGuard(token:object):Promise<()=>void> {return ((await import("./backend.ts")).openBackend as any)[SQLITE_INTERNAL].sourceContext(token).current;}
 /** Linux filesystem capabilities for internal SQLite workers. No application path is resolved after it is pinned. */
 export interface PinnedSQLiteDirectory {
   readonly path: string;
@@ -41,22 +43,24 @@ export function assertPinnedSQLiteDirectory(directory:PinnedSQLiteDirectory):voi
   if(!pinnedDirectories.has(directory))throw new Error("A current SQLite directory capability is required.");
 }
 
-export async function pinSQLiteDirectory(input: string, create = false): Promise<PinnedSQLiteDirectory> {
+export async function pinSQLiteDirectory(input: string, create = false, sourceToken?:object): Promise<PinnedSQLiteDirectory> {
+  const current=sourceToken===undefined?()=>{}:await sourceGuard(sourceToken);current();
   const fsName = "node:fs/promises", constantsName = "node:fs", pathName = "node:path";
-  const [fs, { constants }, path] = await Promise.all([import(fsName), import(constantsName), import(pathName)]);
+  const [fs, { constants }, path] = await Promise.all([import(fsName), import(constantsName), import(pathName)]);current();
   const resolved = path.resolve(input);
   if (resolved.includes("\0")) throw new TypeError("SQLite directory contains a null byte.");
   let handle = await fs.open("/", constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
   try {
+    current();
     for (const component of resolved.split("/").filter(Boolean)) {
       const child = `/proc/self/fd/${handle.fd}/${component}`;
       if (create) {
-        try { await fs.mkdir(child, { mode: 0o700 }); }
-        catch (error) { if ((error as { code?: string }).code !== "EEXIST") throw error; }
+        try { current();await fs.mkdir(child, { mode: 0o700 });current(); }
+        catch (error) { if ((error as { code?: string }).code !== "EEXIST") throw error;current(); }
       }
-      const next = await fs.open(child, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-      await handle.close();
-      handle = next;
+      current();const next = await fs.open(child, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+      const previous=handle;handle=next;
+      try{current();}finally{await previous.close();}current();
     }
     return retainedDirectory(resolved,handle);
   } catch (error) { await handle.close(); throw error; }
@@ -76,10 +80,11 @@ export interface SQLiteSandbox {
 }
 
 /** Only fixed worker operations may request filesystem capabilities. */
-export async function prepareSQLiteSandbox(module: string, operation: string, values: readonly unknown[], childArguments: string[], pinned: readonly PinnedSQLiteDirectory[] = []): Promise<SQLiteSandbox> {
+export async function prepareSQLiteSandbox(module: string, operation: string, values: readonly unknown[], childArguments: string[], pinned: readonly PinnedSQLiteDirectory[] = [],sourceToken?:object): Promise<SQLiteSandbox> {
+  const current=sourceToken===undefined?()=>{}:await sourceGuard(sourceToken);current();
   for(const directory of pinned)assertPinnedSQLiteDirectory(directory);
   const pathName = "node:path", fsName = "node:fs/promises", urlName = "node:url", constantsName = "node:fs";
-  const [path, fs, url, { constants }] = await Promise.all([import(pathName), import(fsName), import(urlName), import(constantsName)]);
+  const [path, fs, url, { constants }] = await Promise.all([import(pathName), import(fsName), import(urlName), import(constantsName)]);current();
   const process = (globalThis as any).process;
   const mounts: Mount[] = [];
   const args: any[] = [...structuredClone(values)];
@@ -143,8 +148,8 @@ export async function prepareSQLiteSandbox(module: string, operation: string, va
   try {
     for (const library of ["/usr/lib", "/usr/lib64", "/lib", "/lib64"]) {
       try {
-        const info = await fs.lstat(library);
-        if (info.isSymbolicLink()) sandboxArgs.push("--symlink", await fs.readlink(library), library);
+        current();const info = await fs.lstat(library);current();
+        if (info.isSymbolicLink()) {const target=await fs.readlink(library);current();sandboxArgs.push("--symlink",target,library);}
         else sandboxArgs.push("--ro-bind", library, library);
       } catch (error) { if ((error as { code?: string }).code !== "ENOENT") throw error; }
     }
@@ -152,10 +157,11 @@ export async function prepareSQLiteSandbox(module: string, operation: string, va
       descriptors.push(fd);
       sandboxArgs.push(writable ? "--bind" : "--ro-bind", `/proc/self/fd/${descriptors.length + 2}`, target);
     };
-    const node = await fs.open(await fs.realpath(process.execPath), "r");
-    handles.push(node); bindFd(node.fd, "/runtime/node", false);
-    const framework = await pinSQLiteDirectory(path.dirname(url.fileURLToPath(import.meta.url)));
-    handles.push(framework); bindFd(framework.fd, "/runtime/framework", false);
+    current();const executable=await fs.realpath(process.execPath);current();
+    const node = await fs.open(executable, "r");
+    handles.push(node);current();bindFd(node.fd, "/runtime/node", false);
+    const framework = await pinSQLiteDirectory(path.dirname(url.fileURLToPath(import.meta.url)),false,sourceToken);
+    handles.push(framework);current();bindFd(framework.fd, "/runtime/framework", false);
     // Pin all sources before starting bwrap. Merge exact duplicates and mount
     // descendants last so read-only migration directories stay read-only.
     const merged = new Map<string, Mount>();
@@ -165,8 +171,13 @@ export async function prepareSQLiteSandbox(module: string, operation: string, va
         create: mount.create || prior?.create, optional: mount.optional && (!prior || prior.optional) });
     }
     if (process.env.NODE_V8_COVERAGE) {
-      const parent = await pinSQLiteDirectory(path.resolve(process.env.NODE_V8_COVERAGE), true);
-      handles.push(parent);
+      current();const parent = await pinSQLiteDirectory(path.resolve(process.env.NODE_V8_COVERAGE), true,sourceToken);
+      handles.push(parent);current();
+      if(sourceToken!==undefined){
+        const name=".clank-sqlite-coverage-"+globalThis.crypto.randomUUID(),directory=await createPinnedSQLiteChildDirectory(parent,name,current);
+        handles.push(directory);coverage={parent,directory,name};current();bindFd(directory.fd,"/runtime/coverage",true);
+        sandboxArgs.push("--setenv","NODE_V8_COVERAGE","/runtime/coverage");
+      }else{
       const privatePath = await fs.mkdtemp(`${parent.anchor}/.clank-sqlite-coverage-`);
       const name = path.basename(privatePath);
       let handle;
@@ -176,6 +187,7 @@ export async function prepareSQLiteSandbox(module: string, operation: string, va
       handles.push(directory); coverage = { parent, directory, name };
       bindFd(directory.fd, "/runtime/coverage", true);
       sandboxArgs.push("--setenv", "NODE_V8_COVERAGE", "/runtime/coverage");
+      }
     }
     for (const mount of [...merged.values()].sort((a, b) => a.path.length - b.path.length)) {
       if (["/", "/tmp", "/home", "/var", "/usr", "/etc", "/proc", "/dev"].includes(mount.path)
@@ -184,21 +196,21 @@ export async function prepareSQLiteSandbox(module: string, operation: string, va
       }
       try {
         const existing = pinned.find((directory) => directory.path === mount.path);
-        const directory = existing ?? await pinSQLiteDirectory(mount.path, mount.create);
-        if (!existing) handles.push(directory);
+        current();const directory = existing ?? await pinSQLiteDirectory(mount.path,sourceToken===undefined?mount.create:false,sourceToken);
+        if (!existing) handles.push(directory);current();
         bindFd(directory.fd, mount.path, mount.writable);
       } catch (error) { if (!mount.optional || (error as { code?: string }).code !== "ENOENT") throw error; }
     }
     sandboxArgs.push("--", "/usr/bin/prlimit", ...SQLITE_RESOURCE_LIMITS, "--", "/runtime/node", ...childArguments);
     try {
-      await fs.access("/usr/bin/bwrap", 1);
-      await fs.access("/usr/bin/prlimit", 1);
-      await fs.access("/usr/bin/setpriv", 1);
+      current();await fs.access("/usr/bin/bwrap", 1);current();
+      current();await fs.access("/usr/bin/prlimit", 1);current();
+      current();await fs.access("/usr/bin/setpriv", 1);current();
     } catch { throw new Error("Isolated SQLite tasks on Linux require bubblewrap (/usr/bin/bwrap) and util-linux (/usr/bin/prlimit, /usr/bin/setpriv)."); }
     // A non-root provider can retain host-administration capabilities. Bubblewrap
     // rejects that ambient state, and SQLite workers must never inherit it.
     // Clear it in the child before exec; keep the provider's own state untouched.
-    return { executable: "/usr/bin/setpriv", arguments: ["--inh-caps=-all", "--ambient-caps=-all", "--no-new-privs", "/usr/bin/bwrap", ...sandboxArgs], descriptors,
+    current();return { executable: "/usr/bin/setpriv", arguments: ["--inh-caps=-all", "--ambient-caps=-all", "--no-new-privs", "/usr/bin/bwrap", ...sandboxArgs], descriptors,
       moduleUrl: `file:///runtime/framework/${module === "jobs" ? "platform-jobs" : module === "inspection" ? "sqlite-inspection" : module === "recovery" ? "point-in-time" : module}-worker.js`,
       argumentsValue: args, close };
   } catch (error) { await close(); throw error; }
