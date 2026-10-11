@@ -78,6 +78,12 @@ deleted directories when native notifications disappear, including on Node 22.16
 File contents still refresh through native change notifications. Reconciliation
 uses the same serialized build queue and does not overlap output writers.
 
+The independent release-package audit allows at most 8 MiB unpacked and requires
+one exact source-snapshot path manifest; see [the release budget](releases.md#package-budget-and-exact-inventory).
+This policy does not change the emission rules above or per-module browser/work
+performance budgets. The initial 422-path main manifest grows only by reviewed
+feature deltas, with no optional future outputs or fallback manifest.
+
 Rollback: remove `preserveDevelopmentState` registrations and `data-dev-preserve` attributes, or use `clank dev --no-reload`. Stop the LSP process to disable editor integration. No database migration is involved.
 
 ## Semantic type-contract verification
