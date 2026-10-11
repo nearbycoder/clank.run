@@ -473,7 +473,7 @@ interface DatabaseSyncConstructor {
 }
 
 function assertGuardedSQLiteSQL(sql:string,readPragmas=false):void {
-  if(readPragmas&&/^\s*PRAGMA\s+(?:[A-Za-z_][A-Za-z0-9_]*\.)?(?:table_info|table_xinfo|index_list|index_info|index_xinfo|database_list|foreign_key_list)\s*(?:\([^;]*\))?\s*;?\s*$/iu.test(sql))return;
+  if(readPragmas&&/^\s*(?:EXPLAIN\s+(?:QUERY\s+PLAN\s+)?)?PRAGMA\s+(?:[A-Za-z_][A-Za-z0-9_]*\.)?(?:table_info|table_xinfo|index_list|index_info|index_xinfo|database_list|foreign_key_list)\s*(?:\([^;]*\))?\s*;?\s*$/iu.test(sql))return;
   const forbidden=new Set(["BEGIN","COMMIT","END","ROLLBACK","SAVEPOINT","RELEASE","ATTACH","DETACH","PRAGMA","VACUUM"]);
   let index=0,words:string[]=[],trigger=false,body=false,ended=false,cases=0;
   while(index<sql.length){
@@ -491,6 +491,8 @@ function assertGuardedSQLiteSQL(sql:string,readPragmas=false):void {
     if(/[A-Za-z_]/u.test(character)){
       const start=index++;while(index<sql.length&&/[A-Za-z0-9_]/u.test(sql[index]!))index++;
       const word=sql.slice(start,index).toUpperCase();
+      // EXPLAIN still permits prepare-time PRAGMA effects; inspect its operation.
+      if(words[0]==='EXPLAIN'&&(words.length===1&&word!=='QUERY'||words.length===3&&words[1]==='QUERY'&&words[2]==='PLAN'))words=[];
       if(!words.length&&forbidden.has(word))throw new Error("Native write authority forbids raw transaction controls and connection-changing SQL.");
       if(ended)throw new Error("Unexpected SQL after guarded trigger body.");
       words.push(word);
@@ -1457,9 +1459,11 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
         }
       },
       prepare(sql) {
+        // Some PRAGMAs change native connection state during preparation itself.
+        if (capture || writeGuard) assertGuardedSQLiteSQL(sql, true);
         let statement = prepared(sql);
         const invoke = <Value>(handler: () => Value): Value => {
-          if(writeGuard)assertGuardedSQLiteSQL(sql,true);
+          if (capture || writeGuard) assertGuardedSQLiteSQL(sql, true);
           if ((capture || recoveryRequired || writeGuard) && readActive && !/^\s*(?:SELECT|EXPLAIN)\b/iu.test(sql)) throw new Error(capture || recoveryRequired ? "Recovery forbids service writes inside a read snapshot." : "Native write authority forbids service writes inside a read snapshot.");
           if (capture) statement = native.prepare(sql);
           return (capture || recoveryRequired || writeGuard) && !transactionActive && !readActive ? runTransaction(() => handler()) : handler();
