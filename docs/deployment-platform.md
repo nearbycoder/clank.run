@@ -183,6 +183,9 @@ A code-only candidate that fails startup or health never receives traffic and ne
 release. Automatic crash recovery uses the same durable project lock as deploy, rollback, backup,
 and deletion, so it cannot race a user deployment for the project's runtime ports.
 
+Canary stage decisions include requests completed while an asynchronous health check was
+pending. Closing the platform during that check prevents a passing report or promotion.
+
 When a measured canary fails, Clank removes it from new traffic and gives requests already
 assigned to it the same bounded two-second drain before stopping the candidate. Requests that
 exceed that limit can fail during termination. Verified process cleanup still precedes rollback
