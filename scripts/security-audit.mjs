@@ -183,9 +183,13 @@ for (const expected of ["README.md", "SECURITY.md", "LICENSE", "dist/index.js", 
 // Four deliberate public/private service-account runtime and declaration files.
 // Proposal #309 adds exactly one optional policy runtime and its declaration.
 // Proposal #313 adds exactly platform-supervisor.js and its declaration.
-// Accepted main has419 paths; organization policy adds its runtime/declaration,
-// and temporary preview grants add four runtime/declaration paths. The6MiB cap stays fixed.
-if ((packResult?.entryCount ?? 0) > 425) fail("Published package unexpectedly exceeds 425 files.");
+// Proposal #331 adds four PostgreSQL runtime/declaration files; policy adds two.
+// Proposal #339 adds exactly the private managed-shadow.js policy/report helper
+// and its declaration; the package byte ceiling remains unchanged.
+// Accepted main retains the private storage and handoff outputs.
+// Policy adds two and temporary preview grants add four outputs to 422 accepted files.
+// The 6 MiB ceiling remains unchanged.
+if ((packResult?.entryCount ?? 0) > 428) fail("Published package unexpectedly exceeds 428 files.");
 if ((packResult?.unpackedSize ?? 0) > 6 * 1024 * 1024) fail("Published package unexpectedly exceeds 6 MiB unpacked.");
 pass(`publish allowlist contains ${packResult?.entryCount ?? 0} bounded files`);
 
