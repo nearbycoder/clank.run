@@ -112,7 +112,7 @@ export interface Clock {
 
 export const realClock: Clock = Object.freeze({
   now: () => Date.now(),
-  sleep(milliseconds, signal) {
+  sleep(milliseconds: number, signal: AbortSignal) {
     const delay = duration(milliseconds, "sleep duration");
     if (signal.aborted) return Promise.reject(interruption(signal.reason));
     if (delay === 0) return Promise.resolve();
@@ -355,7 +355,7 @@ export class Task<A, E = never, R = never> {
   }
 
   flatMap<B, E2, R2>(next: (value: A) => Task<B, E2, R2>): Task<B, E | E2, R | R2> {
-    return new Task(async (context) => {
+    return new Task<B, E | E2, R | R2>(async (context) => {
       const exit = await runEvaluator(this, context);
       if (Exit.isFailure(exit)) return exit;
       try { return await runEvaluator(next(exit.value), context); }
@@ -380,7 +380,7 @@ export class Task<A, E = never, R = never> {
   }
 
   catchAll<B, E2, R2>(recover: (error: E) => Task<B, E2, R2>): Task<A | B, E2, R | R2> {
-    return new Task(async (context) => {
+    return new Task<A | B, E2, R | R2>(async (context) => {
       const exit = await runEvaluator(this, context);
       if (Exit.isSuccess(exit)) return exit;
       if (exit.cause._tag !== "Failure") return exit as Exit<never, E2>;
@@ -390,7 +390,7 @@ export class Task<A, E = never, R = never> {
   }
 
   catchCause<B, E2, R2>(recover: (cause: Cause<E>) => Task<B, E2, R2>): Task<A | B, E2, R | R2> {
-    return new Task(async (context) => {
+    return new Task<A | B, E2, R | R2>(async (context) => {
       const exit = await runEvaluator(this, context);
       if (Exit.isSuccess(exit)) return exit;
       try { return await runEvaluator(recover(exit.cause), context); }
@@ -489,7 +489,7 @@ export class Task<A, E = never, R = never> {
         const value = await raceInterruption(options.try(context.signal), context.signal);
         return Exit.succeed(value);
       } catch (error) {
-        if (isInterruption(error) || context.signal.aborted) return interruptedExit(context.signal.reason ?? error.reason);
+        if (isInterruption(error) || context.signal.aborted) return interruptedExit(context.signal.reason ?? (isInterruption(error) ? error.reason : error));
         try { return Exit.fail(options.catch(error)); }
         catch (defect) { return Exit.failCause(Cause.defect(defect)); }
       }
@@ -659,7 +659,7 @@ export class Task<A, E = never, R = never> {
     left: Task<A, E, R>,
     right: Task<B, E2, R2>,
   ): Task<A | B, E | E2, R | R2> {
-    return new Task(async (context) => {
+    return new Task<A | B, E | E2, R | R2>(async (context) => {
       const controller = linkedController(context.signal);
       const child = childContext(context, controller.signal);
       const leftRun = runScoped(left, child);
@@ -782,7 +782,7 @@ export class Layer<Provides, E = never, R = never> {
   }
 
   merge<P2, E2, R2>(other: Layer<P2, E2, R2>): Layer<Provides | P2, E | E2, R | Exclude<R2, Provides>> {
-    return new Layer(async (context) => {
+    return new Layer<Provides | P2, E | E2, R | Exclude<R2, Provides>>(async (context) => {
       const left = await buildLayer(this, context);
       if (Exit.isFailure(left)) return left;
       const rightContext = { ...context, environment: mergeEnvironment(context.environment, left.value) };
@@ -880,14 +880,14 @@ async function runTask<A, E, R, LE>(task: Task<A, E, R>, options: TaskRuntimeOpt
   return appendCleanup(exit, cleanup);
 }
 
-async function runEvaluator<A, E>(task: Task<A, E, any>, context: RuntimeContext): Promise<Exit<A, E>> {
+async function runEvaluator<A, E, R>(task: Task<A, E, R>, context: RuntimeContext): Promise<Exit<A, E>> {
   if (!(task instanceof Task)) return Exit.failCause(Cause.defect(new TypeError("Expected a Clank Task.")));
   if (context.signal.aborted) return interruptedExit(context.signal.reason);
   try { return await task.evaluate(context); }
   catch (error) { return Exit.failCause(Cause.defect(error)); }
 }
 
-async function runScoped<A, E>(task: Task<A, E, any>, context: RuntimeContext): Promise<Exit<A, E>> {
+async function runScoped<A, E, R>(task: Task<A, E, R>, context: RuntimeContext): Promise<Exit<A, E>> {
   const scope = new TaskScope();
   let exit = await runEvaluator(task, { ...context, scope });
   const cleanup = await scope.close(exit as Exit<unknown, unknown>);

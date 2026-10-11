@@ -74,6 +74,10 @@ Sequential and parallel causes retain multiple failures when both an operation a
 `catchAll` handles only expected failures. It cannot accidentally swallow a defect or
 interruption. Use `catchCause` only at an intentional diagnostic or process boundary.
 
+When its signal has been aborted, `tryPromise` returns an interruption even if the
+operation synchronously throws `null` or `undefined`; it does not call the failure
+mapper. Without cancellation, those values reach the failure mapper unchanged.
+
 ```ts
 const exit = await Task.runExit(loadTodo("todo_123"));
 

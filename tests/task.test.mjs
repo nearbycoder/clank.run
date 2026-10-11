@@ -44,6 +44,24 @@ test("Task keeps expected failures, defects, and interruption distinct", async (
   assert.deepEqual(interrupted, Exit.failCause(Cause.interrupted("stop")));
 });
 
+for (const thrown of [null, undefined]) {
+  for (const reason of [null, "stop"]) test(`tryPromise preserves interruption with ${reason} reason and thrown ${thrown}`, async () => {
+    const controller = new AbortController();
+    let mappings = 0;
+    const work = Task.tryPromise({
+      try: () => { controller.abort(reason); throw thrown; },
+      catch: () => { mappings++; return "expected failure"; },
+    });
+    const exit = await Task.runExit(work, { signal: controller.signal });
+    assert.deepEqual(exit, Exit.failCause(Cause.interrupted(reason === null ? thrown : reason)));
+    assert.equal(mappings, 0);
+  });
+  test(`tryPromise maps thrown ${thrown} when its signal remains current`, async () => {
+    const work = Task.tryPromise({ try: () => { throw thrown; }, catch: value => { assert.equal(value, thrown); return "expected failure"; } });
+    assert.deepEqual(await Task.runExit(work), Exit.fail("expected failure"));
+  });
+}
+
 test("runPromise rejects with an inspectable TaskExecutionError", async () => {
   await assert.rejects(
     Task.runPromise(Task.fail("invalid")),
