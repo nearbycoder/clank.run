@@ -11,7 +11,7 @@ import {join} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {createDeploymentBundle,deploymentDigest,createDeploymentCoordinatorClient,openProviderDeploymentAgent} from '../../dist/index.js';
 import {openDeploymentProviderDataStore} from '../../dist/provider-data.js';
-import {openDeploymentProviderService} from '../../dist/provider-service.js';
+import {openDeploymentProviderService,deploymentProviderCanaryPath} from '../../dist/provider-service.js';
 import {createDeploymentRuntimeIngress} from '../../dist/provider-runtime.js';
 import {linuxProcessBirth} from '../../dist/platform-supervisor.js';
 import {reservePlatformTestPorts} from './platform-test-ports.mjs';
@@ -79,11 +79,11 @@ async function deploy(f,bytes,key){const response=await f.platform.handle(new Re
 
 export async function shadowPlatformFixture(t,policy={stages:[{trafficPercent:50,durationMs:2000,minimumSamples:2},{trafficPercent:100,durationMs:1000,minimumSamples:2}],maximumErrorRate:0.2,maximumP95Ms:1500}, fixedProjectId,fixtureOptions={}){
   const root=await mkdtemp(join(tmpdir(),'clank-platform-provider-canary-')),ports=await reservePlatformTestPorts(),children=[],births=new Map(),runtimes=new Map(),events=[],errors=[];
-  let service,agent,server,platform,sequence=0;
+  let service,agent,server,platform,sequence=0,retainedPrimary;
   const heldControls=new Map(),ownedGates=new Set(),controlCounts={binding:0,prepare:0,retire:0,'binding-response':0,'prepare-response':0,'retire-response':0};
   const holdControl=async action=>{
     controlCounts[action]++;const held=heldControls.get(action);if(!held||controlCounts[action]<held.at)return;
-    held.hits++;if(held.once)heldControls.delete(action);held.entered.resolve();await held.release.promise;
+    held.hits++;held.enteredAt??=performance.now();if(held.once)heldControls.delete(action);held.entered.resolve();await held.release.promise;
   };
   const track=async child=>{if(!children.includes(child))children.push(child);const birth=await linuxProcessBirth(child.pid);births.set(child,birth);return birth;};
   t.after(async()=>{
@@ -131,11 +131,13 @@ export async function shadowPlatformFixture(t,policy={stages:[{trafficPercent:50
     const chunks=[];for await(const chunk of req)chunks.push(chunk);
     const input=new Request(url,{method:req.method,headers:req.headers,...(['GET','HEAD'].includes(req.method)?{}:{body:Buffer.concat(chunks)})});
     const action=/\/canary\/(binding|prepare|retire)$/.exec(req.url)?.[1];if(action)await holdControl(action);
-    const response=await service.handle(input);events.push({kind:'control',path:req.url,status:response.status});if(action)await holdControl(action+'-response');res.writeHead(response.status,Object.fromEntries(response.headers));res.end(Buffer.from(await response.arrayBuffer()));
+    const response=await service.handle(input),body=action?Buffer.from(await response.arrayBuffer()):null;
+    events.push({kind:'control',path:req.url,status:response.status,...(action==='binding'&&response.status===200?{binding:JSON.parse(body.toString('utf8')).binding}:{})});
+    if(action)await holdControl(action+'-response');res.writeHead(response.status,Object.fromEntries(response.headers));res.end(body??Buffer.from(await response.arrayBuffer()));
   }catch(error){errors.push(String(error));if(!res.headersSent)res.writeHead(500);res.end()}});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const endpoint='http://127.0.0.1:'+server.address().port;
-  const options={publicUrl:origin,signup:'bootstrap',appPortStart:ports.start,appPortEnd:ports.end,platformAdminEmails:['canary-native@example.test'],backups:{intervalMs:false},previews:{cleanupIntervalMs:false},ingress:{baseDomain:'apps.example.test'},deploymentAgents:{registrationToken:'provider-native-registration-12345678901234567890',placement:{activationTimeoutMs:2000}},supervisor:{configurationId:'actual-platform-cluster',configurationRevision:1,leaseMs:30000,pollIntervalMs:50},shadowTraffic:{revision:1,readPaths:['/','/healthz'],methods:['GET','HEAD'],maxSamplePercent:10,maxDurationMs:30000,maxAttempts:10,maxConcurrent:2,maxResponseBytes:1024,maxRequestMs:1000,maxReports:2},...(fixtureOptions.providerPromotionHosts===undefined?{}:{providerPromotionHosts:fixtureOptions.providerPromotionHosts})};
+  const options={publicUrl:origin,signup:'bootstrap',appPortStart:ports.start,appPortEnd:ports.end,platformAdminEmails:['canary-native@example.test'],backups:{intervalMs:false},previews:{cleanupIntervalMs:false},ingress:{baseDomain:'apps.example.test'},deploymentAgents:{registrationToken:'provider-native-registration-12345678901234567890',placement:{activationTimeoutMs:fixtureOptions.activationTimeoutMs??2000}},supervisor:{configurationId:'actual-platform-cluster',configurationRevision:1,leaseMs:30000,pollIntervalMs:50},shadowTraffic:{revision:1,readPaths:['/','/healthz'],methods:['GET','HEAD'],maxSamplePercent:10,maxDurationMs:30000,maxAttempts:10,maxConcurrent:2,maxResponseBytes:1024,maxRequestMs:1000,maxReports:2},...(fixtureOptions.providerPromotionHosts===undefined?{}:{providerPromotionHosts:fixtureOptions.providerPromotionHosts})};
   async function start(disabled=false){
     const child=fork(new URL('./platform-shadow-controller.mjs',import.meta.url),[],{env:{...process.env,CLANK_SUPERVISOR_FIXTURE_ROOT:join(root,'platform'),CLANK_SUPERVISOR_FIXTURE_OPTIONS:JSON.stringify({...options,...(disabled?{canary:undefined,shadowTraffic:undefined}:{})})},stdio:['ignore','pipe','pipe','ipc']});await track(child);let output='';for(const stream of [child.stdout,child.stderr])stream.on('data',chunk=>output=(output+chunk).slice(-8192));
     const pending=new Map();child.on('message',message=>{if(message.id&&pending.has(message.id)){const {resolve,reject,timer}=pending.get(message.id);pending.delete(message.id);clearTimeout(timer);message.kind==='error'?reject(new Error(message.error)):resolve(message)}});
@@ -147,13 +149,19 @@ export async function shadowPlatformFixture(t,policy={stages:[{trafficPercent:50
   }
   platform=await start();
   const client=createDeploymentCoordinatorClient({baseUrl:origin,fetch:(url,init)=>platform.handle(new Request(url,init))});
-  const openAgent=async()=>agent=await openProviderDeploymentAgent({client,registrationToken:options.deploymentAgents.registrationToken,node:{id:'canary-native-provider',region:'local',endpoint,capacity:16},provider:{kind:'http',async reconcile(input){events.push({kind:'reconcile',projectId:input.operation.projectId,generation:input.desired.generation,mode:input.runtime?.manifest.database.mode,candidates:[...runtimes.keys()].filter(id=>id.startsWith('canary_'))});try{return await service.reconcile(input)}catch(error){errors.push(error.stack??String(error));throw error}},rollback:input=>service.rollback(input),delete:input=>service.delete(input)},pollIntervalMs:10,heartbeatIntervalMs:100});
+  const openAgent=async()=>agent=await openProviderDeploymentAgent({client,registrationToken:options.deploymentAgents.registrationToken,node:{id:'canary-native-provider',region:'local',endpoint,capacity:16},provider:{kind:'http',async reconcile(input){events.push({kind:'reconcile',projectId:input.operation.projectId,generation:input.desired.generation,mode:input.runtime?.manifest.database.mode,candidates:[...runtimes.keys()].filter(id=>id.startsWith('canary_'))});try{
+      // Capture only the exact genuine reconciliation request, without its spent
+      // signal. These bounded private bytes never enter events or diagnostics.
+      if(input.runtime)assert.ok(input.runtime.bytes.byteLength<=8*1024*1024);
+      const captured=input.runtime?{operation:structuredClone(input.operation),desired:structuredClone(input.desired),artifact:{sha256:input.artifact.sha256},runtime:{bytes:new Uint8Array(input.runtime.bytes),sha256:input.runtime.sha256},controlToken:input.runtime.manifest.ingress.controlToken}:null;
+      const result=await service.reconcile(input);if(captured)retainedPrimary=captured;return result;
+    }catch(error){errors.push(error.stack??String(error));throw error}},rollback:input=>service.rollback(input),delete:input=>service.delete(input)},pollIntervalMs:10,heartbeatIntervalMs:100});
   await openAgent();
 
   const owner=await authorize(platform),{project}=await json(platform,'/api/projects',{method:'POST',token:owner.accessToken,body:{name:'Native canary',slug:'native-canary',placement:'provider'}},201);
   const control=new DatabaseSync(join(root,'platform/control.sqlite'));control.exec('PRAGMA busy_timeout=5000');t.after(()=>control.close());
   if(fixedProjectId){control.prepare('UPDATE clank_platform_projects SET id=? WHERE id=?').run(fixedProjectId,project.id);project.id=fixedProjectId;}
-  const f={root,owner,project,events,errors,control,service,runtimes,data,endpoint,options,children,track,get platform(){return platform},
+  const f={root,owner,project,events,errors,control,get service(){return service},runtimes,data,endpoint,options,children,track,get platform(){return platform},
     register:(email,{native=true}={})=>browserSession(platform,'register',email,native),
     async invite(email){
       const transport={handle:platform.nativeRequest};
@@ -167,6 +175,46 @@ export async function shadowPlatformFixture(t,policy={stages:[{trafficPercent:50
     login:(email=owner.user.email,{native=true}={})=>browserSession(platform,'login',email,native),
     fresh:(auth=owner,{native=true}={})=>fresh(platform,control,auth,native),
     get controlCounts(){return {...controlCounts}},
+    primaryCoordination(){
+      const operations=control.prepare('SELECT * FROM clank_deployment_operations WHERE project_id=? ORDER BY id').all(project.id);
+      const node=control.prepare('SELECT id,status,endpoint FROM clank_deployment_nodes WHERE id=?').get('canary-native-provider');assert.equal(node?.status,'active');
+      return {activeOperations:agent.activeOperations,pending:operations.filter(row=>['queued','retry','leased'].includes(row.state)).length,node,
+        project:control.prepare('SELECT active_release_id,active_generation,provider_node_id FROM clank_platform_projects WHERE id=?').get(project.id),
+        placement:control.prepare('SELECT desired_release_id,desired_state,generation,observed_release_id,observed_state,observed_generation FROM clank_deployment_placements WHERE project_id=?').get(project.id),
+        operationCount:operations.length,operationDigest:createHash('sha256').update(JSON.stringify(operations)).digest('hex')};
+    },
+    async primaryObservation(){
+      const state=await data.inspect(project.id);assert.ok(state);
+      const observer=new DatabaseSync(join(root,'provider/projects',project.id,state.databasePath),{readOnly:true});
+      try{return {projectId:state.projectId,releaseId:state.releaseId,generation:state.generation,fence:state.fence,capsuleSha256:state.capsuleSha256,
+        rows:observer.prepare('SELECT id,label FROM events ORDER BY id').all()};}finally{observer.close();}
+    },
+    async issuePrimaryBinding(){
+      assert.ok(retainedPrimary?.controlToken);
+      const response=await fetch(endpoint+deploymentProviderCanaryPath(project.id,'binding'),{headers:{authorization:'Bearer '+retainedPrimary.controlToken},signal:AbortSignal.timeout(15000)});
+      const body=await response.json();assert.equal(response.status,200,JSON.stringify(body));return body.binding;
+    },
+    async replacePrimaryIncarnation(){
+      const coordination=f.primaryCoordination();assert.equal(coordination.activeOperations,0);assert.equal(coordination.pending,0);
+      assert.equal(retainedPrimary?.operation.projectId,project.id);
+      const captured=retainedPrimary,before=await service.canaries.binding(project.id),observation=await f.primaryObservation();assert.ok(before);
+      const digest=bytes=>createHash('sha256').update(bytes).digest('hex');assert.equal(digest(captured.runtime.bytes),captured.runtime.sha256);
+      await service.close();assert.equal(runtimes.size,0,'The old owned provider runtimes are absent before reopening.');
+      await openService();await service.reconcile({operation:structuredClone(captured.operation),desired:structuredClone(captured.desired),artifact:{...captured.artifact},
+        runtime:{bytes:new Uint8Array(captured.runtime.bytes),sha256:captured.runtime.sha256},signal:AbortSignal.timeout(15000)});
+      // This native read does NOT issue a new HTTP binding receipt: the stale
+      // response case must retain the old receipt's exact cleanup authority.
+      const after=await service.canaries.binding(project.id);assert.ok(after);assert.notEqual(after.incarnation,before.incarnation);
+      assert.deepEqual({...after,incarnation:before.incarnation},before);assert.deepEqual(await f.primaryObservation(),observation);
+      assert.deepEqual(f.primaryCoordination(),coordination);assert.equal(retainedPrimary,captured,'No different reconciliation raced the exact retained replay.');
+      assert.equal(runtimes.size,1);assert.equal(runtimes.get(project.id).status,'active');
+      const response=await f.traffic();assert.equal(response.status,200);assert.deepEqual((await response.json()).rows,observation.rows.map(({label})=>({label})));
+      return {before,after,observation,coordination,operation:{...captured.operation},desired:{...captured.desired},capsuleSha256:captured.runtime.sha256};
+    },
+    async retirementLedger(){
+      try{return JSON.parse(await readFile(join(root,'provider/service',project.id+'.canary-retirements.json'),'utf8'));}
+      catch(error){if(error.code==='ENOENT')return null;throw error;}
+    },
     async pausePlatform(){await agent.close();await platform.close();},
     async reopen(disabled=false,{agent:reopenAgent=true}={}){await agent.close();await platform.close();platform=await start(disabled);await until(async()=>{const value=await platform.rpc({kind:'status'});return value.status.state==='leader'},'gracefully reopened platform leadership',60000);if(reopenAgent)await openAgent();return platform;},
     async successor(){platform=await start(true);await until(async()=>{const value=await platform.rpc({kind:'status'});return value.status.state==='leader'},'actual successor startup recovery',60000);await openAgent();return platform;},
