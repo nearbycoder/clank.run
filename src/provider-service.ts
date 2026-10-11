@@ -1,3 +1,5 @@
+import { acquireProviderServiceOwnership, admitProviderService, type ProviderServiceOwnership } from "./provider-handoff.ts";
+import { providerDockerClient } from "./provider-docker-client.ts";
 import {
   openDeploymentProviderDataStore,
   type DeploymentProviderDataSnapshot,
@@ -278,83 +280,6 @@ const MAX_STATE_BYTES = 64 * 1024;
 const MAX_PROVIDER_DATABASE_BYTES =
   2 * 1024 * 1024 * 1024 - 2 * 1024 * 1024 - 100 * 1024 * 1024 - 32;
 
-interface ProviderServiceOwnership {
-  readonly fs: NodeFs;
-  readonly path: NodePath;
-  readonly root: string;
-  readonly serviceDirectory: string;
-  close(): void;
-}
-
-/**
- * Hold a native write lock for the entire service lifetime. The file is never
- * removed or replaced: a second writer must contend on the same SQLite inode,
- * and process death releases ownership without a clock or a stale PID takeover.
- */
-async function acquireProviderServiceOwnership(rootDirectory: string, createRoot = false): Promise<ProviderServiceOwnership> {
-  const fs = await nodeFs(), path = await nodePath();
-  const requested = path.resolve(nonEmpty(rootDirectory, "rootDirectory"));
-  if (createRoot) await ensurePrivateDirectory(fs, requested, "rootDirectory");
-  const root = await privateDirectory(fs, requested, "rootDirectory");
-  const serviceDirectory = path.join(root, "service");
-  await ensurePrivateDirectory(fs, serviceDirectory, "provider service directory");
-  requireInside(path, root, await fs.realpath(serviceDirectory), "provider service directory");
-  const filename = path.join(serviceDirectory, ".writer.sqlite");
-  try {
-    const handle = await fs.open(filename, "wx", 0o600);
-    await handle.close();
-    await syncDirectory(fs, serviceDirectory);
-  } catch (error) {
-    if (nodeCode(error) !== "EEXIST") throw error;
-  }
-  // SQLite may open its journal while acquiring/recovering the lock. Validate
-  // every possible sidecar before giving native SQLite this private pathname.
-  for (const suffix of ["", "-journal", "-wal", "-shm"]) {
-    const target = filename + suffix;
-    let stat: NodeStats;
-    try { stat = await fs.lstat(target); }
-    catch (error) { if (suffix && nodeCode(error) === "ENOENT") continue; throw error; }
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || !ownedByCurrentUser(stat)
-      || (stat.mode & 0o077) !== 0 || stat.size > MAX_STATE_BYTES || await fs.realpath(target) !== target) {
-      throw new Error("Provider service ownership must use private bounded native SQLite files.");
-    }
-  }
-  const sqliteName = "node:sqlite";
-  const { DatabaseSync } = await import(sqliteName) as unknown as {
-    DatabaseSync: new (filename: string) => {
-      exec(sql: string): void;
-      prepare(sql: string): { get(): Record<string, unknown> | undefined; all(): Record<string, unknown>[] };
-      close(): void;
-    };
-  };
-  const database = new DatabaseSync(filename);
-  try {
-    database.exec("PRAGMA busy_timeout=0; PRAGMA trusted_schema=OFF; PRAGMA synchronous=FULL; BEGIN IMMEDIATE");
-    const schema = database.prepare("SELECT name, type FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'").all();
-    if (schema.length === 0) {
-      database.exec("CREATE TABLE clank_provider_service_owner (protocol INTEGER NOT NULL CHECK(protocol=1)) STRICT; INSERT INTO clank_provider_service_owner VALUES (1)");
-    } else if (schema.length !== 1 || schema[0].name !== "clank_provider_service_owner" || schema[0].type !== "table"
-      || database.prepare("SELECT * FROM clank_provider_service_owner").all().length !== 1
-      || database.prepare("SELECT protocol FROM clank_provider_service_owner").get()?.protocol !== 1) {
-      throw new Error("Provider service ownership protocol is unsupported.");
-    }
-    // Persist the protocol first; acquire the lifetime reservation immediately.
-    // If another process wins this brief gap we fail before provider side effects.
-    database.exec("COMMIT; BEGIN IMMEDIATE");
-    let released = false;
-    return Object.freeze({fs, path, root, serviceDirectory, close() {
-      if (released) return;
-      database.close();
-      released = true;
-    }});
-  } catch (error) {
-    database.close();
-    const code = (error as { errcode?: number }).errcode;
-    if (typeof code === "number" && (code & 255) === 5) throw new Error("Provider service root already has an active writer.");
-    throw error;
-  }
-}
-
 /**
  * Composes provider data, an isolated Docker launcher, and private ingress into
  * one fenced desired-state provider. Application secrets remain only in the
@@ -367,7 +292,7 @@ export async function openDeploymentProviderService(
     throw new TypeError("Deployment provider service options are required.");
   }
   const ownership = await acquireProviderServiceOwnership(options.rootDirectory);
-  try { return await openOwnedDeploymentProviderService(options, ownership); }
+  try { await admitProviderService(ownership); return await openOwnedDeploymentProviderService(options, ownership); }
   catch (error) { ownership.close(); throw error; }
 }
 
@@ -375,7 +300,8 @@ async function openOwnedDeploymentProviderService(
   options: DeploymentProviderServiceOptions,
   ownership: ProviderServiceOwnership,
 ): Promise<DeploymentProviderService> {
-  const {fs, path, root, serviceDirectory} = ownership;
+  const {root, serviceDirectory} = ownership;
+  const fs = ownership.fs as NodeFs, path = ownership.path as NodePath;
   const kind = pattern(options.kind ?? "docker", "kind", KIND);
   const drainTimeoutMs = integer(
     options.drainTimeoutMs ?? 30_000,
@@ -1644,23 +1570,26 @@ export async function openDockerDeploymentProviderService(
   let ingress: DeploymentRuntimeIngress | undefined;
   let runtimes: DockerDeploymentRuntimeLauncher | undefined;
   try {
-    const data = await openDeploymentProviderDataStore({
-      ...(options.data ?? {}),
-      rootDirectory: options.rootDirectory,
-    });
-    runtimes = await openDockerDeploymentRuntimeLauncher({
+    const dockerOptions = {
       ...(options.docker ?? {}),
-      rootDirectory: options.rootDirectory,
+      rootDirectory: ownership.root,
       owner: options.owner,
       image: options.image,
       onError: options.docker?.onError ?? options.onError,
+    };
+    const client = providerDockerClient(dockerOptions);
+    await admitProviderService(ownership, client, options.owner);
+    const data = await openDeploymentProviderDataStore({
+      ...(options.data ?? {}),
+      rootDirectory: ownership.root,
     });
+    runtimes = await openDockerDeploymentRuntimeLauncher(dockerOptions);
     ingress = createDeploymentRuntimeIngress({
       ...(options.ingress ?? {}),
       onError: options.ingress?.onError ?? options.onError,
     });
     return await openOwnedDeploymentProviderService({
-      rootDirectory: options.rootDirectory,
+      rootDirectory: ownership.root,
       data,
       runtimes,
       ingress,
