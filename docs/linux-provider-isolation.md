@@ -87,7 +87,7 @@ The provider-controller cases use real Docker, native SQLite and private HTTP in
 kill the controller during preparation, running and a streaming-request drain, then require
 candidate container, data, bridge and nftables cleanup before the primary is readmitted.
 These cases drive the trusted service API; they do not certify platform traffic stages or the
-forthcoming authenticated canary-control protocol. Run privileged profiles serially on the
+authenticated canary-control protocol. Run privileged profiles serially on the
 marked disposable host so their fixed network probes and port ranges cannot interfere.
 
 The ordinary Linux isolation suite requires `bubblewrap`, `util-linux`, `iproute2`, `nftables` and `procps`, plus permission to create unprivileged user, mount and network namespaces. It fails when those enforcement capabilities are missing. Containerized control planes additionally require an explicitly reviewed seccomp/AppArmor profile that permits the helper namespaces; installing `bubblewrap` alone does not override a container runtime's restrictions. Do not replace that requirement with `--privileged` or a silent unsandboxed fallback.

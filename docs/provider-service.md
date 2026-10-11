@@ -359,9 +359,9 @@ Capsule intake is serialized across the provider, bounded before copying and cop
 asynchronous verification so callers cannot substitute bytes during preparation.
 
 This exposes `service.canaries.binding`, `prepare`, `inspect`, `stop` and `retire` to trusted server
-callers and the authenticated HTTP controls below. It does not enable platform provider
-canary deployment stages. Platform orchestration remains unsupported until its native
-lease fencing, measured stages and process/network failure acceptance are complete.
+callers and the authenticated HTTP controls below. Service enablement alone does not start
+platform traffic stages. Configure the separate [platform controller](deployment-platform.md#isolated-provider-canaries)
+with native supervisor and project leases to run measured stages and durable exact retirement.
 
 `binding(projectId)` returns the current primary release, generation, fence and an opaque
 provider-issued incarnation, or `null` when unavailable. Preparation requires that exact binding,
