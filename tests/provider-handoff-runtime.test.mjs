@@ -10,8 +10,9 @@ import {syncBuiltinESMExports} from 'node:module';
 import {openBackend,defineBackend,defineDatabase,defineTable} from '../dist/backend.js';
 import {s} from '../dist/ai.js';
 import {SQLITE_INTERNAL} from '../dist/sqlite-internal.js';
-import {createHash,randomUUID,randomBytes} from 'node:crypto';
+import {createHash,createHmac,randomUUID,randomBytes} from 'node:crypto';
 import * as handoff from '../dist/provider-handoff.js';
+import {sealPointInTimeState} from '../dist/point-in-time-state.js';
 import {providerDockerClient} from '../dist/provider-docker-client.js';
 const hash=value=>createHash('sha256').update(typeof value==='string'||value instanceof Uint8Array?value:JSON.stringify(value)).digest('hex');
 const limits={maxProjects:10,maxOperations:32,maxArchiveBytes:33554432,maxBatchEntries:256,maxBatchBytes:4194304,maxCaptureTransactionBytes:4194304,maxCaptureStateBytes:33554432,maxJournalEntries:10000,maxJournalBytes:67108864,maxSpoolBytes:268435456,controlTimeoutMs:30000};
@@ -148,3 +149,88 @@ test('actual SIGKILL after base rename retains uncertain evidence and restart ca
 test('revocation while native worker admission is queued releases ownership without submitting source work',async t=>{const f=await fixture(t),p=await child(t,f,'fault',{fault:'worker-queue'}),held=await p.next();assert.equal(held.phase,'held');assert.equal(held.spawns,2);f.mutate(db=>db.exec("UPDATE clank_provider_handoff_source_grant SET state='revoked'"));p.send({});const result=await p.next();assert.equal(result.ok,true);assert.equal(result.spawns,3,'only the independent post-refusal ordinary worker was added');await p.done();const directory=join(f.app,'.clank-source-recovery-'+f.bootstrap.binding.sourceIncarnation);assert.equal(fs.existsSync(join(directory,'epoch.json')),false);assert.equal(fs.existsSync(join(directory,'head.json')),false);});
 
 for(const code of ['EACCES','ENOENT'])for(const when of [1,2])test('unavailable proc enumeration '+code+' at observation '+when+' preserves ordinary writes without source authority',async t=>{const root=await mkdtemp(join(tmpdir(),'clank-native-proc-denied-')),path=join(root,'source.sqlite');t.after(()=>rm(root,{recursive:true,force:true}));const original=fs.readdirSync;let reads=0,runtime;fs.readdirSync=function(file,...args){if(file==='/proc/self/fd'&&++reads===when)throw Object.assign(new Error('native observation unavailable'),{code});return original.call(this,file,...args);};syncBuiltinESMExports();try{runtime=await openBackend(defineBackend({schema:defineDatabase({records:defineTable({value:s.string()})})}).functions(()=>({})),{path,agent:false,changePollIntervalMs:0});runtime.database.transaction(db=>db.table('records').insert({value:'ordinary'}));assert.equal(runtime.database.read(db=>db.table('records').collect()).length,1);assert.throws(()=>openBackend[SQLITE_INTERNAL].assertSourceRuntime(runtime),/unambiguous/);}finally{fs.readdirSync=original;syncBuiltinESMExports();runtime?.close();}assert.equal(fs.readdirSync('/proc/self/fd').some(fd=>{try{return fs.readlinkSync('/proc/self/fd/'+fd)===root;}catch{return false;}}),false);});
+
+for(const grant of ['created','started'])test('private completion data matches the actual '+grant+' native capture and retained base',async t=>{
+ const f=await fixture(t);if(grant==='started')f.mutate(db=>db.exec("UPDATE clank_provider_handoff_source_grant SET state='started'"));
+ const p=await child(t,f,'completion'),message=await p.next();assert.equal(message.phase,'initialized');const result=message.completion;
+ const db=new DatabaseSync(f.database,{readOnly:true});try{
+  const rows=db.prepare('SELECT * FROM clank_pitr_state').all();assert.equal(rows.length,1);const state=rows[0];
+  assert.deepEqual(result,{captureEpoch:state.epoch,keyId:state.key_id,schemaHash:state.schema_hash,baseBackupId:state.base_id,observedCursor:{epoch:state.epoch,sequence:0,digest:'0'.repeat(64)}});
+  assert.equal(state.sequence,0);assert.equal(state.exported,0);assert.equal(state.remote_exports_protocol,1);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM clank_pitr_journal').get().n,0);assert.equal(db.prepare('SELECT count(*) AS n FROM clank_pitr_remote_exports').get().n,0);
+  assert.equal(state.state_hash,sealPointInTimeState(db,createHash,limits.maxCaptureStateBytes));
+  assert.equal(state.schema_hash,hash(JSON.stringify(db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' AND name NOT GLOB 'clank_pitr_*' ORDER BY type,name").all())));
+  const directory=join(f.app,'.clank-source-recovery-'+f.bootstrap.binding.sourceIncarnation),key=Buffer.from(f.bootstrap.recoveryKey,'base64url');
+  for(const file of ['epoch.json','head.json','base/'+state.base_id+'/manifest.json']){
+   const retained=JSON.parse(fs.readFileSync(join(directory,file),'utf8')),content=retained.manifest??retained.checkpoint;
+   assert.equal(retained.mac,createHmac('sha256',file.startsWith('base/')?createHash('sha256').update(key).digest():key).update(JSON.stringify(content)).digest(file.startsWith('base/')?'base64url':'hex'));
+   if(file==='epoch.json')assert.deepEqual(content,{protocol:'clank-pitr-repository/1',epoch:state.epoch,keyId:state.key_id,baseBackupId:state.base_id});
+   else if(file==='head.json')assert.deepEqual(content,{epoch:state.epoch,sequence:0,digest:state.digest,committedAt:state.committed_at});
+   else{assert.equal(content.id,state.base_id);assert.equal(content.encryption.keyId,state.key_id);assert.ok(content.databaseBytes>0);assert.equal(fs.existsSync(join(directory,'base',state.base_id,'database.enc')),true);}
+  }
+ }finally{db.close();}
+ p.send({});assert.deepEqual(await p.next(),{ok:true,records:0});await p.done();
+});
+
+const completionCorruption=[
+ ['epoch',"UPDATE clank_pitr_state SET epoch='00000000-0000-4000-8000-000000000000'"],
+ ['key',"UPDATE clank_pitr_state SET key_id='another_key'"],
+ ['key hash',"UPDATE clank_pitr_state SET key_hash='"+'1'.repeat(64)+"'"],
+ ['schema hash',"UPDATE clank_pitr_state SET schema_hash='"+'1'.repeat(64)+"'"],
+ ['logical hash',"UPDATE clank_pitr_state SET state_hash='"+'1'.repeat(64)+"'"],
+ ['base identity',"UPDATE clank_pitr_state SET base_id='bk_1234567890123_abcdefghijkl'"],
+ ['committed timestamp','UPDATE clank_pitr_state SET committed_at=committed_at+1'],
+ ['sequence','UPDATE clank_pitr_state SET sequence=1'],
+ ['exported horizon','UPDATE clank_pitr_state SET exported=1'],
+ ['digest',"UPDATE clank_pitr_state SET digest='"+'1'.repeat(64)+"'"],
+ ['protocol','UPDATE clank_pitr_state SET remote_exports_protocol=2'],
+ ['missing singleton','DELETE FROM clank_pitr_state'],
+ ['duplicate singleton','CREATE TABLE clank_pitr_duplicate AS SELECT * FROM clank_pitr_state; DROP TABLE clank_pitr_state; ALTER TABLE clank_pitr_duplicate RENAME TO clank_pitr_state; INSERT INTO clank_pitr_state SELECT * FROM clank_pitr_state'],
+ ['journal',"INSERT INTO clank_pitr_journal VALUES(1,'{}')"],
+ ['remote export',"INSERT INTO clank_pitr_remote_exports VALUES('op',4096,1,'{}',2)"],
+ ['terminal seal','CREATE TABLE clank_pitr_source_seal(value TEXT)'],
+ ['unexpected PITR object','CREATE TABLE clank_pitr_unknown(value TEXT)'],
+ ['native logical state',"INSERT INTO clank_meta(_key,_value) VALUES('completion_corruption',1)"],
+ ['foreign commit',null],
+];
+for(const [name,completionSQL] of completionCorruption)test('private completion refuses changed '+name+' after actual head publication',async t=>{
+ const f=await fixture(t),catalog=fs.readFileSync(f.catalog),p=await child(t,f,'completion-fault',{completionFault:completionSQL?'native':'foreign',completionSQL});
+ assert.equal((await p.next()).ok,true);await p.done();assert.deepEqual(fs.readFileSync(f.catalog),catalog);
+ const directory=join(f.app,'.clank-source-recovery-'+f.bootstrap.binding.sourceIncarnation);assert.equal(fs.existsSync(join(directory,'head.json')),true);assert.equal(fs.existsSync(join(directory,'epoch.json')),true);
+ const backups=fs.readdirSync(join(directory,'base')).filter(name=>name.startsWith('bk_'));assert.equal(backups.length,1,'published native base remains available for operator recovery');
+});
+
+for(const finalFault of ['native','close','revoke','repository-replace','catalog-replace'])test('private completion final await refuses '+finalFault+' and settles owned pins',async t=>{
+ const f=await fixture(t),p=await child(t,f,'final-fault',{finalFault});
+ const directory=join(f.app,'.clank-source-recovery-'+f.bootstrap.binding.sourceIncarnation);
+ if(!['native','close'].includes(finalFault)){
+  assert.deepEqual(await p.next(),{phase:'final-held'});
+  if(finalFault==='revoke')f.mutate(db=>db.exec("UPDATE clank_provider_handoff_source_grant SET state='revoked'"));
+  else if(finalFault==='repository-replace'){fs.renameSync(directory,directory+'.retained');fs.mkdirSync(directory,{mode:0o700});fs.writeFileSync(join(directory,'foreign-sentinel'),'preserve',{mode:0o600});}
+  else{fs.copyFileSync(f.catalog,f.catalog+'.replacement');fs.chmodSync(f.catalog+'.replacement',0o600);fs.renameSync(f.catalog+'.replacement',f.catalog);}
+  fs.writeFileSync(join(f.app,'completion-command.json'),JSON.stringify({resume:true}),{mode:0o600});
+ }
+ assert.equal((await p.next()).ok,true);await p.done();
+ const original=finalFault==='repository-replace'?directory+'.retained':directory;
+ assert.equal(fs.existsSync(join(original,'head.json')),true);assert.equal(fs.existsSync(join(original,'epoch.json')),true);
+ assert.equal(fs.readdirSync(join(original,'base')).filter(name=>name.startsWith('bk_')).length,1);
+ if(finalFault==='repository-replace')assert.equal(fs.readFileSync(join(directory,'foreign-sentinel'),'utf8'),'preserve');
+});
+
+test('private completion retains the original inserted timestamp across the real base acknowledgment',async t=>{
+ const f=await fixture(t),p=await child(t,f,'completion-fault',{completionFault:'before-base'});assert.equal((await p.next()).ok,true);await p.done();
+ const db=new DatabaseSync(f.database,{readOnly:true});try{assert.equal(db.prepare('SELECT base_id FROM clank_pitr_state').get().base_id,'');}finally{db.close();}
+ const directory=join(f.app,'.clank-source-recovery-'+f.bootstrap.binding.sourceIncarnation);assert.equal(fs.existsSync(join(directory,'epoch.json')),false);assert.equal(fs.existsSync(join(directory,'head.json')),false);assert.equal(fs.readdirSync(join(directory,'base')).filter(name=>name.startsWith('bk_')).length,1);
+});
+
+for(const cleanupFault of ['root','reader','both','reader-runtime-close'])test('private initialization attempts all owned cleanup after '+cleanupFault+' native close acknowledgment failure',async t=>{
+ const f=await fixture(t),catalog=fs.readFileSync(f.catalog),p=await child(t,f,'cleanup-fault',{finalFault:cleanupFault==='reader-runtime-close'?'close':'native',cleanupFault});
+ assert.equal((await p.next()).ok,true);await p.done();assert.deepEqual(fs.readFileSync(f.catalog),catalog);
+ const directory=join(f.app,'.clank-source-recovery-'+f.bootstrap.binding.sourceIncarnation);assert.equal(fs.existsSync(join(directory,'epoch.json')),true);assert.equal(fs.existsSync(join(directory,'head.json')),true);assert.equal(fs.readdirSync(join(directory,'base')).filter(name=>name.startsWith('bk_')).length,1);
+});
+for(const multiple of [false,true])test('native provider owner settles every pin and preserves its first close acknowledgment error '+multiple,async t=>{
+ const root=await mkdtemp(join(tmpdir(),'clank-owner-close-')),owner=await handoff.acquireProviderServiceOwnership(root,true),close=fs.closeSync,first=new Error('injected owner close acknowledgment'),attempts=[];let injected=false;
+ const remaining=()=>fs.readdirSync('/proc/self/fd').flatMap(fd=>{try{const path=fs.readlinkSync('/proc/self/fd/'+fd);return path===root||path.startsWith(root+'/')?[{fd:Number(fd),path}]:[];}catch{return [];}});
+ fs.closeSync=function(fd){const path=fs.readlinkSync('/proc/self/fd/'+fd),value=close(fd);if(path===root||path.startsWith(root+'/')){attempts.push(path);if(!injected){injected=true;throw first;}if(multiple)throw Error('later close acknowledgment');}return value;};syncBuiltinESMExports();
+ try{assert.throws(()=>owner.close(),error=>error===first);assert.equal(injected,true);assert.deepEqual(remaining(),[],'all owned native descriptors must settle');assert.deepEqual(attempts,[join(root,'service','.writer.sqlite'),join(root,'service'),root]);owner.close();assert.equal(attempts.length,3);}finally{fs.closeSync=close;syncBuiltinESMExports();for(const {fd}of remaining())close(fd);await rm(root,{recursive:true,force:true});}
+});

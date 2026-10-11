@@ -1,4 +1,4 @@
-import { SOURCE_SEAL_SQL, validateSourceState, validateSourceBase, validateSourceTail, validateSourceSeal, newSourceSeal, sourceBatch } from "./point-in-time-source.ts";
+import { SOURCE_SEAL_SQL, sourceCursor, validateSourceState, validateSourceBase, validateSourceTail, validateSourceSeal, newSourceSeal, sourceBatch } from "./point-in-time-source.ts";
 import { sealPointInTimeState } from "./point-in-time-state.ts";
 import { SQLITE_INTERNAL, type SQLiteCaptureConnection } from "./sqlite-internal.ts";
 import type { SQLiteDatabase } from "./backend.ts";
@@ -135,6 +135,10 @@ const restoreGuard=(duration:number|undefined,assertCurrent:(()=>void)|undefined
 export async function openPointInTimeRecovery(database: SQLiteDatabase<any>, options: PointInTimeRecoveryOptions): Promise<PointInTimeRecovery> {
   return openRecovery(database,options);
 }
+type InitializedRecovery = PointInTimeRecovery & { complete():Readonly<{
+  captureEpoch:string; keyId:string; schemaHash:string; baseBackupId:string;
+  observedCursor:Readonly<{epoch:string;sequence:number;digest:string}>;
+}> };
 async function openRecovery(database: SQLiteDatabase<any>, options: PointInTimeRecoveryOptions,bridge?:any): Promise<PointInTimeRecovery> {
   bridge?.current();
   // Capture operator configuration before the first asynchronous boundary.
@@ -166,7 +170,15 @@ async function openRecovery(database: SQLiteDatabase<any>, options: PointInTimeR
   let sourceAdmission: (write?: boolean) => void = write => {if(bridge){if(write)bridge.write();else bridge.current();}};
   let assertSealed!: () => void;
   const hash = (value: string | Uint8Array) => crypto.createHash("sha256").update(value).digest("hex");
-  let schema = "";
+  let schema = "",initializedSchema="";
+  let initializedState:Record<string,unknown>|undefined;
+  const captureShape=()=>JSON.stringify(connection.prepare("SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE name GLOB 'clank_pitr_*' OR tbl_name GLOB 'clank_pitr_*' ORDER BY type,name").all());
+  const assertInitialization=()=>{
+    assertSealed();
+    const rows=connection.prepare("SELECT * FROM clank_pitr_state LIMIT 2").all();
+    if(!initializedState||rows.length!==1||JSON.stringify(rows[0])!==JSON.stringify(initializedState)||captureShape()!==initializedSchema
+      ||connection.prepare("SELECT 1 FROM clank_pitr_journal LIMIT 1").get()||connection.prepare("SELECT 1 FROM clank_pitr_remote_exports LIMIT 1").get())throw new Error("Private capture initialization changed before completion.");
+  };
   const shape = () => JSON.stringify(connection.prepare("SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' AND name NOT GLOB 'clank_pitr_*' ORDER BY type,name").all());
   const stateDigest = () => sealPointInTimeState(connection, crypto.createHash, stateMaximum);
   internal.captureTransactions((value:SQLiteCaptureConnection) => {
@@ -174,6 +186,7 @@ async function openRecovery(database: SQLiteDatabase<any>, options: PointInTimeR
     connection.exec("BEGIN IMMEDIATE");
     try {
     if (connection.path === ":memory:") throw new Error("Recovery requires a file-backed SQLite database.");
+    if(bridge&&connection.prepare("SELECT 1 FROM sqlite_schema WHERE name GLOB 'clank_pitr_*' OR tbl_name GLOB 'clank_pitr_*' LIMIT 1").get())throw new Error("Private source capture requires a pristine namespace.");
     const retainedTables=connection.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name IN ('clank_pitr_state','clank_pitr_journal')").all();
     if(retainedTables.length===0&&retainedRepositoryFiles.length!==0 || retainedTables.length!==0&&retainedTables.length!==2 || retainedTables.length===2
       && (connection.prepare("SELECT count(*) AS n FROM clank_pitr_state").get()!.n!==1 || !connection.prepare("SELECT 1 FROM clank_pitr_state WHERE id=1").get()))throw new Error("Recovery retained epoch is missing or partial; preserve it for verified operator recovery.");
@@ -194,7 +207,12 @@ async function openRecovery(database: SQLiteDatabase<any>, options: PointInTimeR
     } else {
       const epoch=crypto.randomUUID(),at=Date.now(),inserted=connection.prepare("INSERT INTO clank_pitr_state(id,epoch,key_id,key_hash,schema_hash,state_hash,sequence,digest,committed_at) VALUES(1,?,?,?,?,?,0,?,?)")
         .run(epoch,keyId,hash(key),hash(schema),current,"0".repeat(64),at);
-      if(bridge){const rows=connection.prepare("SELECT * FROM clank_pitr_state LIMIT 2").all();if(Number(inserted.changes)!==1||rows.length!==1||JSON.stringify(rows[0])!==JSON.stringify({id:1,epoch,key_id:keyId,key_hash:hash(key),schema_hash:hash(schema),state_hash:current,sequence:0,digest:"0".repeat(64),committed_at:at,base_id:"",exported:0,remote_exports_protocol:1}))throw new Error("Private capture bootstrap was not retained exactly.");}
+      if(bridge){
+        // Expected metadata comes from the successful insert, never a later resample.
+        initializedState={id:1,epoch,key_id:keyId,key_hash:hash(key),schema_hash:hash(schema),state_hash:current,sequence:0,digest:"0".repeat(64),committed_at:at,base_id:"",exported:0,remote_exports_protocol:1};
+        const rows=connection.prepare("SELECT * FROM clank_pitr_state LIMIT 2").all();if(Number(inserted.changes)!==1||rows.length!==1||JSON.stringify(rows[0])!==JSON.stringify(initializedState))throw new Error("Private capture bootstrap was not retained exactly.");
+        initializedSchema=captureShape();
+      }
     }
     const dataVersion = Number(connection.prepare("PRAGMA data_version").get()?.data_version);
     let sessions: Array<{ table: string; session: ReturnType<SQLiteCaptureConnection["createSession"]> }> = [];
@@ -269,9 +287,12 @@ async function openRecovery(database: SQLiteDatabase<any>, options: PointInTimeR
       controlled(()=>{
         if(!bridge){connection.prepare("UPDATE clank_pitr_state SET base_id=? WHERE id=1").run(backup.id);return;}
         connection.exec("BEGIN IMMEDIATE");
-        try{const before=connection.prepare("SELECT * FROM clank_pitr_state WHERE id=1").get()!,updated=connection.prepare("UPDATE clank_pitr_state SET base_id=? WHERE id=1 AND base_id='' AND sequence=0").run(backup.id);
-          if(Number(updated.changes)!==1||JSON.stringify(connection.prepare("SELECT * FROM clank_pitr_state WHERE id=1").get())!==JSON.stringify({...before,base_id:backup.id}))throw new Error("Private base acknowledgment was not retained exactly.");
-          bridge.current();connection.exec("COMMIT");bridge.current();
+        try{assertInitialization();
+          if(!/^bk_[0-9]{13}_[A-Za-z0-9_-]{12,64}$/u.test(backup.id))throw new Error("Private base acknowledgment has an invalid identity.");
+          const next={...initializedState,base_id:backup.id},updated=connection.prepare("UPDATE clank_pitr_state SET base_id=? WHERE id=1 AND base_id='' AND sequence=0").run(backup.id);
+          const rows=connection.prepare("SELECT * FROM clank_pitr_state LIMIT 2").all();
+          if(Number(updated.changes)!==1||rows.length!==1||JSON.stringify(rows[0])!==JSON.stringify(next))throw new Error("Private base acknowledgment was not retained exactly.");
+          bridge.current();connection.exec("COMMIT");bridge.current();initializedState=next;
         }catch(error){connection.exec("ROLLBACK");throw error;}
       });
     }
@@ -303,7 +324,17 @@ async function openRecovery(database: SQLiteDatabase<any>, options: PointInTimeR
     return flight;
   };
   await flush();bridge?.current();
-  if(bridge)return Object.freeze({status,flush,async close(){closed=true;try{await flight;}finally{manager.close();}}});
+  if(bridge){
+    const complete=()=>controlled(()=>{
+      if(closed||flight)throw new Error("Private source initialization is still active or closed.");
+      assertInitialization();const row=validateSourceState(connection,crypto,key,stateMaximum);
+      const value=Object.freeze({captureEpoch:row.epoch as string,keyId:row.key_id as string,schemaHash:row.schema_hash as string,baseBackupId:row.base_id as string,observedCursor:sourceCursor(row)});
+      if((globalThis as any).Buffer.byteLength(JSON.stringify(value))>1024)throw new Error("Private initialization result exceeds its bound.");
+      assertInitialization();return value;
+    });
+    // Private capture must never enter the ordinary export/source registries below.
+    return Object.freeze({complete,status,flush,async close(){closed=true;try{await flight;}finally{manager.close();}}});
+  }
   if (interval !== false) { timer = setInterval(() => { void flush().catch((error) => { try { onError?.(error); } catch {} }); }, interval); (timer as ReturnType<typeof setInterval> & { unref?: () => void }).unref?.(); }
   const recovery: PointInTimeRecovery = Object.freeze({ status, flush, async close() { if (closed) return; if (timer) clearInterval(timer); try {await (flight ?? flush());} finally {closed = true; archiveSources.delete(recovery); transferSources.delete(recovery); ownedSources.delete(recovery); sourceAcknowledgments.delete(recovery); manager.close();} } });
   transferSources.set(recovery, input => {
@@ -523,10 +554,17 @@ Object.defineProperty(openPointInTimeRecovery,SQLITE_INTERNAL,{value:Object.free
   const context=(openBackend as any)[SQLITE_INTERNAL].sourceContext(token);
   const fsName="node:fs/promises",nativeName="node:fs",pathName="node:path";
   context.current();const [fs,native,path]=await Promise.all([import(fsName),import(nativeName),import(pathName)]);context.current();
-  const pins:PinnedSQLiteDirectory[]=[];let root:PinnedSQLiteDirectory|undefined,recovery:PointInTimeRecovery|undefined;
+  const pins:PinnedSQLiteDirectory[]=[];let root:PinnedSQLiteDirectory|undefined,recovery:InitializedRecovery|undefined;
   const key=new Uint8Array(context.key),current=()=>{
     context.current();for(const pin of pins){const retained=native.fstatSync(pin.fd),visible=native.lstatSync(pin.path);if(!visible.isDirectory()||visible.uid!==(globalThis as any).process.getuid()||(visible.mode&0o022)!==0||retained.dev!==visible.dev||retained.ino!==visible.ino)throw new Error("Private source repository changed.");}
   };
+  let closing:Promise<void>|undefined;
+  const close=()=>closing??=(async()=>{
+    key.fill(0);let failed=false,failure:unknown;
+    try{await recovery?.close();}catch(error){failed=true;failure=error;}
+    for(let index=pins.length-1;index>=0;index--)try{await pins[index]!.close();}catch(error){if(!failed){failed=true;failure=error;}}
+    if(failed)throw failure;
+  })();
   const checked=async<T>(action:()=>Promise<T>):Promise<T>=>{current();const value=await action();current();return value;};
   try{
     const parent=await pinSQLiteDirectory(path.dirname(context.path),false,token);pins.push(parent);current();
@@ -540,9 +578,14 @@ Object.defineProperty(openPointInTimeRecovery,SQLITE_INTERNAL,{value:Object.free
       const directory=await fs.open(root!.anchor,"r");try{current();await checked(()=>directory.sync());}finally{await directory.close();}current();
     };
     const capture=context.binding.capture;
-    recovery=await openRecovery(context.database,{...capture,directory:root.anchor,encryptionKey:key,exportIntervalMs:false},{...context,key,current,root,pins,publish});current();
-    return Object.freeze({async close(){try{await recovery!.close();}finally{key.fill(0);for(const pin of pins.reverse())await pin.close();}}});
-  }catch(error){key.fill(0);for(const pin of pins.reverse())await pin.close();throw error;}
+    recovery=await openRecovery(context.database,{...capture,directory:root.anchor,encryptionKey:key,exportIntervalMs:false},{...context,key,current,root,pins,publish}) as InitializedRecovery;current();
+    let consumed=false;
+    return Object.freeze({complete(){
+      if(consumed)throw new Error("Private initialization completion was consumed.");consumed=true;
+      if(closing)throw new Error("Private initialization is closed.");
+      context.assertInitialized();current();const result=recovery!.complete();current();context.assertInitialized();return result;
+    },close});
+  }catch(error){await close();throw error;}
 }})});
 
 function archiveBounds(options: PointInTimeArchiveBounds) {

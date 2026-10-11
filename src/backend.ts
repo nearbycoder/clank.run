@@ -485,11 +485,15 @@ type SourceDatabase = {
   capture(factory:NonNullable<import("./sqlite-internal.ts").SQLiteInternal["captureTransactions"]> extends (factory:infer F)=>void?F:never):void;
   control<Value>(handler:()=>Value):Value;
 };
+type SourceInitializationResult = Readonly<{
+  captureEpoch:string; keyId:string; schemaHash:string; baseBackupId:string;
+  observedCursor:Readonly<{epoch:string;sequence:number;digest:string}>;
+}>;
 type SourceInitialization = {
-  phase:"initializing"|"initialized"|"failed"|"closed";
+  phase:"initializing"|"initialized"|"failed"|"closed"; token?:object;
   current():void; write():void;
   reader?:Awaited<ReturnType<typeof import("./provider-handoff.ts").openProviderSourceReader>>;
-  flight?:Promise<void>; recovery?:{close():Promise<void>};
+  flight?:Promise<SourceInitializationResult>; recovery?:{close():Promise<void>};
 };
 const sourceSQLiteDatabases = new WeakMap<object, SourceDatabase>();
 const sourceBackendRuntimes = new WeakMap<object, {identity():void;database:object}>();
@@ -3194,7 +3198,13 @@ export async function openBackend<
       closed = true;
       sourceBackendRuntimes.delete(runtime);
       const source=sourceInitializations.get(runtime);
-      if(source){source.phase="closed";source.reader?.close();void source.flight?.finally(()=>source.recovery?.close()).catch(()=>undefined);}
+      let sourceCloseFailed=false,sourceCloseError:unknown;
+      if(source){
+        source.phase="closed";if(source.token)sourceContexts.delete(source.token);
+        try{source.reader?.close();}catch(error){sourceCloseFailed=true;sourceCloseError=error;}
+        finally{void source.flight?.finally(()=>source.recovery?.close()).catch(()=>undefined);}
+      }
+      try{
       for (const disconnect of [...liveDisconnects]) disconnect();
       liveDisconnects.clear();
       stopChanges();
@@ -3208,6 +3218,7 @@ export async function openBackend<
       authRuntime?.close();
       options.buckets?.close();
       database.close();
+      }finally{if(sourceCloseFailed)throw sourceCloseError;}
     },
   };
   const unchangedRuntime = unchangedSourceObjects([runtime], false);
@@ -3239,7 +3250,7 @@ Object.defineProperty(openBackend, SQLITE_INTERNAL, { value: Object.freeze({
     assertRuntime.identity();sourceSQLiteDatabases.get(assertRuntime.database)!.idle();
   },
   sourceContext(token:object){const context=sourceContexts.get(token);if(!context)throw new Error("A genuine private source initialization is required.");context.current();return context;},
-  initializeSourceRuntime(runtime:object):Promise<void>{
+  initializeSourceRuntime(runtime:object):Promise<SourceInitializationResult>{
     const registered=sourceBackendRuntimes.get(runtime);
     if(!registered)throw new Error("Source initialization requires a genuine live backend runtime.");
     registered.identity();const database=sourceSQLiteDatabases.get(registered.database)!;database.idle();
@@ -3248,8 +3259,9 @@ Object.defineProperty(openBackend, SQLITE_INTERNAL, { value: Object.freeze({
       registered.identity();if(state.phase!=="initializing"&&state.phase!=="initialized"||!state.reader)throw new Error("Source initialization is unavailable.");state.reader.assertCurrent();
     },write(){state.current();throw new Error("Source bootstrap grants no ordinary write permission.");}};
     database.reserve(state);sourceInitializations.set(runtime,state);
-    const token=Object.freeze({});
+    const token=Object.freeze({});state.token=token;
     const context=Object.freeze({token,database:registered.database,path:database.path,current:()=>state.current(),write:()=>state.write(),control:database.control,capture:database.capture,
+      assertInitialized(){state.current();if(state.phase!=="initialized")throw new Error("Source initialization has not completed.");database.idle();},
       get binding(){state.current();return state.reader!.binding;},get key(){state.current();return state.reader!.key;}});
     sourceContexts.set(token,context);
     let encoded:string;
@@ -3268,8 +3280,16 @@ Object.defineProperty(openBackend, SQLITE_INTERNAL, { value: Object.freeze({
       const reader=await pending;
       try{registered.identity();if(state.phase!=="initializing")throw new Error("Source initialization was closed.");state.reader=reader;state.current();}catch(error){reader.close();throw error;}
       const {openPointInTimeRecovery}=await import("./point-in-time.ts");state.current();
-      state.recovery=await (openPointInTimeRecovery as any)[SQLITE_INTERNAL].initializeSource(token);state.current();state.phase="initialized";
-    })().catch(error=>{if(state.phase!=="closed")state.phase="failed";state.reader?.close();sourceContexts.delete(token);throw error;});
+      // Own cleanup before any post-await validation can reject or observe close.
+      const initialized=await (openPointInTimeRecovery as any)[SQLITE_INTERNAL].initializeSource(token);state.recovery=initialized;
+      state.current();if(state.phase!=="initializing")throw new Error("Source initialization was closed.");
+      database.idle();state.phase="initialized";const result=initialized.complete();context.assertInitialized();return result;
+    })().catch(async error=>{
+      if(state.phase!=="closed")state.phase="failed";sourceContexts.delete(token);let failed=false,failure:unknown;
+      try{state.reader?.close();}catch(cleanup){failed=true;failure=cleanup;}
+      try{await state.recovery?.close();}catch(cleanup){if(!failed){failed=true;failure=cleanup;}}
+      throw failed?failure:error;
+    });
     return state.flight;
   },
 }) });

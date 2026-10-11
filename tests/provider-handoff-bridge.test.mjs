@@ -7,6 +7,8 @@ import {join} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {createHash,randomUUID} from 'node:crypto';
 import {syncBuiltinESMExports} from 'node:module';
+import {spawn} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
 import * as handoff from '../dist/provider-handoff.js';
 import {providerDockerClient} from '../dist/provider-docker-client.js';
 import * as oldReader from './fixtures/provider-handoff-protocol1.mjs';
@@ -31,6 +33,210 @@ function mirroredGrant(db){return {grant:db.prepare('SELECT * FROM clank_provide
 async function enabled(t,overrides={}){const f=await fixture(t),bridge=await handoff.enableProviderHandoffBridge(f.owner,f.nativeDomain,{...limits,...overrides});return {...f,bridge};}
 async function issued(t,overrides={}){const f=await enabled(t,overrides),binding=grant(f,f.bridge.enablementId);for(const [key,name] of [['maxTransactionBytes','maxCaptureTransactionBytes'],['maxStateBytes','maxCaptureStateBytes'],['maxJournalEntries','maxJournalEntries'],['maxJournalBytes','maxJournalBytes']])binding.capture[key]=overrides[name]??limits[name];const input={binding,grantSecretSha256:'d'.repeat(64),controlSecretSha256:'e'.repeat(64)};await handoff.issueProviderHandoffGrant(f.bridge,input);return {...f,binding,input};}
 function grant(f,enablementId){return {protocol:'clank-provider-source-grant/1',enablementId,indexId:f.identity.indexId,catalogId:f.project.catalogId,domainSha256:f.identity.domainSha256,projectId,releaseId:'release_source',generation:1,capsuleSha256:'a'.repeat(64),sourceIncarnation:randomUUID(),grantId:randomUUID(),role:'web',instance:0,imageId:'sha256:'+'b'.repeat(64),uid:1000,gid:1000,capture:{keyId:'source_key',keySha256:'c'.repeat(64),maxTransactionBytes:limits.maxCaptureTransactionBytes,maxStateBytes:limits.maxCaptureStateBytes,maxJournalEntries:limits.maxJournalEntries,maxJournalBytes:limits.maxJournalBytes}};}
+const containerId='f'.repeat(64),zeroTime='0001-01-01T00:00:00Z';
+function containerProjection(f,state='created'){
+ const b=f.binding,labels={
+  'run.clank.managed':'provider-runtime','run.clank.owner':'owner-source','run.clank.project':b.projectId,'run.clank.release':b.releaseId,'run.clank.generation':String(b.generation),'run.clank.role':'web','run.clank.instance':'0',
+  'run.clank.handoff.protocol':b.protocol,'run.clank.handoff.node':'node_source','run.clank.handoff.daemon':'daemon_native_fixture','run.clank.handoff.domain':b.domainSha256,'run.clank.handoff.enablement':b.enablementId,'run.clank.handoff.index':b.indexId,'run.clank.handoff.catalog':b.catalogId,'run.clank.handoff.grant':b.grantId,'run.clank.handoff.binding':hash(b),'run.clank.handoff.capsule':b.capsuleSha256,'run.clank.handoff.incarnation':b.sourceIncarnation,
+ };
+ return [containerId,b.imageId,b.imageId,'1000:1000',labels,'no',0,state,state==='running',false,false,false,state==='running'?123:0,state==='running'?'2026-10-11T12:00:00.123456789Z':zeroTime,zeroTime,0,'2026-10-11T11:59:59Z'];
+}
+async function containerFixture(t,overrides={},additionalProject=false){
+ let f;if(additionalProject){f=await fixture(t);f.other=await handoff.installProviderHandoffProject(f.owner,f.nativeDomain,'project_other');f.bridge=await handoff.enableProviderHandoffBridge(f.owner,f.nativeDomain,{...limits,...overrides});f.binding=grant(f,f.bridge.enablementId);f.input={binding:f.binding,grantSecretSha256:'d'.repeat(64),controlSecretSha256:'e'.repeat(64)};await handoff.issueProviderHandoffGrant(f.bridge,f.input);}else f=await issued(t,overrides);fs.copyFileSync(new URL('./fixtures/provider-handoff-container.mjs',import.meta.url),f.options.executable);fs.chmodSync(f.options.executable,0o700);
+ f.control=f.log+'.container.json';f.config={projection:containerProjection(f)};f.configure=()=>fs.writeFileSync(f.control,JSON.stringify(f.config));f.configure();
+ f.containerInput={projectId,grantId:f.binding.grantId,bindingSha256:hash(f.binding),containerId,expectedVersion:2};return f;
+}
+test('C1 records actual scripted observations with native catalog CAS and exact retries',async t=>{
+ const f=await containerFixture(t);assert.equal(typeof handoff.recordProviderHandoffContainerCreated,'function');assert.equal(typeof handoff.recordProviderHandoffContainerStarted,'function');
+ const created=await handoff.recordProviderHandoffContainerCreated(f.bridge,f.containerInput);
+ assert.deepEqual(created,{grantId:f.binding.grantId,bindingSha256:hash(f.binding),containerId,state:'created',version:3});assert.equal(Object.isFrozen(created),true);
+ const first=snapshot(f);assert.deepEqual(await handoff.recordProviderHandoffContainerCreated(f.bridge,f.containerInput),created);assert.deepEqual(snapshot(f),first);
+ f.config.projection=containerProjection(f,'running');f.configure();const input={...f.containerInput,expectedVersion:3};
+ const started=await handoff.recordProviderHandoffContainerStarted(f.bridge,input);assert.equal(started.state,'started');assert.equal(started.version,4);
+ const second=snapshot(f);assert.deepEqual(await handoff.recordProviderHandoffContainerStarted(f.bridge,input),started);assert.deepEqual(snapshot(f),second);
+ const state=rows(f.catalog,'clank_provider_handoff_bridge_state')[0],records=native(f.catalog,mirroredGrant);assert.equal(state.records_sha256,hash(records));assert.equal(records.grant.container_id,containerId);assert.equal(records.grant.readiness_json,null);
+ const commands=fs.readFileSync(f.log,'utf8').trim().split('\n').map(JSON.parse).filter(v=>!Array.isArray(v));assert.equal(commands.filter(v=>v.kind==='inspect').length,8);assert.ok(commands.every(v=>['info','inspect'].includes(v.kind)));assert.ok(commands.filter(v=>v.kind==='inspect').every(v=>v.args[4]===containerId));
+ f.owner.close();const owner=await f.open(),domain=await f.domain(owner),bridge=await handoff.enableProviderHandoffBridge(owner,domain,limits);assert.equal(bridge.mode,'cleanup-only');assert.equal((await handoff.inspectProviderHandoffBridge(bridge)).projects[0].grant.state,'started');await assert.rejects(handoff.recordProviderHandoffContainerStarted(bridge,input));
+});
+test('C1 captures closed own-data inputs and rejects structural authority before native effects',async t=>{
+ const f=await containerFixture(t),before=snapshot(f),log=fs.readFileSync(f.log,'utf8');let getter=0;
+ const accessor={...f.containerInput};Object.defineProperty(accessor,'projectId',{get(){getter++;return projectId;}});
+ for(const input of [null,[],{...f.containerInput,extra:true},{...f.containerInput,[Symbol()]:true},accessor,{...f.containerInput,expectedVersion:Number.MAX_SAFE_INTEGER},{...f.containerInput,expectedVersion:1},{...f.containerInput,containerId:'f'},{...f.containerInput,grantId:'bad'}])await assert.rejects(handoff.recordProviderHandoffContainerCreated(f.bridge,input));
+ await assert.rejects(handoff.recordProviderHandoffContainerCreated({...f.bridge},f.containerInput),/genuine/);assert.equal(getter,0);assert.deepEqual(snapshot(f),before);assert.equal(fs.readFileSync(f.log,'utf8'),log);
+ const input={...f.containerInput},pending=handoff.recordProviderHandoffContainerCreated(f.bridge,input);input.containerId='a'.repeat(64);input.expectedVersion=99;assert.equal((await pending).containerId,containerId);
+});
+test('C1 exact MAX postimage retry does not execute either update',async t=>{
+ const f=await containerFixture(t),max=Number.MAX_SAFE_INTEGER;native(f.catalog,db=>db.prepare('UPDATE clank_provider_handoff_bridge_state SET version=?').run(max-1));
+ const input={...f.containerInput,expectedVersion:max-1},first=await handoff.recordProviderHandoffContainerCreated(f.bridge,input);assert.equal(first.version,max);const before=snapshot(f),prepare=DatabaseSync.prototype.prepare;
+ DatabaseSync.prototype.prepare=function(sql){if(sql.startsWith('UPDATE clank_provider_handoff_'))throw Error('retry must not update');return prepare.call(this,sql);};
+ try{assert.deepEqual(await handoff.recordProviderHandoffContainerCreated(f.bridge,input),first);}finally{DatabaseSync.prototype.prepare=prepare;}
+ assert.deepEqual(snapshot(f),before);await assert.rejects(handoff.recordProviderHandoffContainerStarted(f.bridge,{...input,expectedVersion:max}));assert.deepEqual(snapshot(f),before);
+});
+test('C1 conflicts never change grant identity or permit skipped and backward phases',async t=>{
+ for(const mode of ['skip','version','binding','grant','id','backward']){
+  const f=await containerFixture(t);let method=handoff.recordProviderHandoffContainerCreated,input={...f.containerInput};
+  if(mode==='skip'){method=handoff.recordProviderHandoffContainerStarted;input.expectedVersion=3;}
+  if(mode==='version')input.expectedVersion=3;
+  if(mode==='binding')input.bindingSha256='a'.repeat(64);
+  if(mode==='grant')input.grantId=randomUUID();
+  if(['id','backward'].includes(mode)){await method(f.bridge,input);f.config.projection=containerProjection(f,'running');f.configure();await handoff.recordProviderHandoffContainerStarted(f.bridge,{...input,expectedVersion:3});if(mode==='id'){method=handoff.recordProviderHandoffContainerStarted;input={...input,containerId:'a'.repeat(64),expectedVersion:3};}}
+  const before=snapshot(f);await assert.rejects(method(f.bridge,input));assert.deepEqual(snapshot(f),before);assert.equal(f.bridge.mode,'cleanup-only');
+ }
+});
+test('C1 refuses each malformed identity and phase projection before native catalog writes',async t=>{
+ const variants=[
+  p=>{p[0]='a'.repeat(64);},p=>{p[1]='sha256:'+'a'.repeat(64);},p=>{p[2]='node:latest';},p=>{p[3]='0:0';},p=>{p[3]='01000:1000';},
+  p=>{delete p[4]['run.clank.handoff.grant'];},p=>{p[4]['run.clank.handoff.node']='other';},p=>{p[4]['run.clank.unreviewed']='x';},p=>{p[4]=[];},p=>{p[4].extra='x'.repeat(4097);},p=>{p[4]['x'.repeat(257)]='x';},p=>{p[4].extra='nul\0';},
+  p=>{p[5]='always';},p=>{p[6]=1;},p=>{p[7]='running';},p=>{p[8]=true;},p=>{p[9]=true;},p=>{p[10]=true;},p=>{p[11]=true;},p=>{p[12]=1;},p=>{p[13]='2026-10-11T12:00:00Z';},p=>{p[14]='2026-10-11T12:00:00Z';},p=>{p[15]=1;},p=>{p[16]='2026-02-30T12:00:00Z';},p=>{p[16]=zeroTime;},p=>{p[16]='2026-10-11T12:00:00+00:00';},p=>{p.push('extra');},
+ ];
+ for(const [index,alter] of variants.entries()){
+  const f=await containerFixture(t);alter(f.config.projection);f.configure();const before=snapshot(f);
+  await assert.rejects(handoff.recordProviderHandoffContainerCreated(f.bridge,f.containerInput),undefined,'variant '+index);assert.deepEqual(snapshot(f),before);assert.equal(f.bridge.mode,'cleanup-only');
+ }
+});
+test('C1 native output encoding, canonical ordering and transport uncertainty refuse without absence',async t=>{
+ for(const mode of ['duplicate','html-escape','numeric-keys','replacement','invalid-utf8','truncated','crlf','extra-line','overflow','exit','domain']){
+  const f=await containerFixture(t),p=f.config.projection;let stdout=JSON.stringify(p);
+  if(mode==='duplicate')stdout=stdout.replace('"run.clank.managed":"provider-runtime"','"run.clank.managed":"wrong","run.clank.managed":"provider-runtime"');
+  if(mode==='html-escape'){p[4].extra='<';stdout=JSON.stringify(p).replace('<','\\u003c');}
+  if(mode==='numeric-keys')stdout=stdout.replace('{"run.clank.managed"','{"10":"ten","2":"two","run.clank.managed"');
+  if(mode==='replacement'){p[4].extra='\uFFFD';stdout=JSON.stringify(p);}
+  if(mode==='truncated')stdout='[';
+  if(mode==='crlf')stdout+='\r\n';
+  if(mode==='extra-line')stdout+='\n\n';
+  if(mode==='overflow')stdout='x'.repeat(33000);
+  f.config.inspectReplies=[{stdout,code:mode==='exit'?1:0}];
+  if(mode==='invalid-utf8'){const prefix=Buffer.from(stdout.replace('provider-runtime','INVALID'));f.config.inspectReplies=[{base64:Buffer.concat([prefix.subarray(0,prefix.indexOf('INVALID')),Buffer.from([0xc3,0x28]),prefix.subarray(prefix.indexOf('INVALID')+7)]).toString('base64')}];}
+  if(mode==='domain')f.config.infoReplies=[{}, {stdout:'"daemon_substitute"\n'}];
+  f.configure();const before=snapshot(f);await assert.rejects(handoff.recordProviderHandoffContainerCreated(f.bridge,f.containerInput));assert.deepEqual(snapshot(f),before);assert.equal(f.bridge.mode,'cleanup-only');
+ }
+});
+test('C1 native ignored and altered row and mirror effects roll back the transition',async t=>{
+ for(const mode of ['ignored','altered','false-count','mirror-ignored','mirror-altered','commit-ignored']){
+  const f=await containerFixture(t),before=snapshot(f),prepare=DatabaseSync.prototype.prepare,exec=DatabaseSync.prototype.exec;let injected=false;
+  DatabaseSync.prototype.prepare=function(sql){const statement=prepare.call(this,sql);
+   if(sql.startsWith('UPDATE clank_provider_handoff_source_grant SET state=')){
+    if(mode==='ignored')exec.call(this,"CREATE TEMP TRIGGER c1_ignore BEFORE UPDATE ON clank_provider_handoff_source_grant BEGIN SELECT RAISE(IGNORE); END");
+    if(mode==='altered')exec.call(this,"CREATE TEMP TRIGGER c1_alter AFTER UPDATE ON clank_provider_handoff_source_grant BEGIN UPDATE clank_provider_handoff_source_grant SET container_id='"+'a'.repeat(64)+"' WHERE id=1; END");
+    if(mode==='false-count')statement.run=()=>({changes:1});if(['ignored','altered','false-count'].includes(mode))injected=true;
+   }
+   if(sql.startsWith('UPDATE clank_provider_handoff_bridge_state SET version=version+1')){
+    if(mode==='mirror-ignored'){statement.run=()=>({changes:1});injected=true;}
+    if(mode==='mirror-altered'){exec.call(this,"CREATE TEMP TRIGGER c1_mirror AFTER UPDATE ON clank_provider_handoff_bridge_state BEGIN UPDATE clank_provider_handoff_bridge_state SET version=version+1 WHERE id=1; END");injected=true;}
+   }
+   return statement;
+  };
+  DatabaseSync.prototype.exec=function(sql){if(mode==='commit-ignored'&&sql==='COMMIT'&&prepare.call(this,'PRAGMA database_list').get().file.endsWith('/catalog.sqlite')){injected=true;return;}return exec.call(this,sql);};
+  try{await assert.rejects(handoff.recordProviderHandoffContainerCreated(f.bridge,f.containerInput));}finally{DatabaseSync.prototype.prepare=prepare;DatabaseSync.prototype.exec=exec;}
+  assert.equal(injected,true,mode);assert.deepEqual(snapshot(f),before,mode);assert.equal(f.bridge.mode,'cleanup-only');
+ }
+});
+test('C1 file and directory fsync failures preserve uncertain committed observations',async t=>{
+ for(const target of ['file','directory']){
+  const f=await containerFixture(t),sync=fs.fsyncSync;let injected=false;const expected=target==='file'?f.catalog:f.catalog.slice(0,f.catalog.lastIndexOf('/'));
+  fs.fsyncSync=function(fd){if(!injected&&fs.realpathSync('/proc/self/fd/'+fd)===expected){injected=true;throw Error('C1 '+target+' sync failure');}return sync.call(this,fd);};syncBuiltinESMExports();
+  try{await assert.rejects(handoff.recordProviderHandoffContainerCreated(f.bridge,f.containerInput),/sync failure/);}finally{fs.fsyncSync=sync;syncBuiltinESMExports();}
+  assert.equal(injected,true);assert.equal(f.bridge.mode,'cleanup-only');assert.equal(rows(f.catalog,'clank_provider_handoff_source_grant')[0].state,'created');assert.equal(rows(f.catalog,'clank_provider_handoff_bridge_state')[0].records_sha256,hash(native(f.catalog,mirroredGrant)));
+  await assert.rejects(handoff.recordProviderHandoffContainerCreated(f.bridge,f.containerInput));f.owner.close();const owner=await f.open(),domain=await f.domain(owner),bridge=await handoff.enableProviderHandoffBridge(owner,domain,limits);assert.equal(bridge.mode,'cleanup-only');assert.equal((await handoff.inspectProviderHandoffBridge(bridge)).projects[0].grant.state,'created');
+ }
+});
+test('C1 native COMMIT response uncertainty retains the exact committed history',async t=>{
+ const f=await containerFixture(t),exec=DatabaseSync.prototype.exec;let injected=false;
+ DatabaseSync.prototype.exec=function(sql){const selected=sql==='COMMIT'&&this.prepare('PRAGMA database_list').get().file===f.catalog;const result=exec.call(this,sql);if(selected){injected=true;throw Error('C1 lost native commit response');}return result;};
+ try{await assert.rejects(handoff.recordProviderHandoffContainerCreated(f.bridge,f.containerInput),/lost native commit response/);}finally{DatabaseSync.prototype.exec=exec;}
+ assert.equal(injected,true);assert.equal(f.bridge.mode,'cleanup-only');assert.equal(rows(f.catalog,'clank_provider_handoff_source_grant')[0].state,'created');assert.equal(rows(f.catalog,'clank_provider_handoff_bridge_state')[0].version,3);assert.equal(rows(f.catalog,'clank_provider_handoff_bridge_state')[0].records_sha256,hash(native(f.catalog,mirroredGrant)));
+});
+test('C1 bounded observation timeout settles the owned child and never infers absence',async t=>{
+ const f=await containerFixture(t,{controlTimeoutMs:1000}),hold=join(f.dir,'timeout-held'),release=join(f.dir,'never-released');f.config.inspectReplies=[{hold,release}];f.configure();const before=snapshot(f);
+ const pending=assert.rejects(handoff.recordProviderHandoffContainerCreated(f.bridge,f.containerInput),{message:'Docker command deadline exceeded.'}),child=await waitContainerFile(hold),birth=processBirth(child.pid);assert.ok(birth);await pending;
+ assert.notEqual(processBirth(child.pid),birth);assert.deepEqual(snapshot(f),before);assert.equal(f.bridge.mode,'cleanup-only');
+});
+test('C1 changed post-commit observation or final native domain never acknowledges success',async t=>{
+ for(const mode of ['observation','domain']){
+  const f=await containerFixture(t),changed=containerProjection(f);changed[16]='2026-10-11T11:59:58Z';
+  if(mode==='observation')f.config.inspectReplies=[{}, {stdout:JSON.stringify(changed)}];else f.config.infoReplies=[{}, {}, {stdout:'"daemon_substitute"\n'}];f.configure();
+  await assert.rejects(handoff.recordProviderHandoffContainerCreated(f.bridge,f.containerInput));assert.equal(f.bridge.mode,'cleanup-only');assert.equal(rows(f.catalog,'clank_provider_handoff_source_grant')[0].state,'created');assert.equal(rows(f.catalog,'clank_provider_handoff_bridge_state')[0].version,3);
+ }
+});
+async function waitContainerFile(path){const end=Date.now()+10000;while(!fs.existsSync(path)){if(Date.now()>end)throw Error('Timed out waiting for owned container fixture.');await new Promise(resolve=>setTimeout(resolve,10));}return JSON.parse(fs.readFileSync(path,'utf8'));}
+function processBirth(pid){try{const value=fs.readFileSync('/proc/'+pid+'/stat','utf8');return value.slice(value.lastIndexOf(')')+2).split(' ')[19];}catch(error){if(error.code!=='ENOENT')throw error;return null;}}
+test('C1 owner close at either inspect await settles owned subprocess and queued work',async t=>{
+ for(const index of [0,1]){
+  const f=await containerFixture(t),hold=join(f.dir,'held'),release=join(f.dir,'release');f.config.inspectReplies=Array.from({length:index+1},()=>({}));f.config.inspectReplies[index]={hold,release};f.configure();
+  const pending=handoff.recordProviderHandoffContainerCreated(f.bridge,f.containerInput);const rejected=assert.rejects(pending);const child=await waitContainerFile(hold),birth=processBirth(child.pid);assert.ok(birth);
+  const queued=assert.rejects(handoff.recordProviderHandoffContainerCreated(f.bridge,f.containerInput));f.owner.close();fs.writeFileSync(release,'go');await rejected;await queued;assert.notEqual(processBirth(child.pid),birth);
+  assert.equal(rows(f.catalog,'clank_provider_handoff_source_grant')[0].state,index===0?'issued':'created');assert.equal(f.bridge.mode,'closed');
+ }
+});
+for(const mode of ['grant','mirror','reservation','path'])test('C1 complete preimage checks catch '+mode+' mutation during an awaited observation',async t=>{
+  const f=await containerFixture(t),hold=join(f.dir,'held'),release=join(f.dir,'release');f.config.inspectReplies=[{hold,release}];f.configure();
+  const pending=assert.rejects(handoff.recordProviderHandoffContainerCreated(f.bridge,f.containerInput));await waitContainerFile(hold);
+  if(mode==='grant')native(f.catalog,db=>{db.exec("UPDATE clank_provider_handoff_source_grant SET state='revoked'");db.prepare('UPDATE clank_provider_handoff_bridge_state SET records_sha256=?').run(hash(mirroredGrant(db)));});
+  if(mode==='mirror')native(f.catalog,db=>db.exec('UPDATE clank_provider_handoff_bridge_state SET version=version+1'));
+  if(mode==='reservation')native(f.index,db=>db.exec('UPDATE clank_provider_handoff_bridge_index SET version=version+1'));
+  if(mode==='path'){fs.renameSync(f.catalog,join(f.dir,'retained-catalog'));fs.copyFileSync(join(f.dir,'retained-catalog'),f.catalog);fs.chmodSync(f.catalog,0o600);}
+  fs.writeFileSync(release,'go');await pending;assert.equal(f.bridge.mode,'cleanup-only');assert.notEqual(rows(f.catalog,'clank_provider_handoff_source_grant')[0].state,'created');
+});
+test('C1 readonly retries retain catalog and index identity through the final await, including MAX',async t=>{
+ for(const saturated of [false,true])for(const awaitPoint of ['first-inspect','final-domain'])for(const mutation of ['path','index']){
+  const f=await containerFixture(t),version=saturated?Number.MAX_SAFE_INTEGER-1:2,input={...f.containerInput,expectedVersion:version};
+  if(saturated)native(f.catalog,db=>db.prepare('UPDATE clank_provider_handoff_bridge_state SET version=?').run(version));
+  await handoff.recordProviderHandoffContainerCreated(f.bridge,input);for(const kind of ['inspect','info'])fs.writeFileSync(f.log+'.'+kind,'0');
+  const hold=join(f.dir,'retry-held'),release=join(f.dir,'retry-release');if(awaitPoint==='first-inspect')f.config.inspectReplies=[{hold,release}];else f.config.infoReplies=[{},{},{hold,release}];f.configure();
+  const pending=assert.rejects(handoff.recordProviderHandoffContainerCreated(f.bridge,input));await waitContainerFile(hold);
+  if(mutation==='path'){fs.renameSync(f.catalog,join(f.dir,'original-catalog'));fs.copyFileSync(join(f.dir,'original-catalog'),f.catalog);fs.chmodSync(f.catalog,0o600);}else native(f.index,db=>db.exec('UPDATE clank_provider_handoff_bridge_index SET version=version+1'));
+  const retained=snapshot(f);fs.writeFileSync(release,'go');await pending;assert.deepEqual(snapshot(f),retained);assert.equal(rows(f.catalog,'clank_provider_handoff_bridge_state')[0].version,version+1);assert.equal(f.bridge.mode,'cleanup-only');
+ }
+});
+test('C1 complete consulted catalog checks include other projects and their original inodes',async t=>{
+ for(const mutation of ['version','path']){
+  const f=await containerFixture(t,{},true),other=join(f.root,'service','handoff','catalogs',f.other.catalogId,'catalog.sqlite'),hold=join(f.dir,'other-held'),release=join(f.dir,'other-release');f.config.inspectReplies=[{hold,release}];f.configure();
+  const pending=assert.rejects(handoff.recordProviderHandoffContainerCreated(f.bridge,f.containerInput));await waitContainerFile(hold);
+  if(mutation==='version')native(other,db=>db.exec('UPDATE clank_provider_handoff_bridge_state SET version=version+1'));else{fs.renameSync(other,join(f.dir,'original-other'));fs.copyFileSync(join(f.dir,'original-other'),other);fs.chmodSync(other,0o600);}
+  const retained=snapshot(f);fs.writeFileSync(release,'go');await pending;assert.deepEqual(snapshot(f),retained);assert.equal(rows(f.catalog,'clank_provider_handoff_source_grant')[0].state,'issued');assert.equal(f.bridge.mode,'cleanup-only');
+ }
+});
+test('C1 malformed running observations never authorize the started transition',async t=>{
+ for(const alter of [p=>{p[7]='created';},p=>{p[8]=false;},p=>{p[12]=0;},p=>{p[12]=1.5;},p=>{p[13]=zeroTime;},p=>{p[13]='2026-02-30T12:00:00Z';},p=>{p[14]='2026-10-11T12:00:00Z';}]){
+  const f=await containerFixture(t);await handoff.recordProviderHandoffContainerCreated(f.bridge,f.containerInput);f.config.projection=containerProjection(f,'running');alter(f.config.projection);f.configure();const retained=snapshot(f);
+  await assert.rejects(handoff.recordProviderHandoffContainerStarted(f.bridge,{...f.containerInput,expectedVersion:3}));assert.deepEqual(snapshot(f),retained);assert.equal(f.bridge.mode,'cleanup-only');
+ }
+});
+test('C1 complete created/started validators reject unsupported retained shapes',async t=>{
+ for(const mode of ['created-null','created-short-version','started-short-version','bad-id','readiness','ready','revoked-id','control']){
+  const f=await containerFixture(t);native(f.catalog,db=>{
+   db.prepare("UPDATE clank_provider_handoff_source_grant SET state='created',container_id=?").run(containerId);db.exec('UPDATE clank_provider_handoff_bridge_state SET version=3');
+   if(mode==='created-null')db.exec('UPDATE clank_provider_handoff_source_grant SET container_id=NULL');
+   if(mode==='created-short-version')db.exec('UPDATE clank_provider_handoff_bridge_state SET version=2');
+   if(mode==='started-short-version')db.exec("UPDATE clank_provider_handoff_source_grant SET state='started'");
+   if(mode==='bad-id')db.prepare('UPDATE clank_provider_handoff_source_grant SET container_id=?').run('z'.repeat(64));
+   if(mode==='readiness')db.prepare('UPDATE clank_provider_handoff_source_grant SET readiness_json=?,readiness_sha256=?').run('{}','a'.repeat(64));
+   if(mode==='ready')db.exec("UPDATE clank_provider_handoff_source_grant SET state='ready'");
+   if(mode==='revoked-id')db.exec("UPDATE clank_provider_handoff_source_grant SET state='revoked'");
+   if(mode==='control')db.prepare("INSERT INTO clank_provider_handoff_source_operations VALUES(1,'step','enroll','{}',?,'accepted',NULL,NULL)").run('a'.repeat(64));
+   const records=mirroredGrant(db);if(mode==='control')records.operations=db.prepare('SELECT * FROM clank_provider_handoff_source_operations').all().map(v=>({...v}));db.prepare('UPDATE clank_provider_handoff_bridge_state SET records_sha256=?').run(hash(records));
+  });const before=snapshot(f);await assert.rejects(handoff.inspectProviderHandoffBridge(f.bridge));assert.deepEqual(snapshot(f),before);
+ }
+});
+test('C1 actual coordinator SIGKILL retains native precommit or committed history without resumption',async t=>{
+ for(const phase of ['before-commit','after-commit']){
+  const dir=await mkdtemp(join(tmpdir(),'clank-container-catalog-kill-')),root=join(dir,'provider'),log=join(dir,'commands'),checkpoint=join(dir,'checkpoint'),inputFile=join(dir,'input.json');
+  await writeFile(inputFile,JSON.stringify({root,log,checkpoint,phase,limits}));
+  const child=spawn(process.execPath,['--disable-warning=ExperimentalWarning',fileURLToPath(new URL('./fixtures/provider-handoff-container.mjs',import.meta.url)),'coordinator',inputFile],{stdio:['ignore','pipe','pipe']});let stdout='',stderr='';child.stdout.on('data',data=>{stdout+=data;});child.stderr.on('data',data=>{stderr+=data;});
+  const closed=new Promise((resolve,reject)=>{child.once('error',reject);child.once('close',(code,signal)=>resolve({code,signal}));});
+  t.after(async()=>{if(child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL');await closed;await rm(dir,{recursive:true,force:true});});
+  const observed=await waitContainerFile(checkpoint);assert.equal(observed.pid,child.pid);assert.equal(observed.phase,phase);child.kill('SIGKILL');assert.deepEqual(await closed,{code:null,signal:'SIGKILL'});assert.equal(stdout,'');assert.equal(stderr,'');
+  const catalogDir=observed.catalog.slice(0,observed.catalog.lastIndexOf('/')),retained=()=>Object.fromEntries(fs.readdirSync(catalogDir).sort().map(name=>[name,createHash('sha256').update(fs.readFileSync(join(catalogDir,name))).digest('hex')])),before=retained();
+  // Independent recovery of a disposable copy handles an interrupted native
+  // journal without granting permission to repair the retained source catalog.
+  const copyDir=join(dir,'inspect-copy');fs.mkdirSync(copyDir,{mode:0o700});for(const name of fs.readdirSync(catalogDir))fs.copyFileSync(join(catalogDir,name),join(copyDir,name));
+  const state=native(join(copyDir,'catalog.sqlite'),db=>({grant:{...db.prepare('SELECT * FROM clank_provider_handoff_source_grant').get()},version:db.prepare('SELECT version FROM clank_provider_handoff_bridge_state').get().version,mirror:db.prepare('SELECT records_sha256 FROM clank_provider_handoff_bridge_state').get().records_sha256,records:mirroredGrant(db)}));
+  assert.equal(state.grant.state,phase==='before-commit'?'issued':'created');assert.equal(state.version,phase==='before-commit'?2:3);assert.equal(state.mirror,hash(state.records));assert.deepEqual(retained(),before);
+  const owner=await handoff.acquireProviderServiceOwnership(root),client=providerDockerClient({executable:fileURLToPath(new URL('./fixtures/provider-handoff-container.mjs',import.meta.url)),dockerEnvironment:{LOG:log}});
+  try{const domain=await handoff.createProviderHandoffDomain(owner,client,'node_source','owner-source'),bridge=await handoff.enableProviderHandoffBridge(owner,domain,limits);assert.equal(bridge.mode,'cleanup-only');await assert.rejects(handoff.recordProviderHandoffContainerCreated(bridge,{projectId,grantId:observed.binding.grantId,bindingSha256:hash(observed.binding),containerId,expectedVersion:2}));}finally{owner.close();}
+  assert.deepEqual(retained(),before);t.diagnostic(JSON.stringify({phase,exitSignal:'SIGKILL',retainedState:state.grant.state,retainedVersion:state.version}));
+ }
+});
 test('explicit protocol2 enablement preserves legacy rows and fixed identities',async t=>{
  const f=await fixture(t),before={owner:rows(f.writer,'clank_provider_handoff_owner'),index:rows(f.index,'clank_provider_handoff_index'),projects:rows(f.index,'clank_provider_handoff_projects'),catalog:rows(f.catalog,'clank_provider_handoff_catalog')};
  assert.equal(typeof handoff.enableProviderHandoffBridge,'function');
