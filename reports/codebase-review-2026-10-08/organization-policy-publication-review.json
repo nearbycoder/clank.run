@@ -1,0 +1,170 @@
+{
+  "scope": "Feature13 security-policy publication repair; browser acceptance and complete feature13 remain pending.",
+  "baseMain": "6081d39aa115336ef68297e988a25bacfc9a8d4c",
+  "finding": "Native audit trigger caused a200-equivalent acknowledgment of MFA/five-minute sessions while actual SQLite retained factor none/thirty-day sessions. Actual HTTP reproduces success despite discarded policy or deleted receipt.",
+  "repair": [
+    "Expected policy and receipt derive from the submitted intent and acceptance time, not a later resample.",
+    "Capture bounded pre-write enrollment rows; verify exact tightened deadlines, complete policy and selected replay receipt after all audit/inventory/authority callbacks, immediately before returning for native commit.",
+    "Altered or ignored publication rolls back policy, deadlines, receipt and audit with ORGANIZATION_POLICY_WRITE503. Removing the fault permits unchanged intent/operation retry once.",
+    "Final current administrator/fresh authentication is rechecked without rejecting a deliberately tightened policy. Recovery repeats independent operator authority and requires the restored owner and passkey capability to remain current."
+  ],
+  "proof": {
+    "beforeEachNode22Node24Node26": {
+      "unitTests": 19,
+      "pass": 5,
+      "fail": 14,
+      "cancelled": 0,
+      "skipped": 0,
+      "actualHttpTests": 2,
+      "actualHttpPass": 0,
+      "actualHttpFail": 2
+    },
+    "correctedPrivateEach": {
+      "unitAndProbeTests": 20,
+      "pass": 20,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0
+    },
+    "adoptedSelectedEachNode22Node24Node26": {
+      "tests": 66,
+      "pass": 66,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0
+    },
+    "qualification": "Native signed UV fixture assertions are valid AuthServer proof, not physical-authenticator/browser acceptance. Selected integration suites are not complete hosted release gates."
+  },
+  "failedFixtureQualification": "Initial private04 runs each reported17/9pass/8fail because a newly granted member timestamp exceeded the fixture frozen clock, before the declared audit fault. Corrected fixture clock follows the genuine grant; production date validation is unchanged. Failed logs retained. Initial one-case before command ended with successful log collector; reporter/native mismatch establish failure, no independently retained original Node exit code.",
+  "build": {
+    "emittedFiles": 320,
+    "node22And26AndPrivateIdentical": true,
+    "changedOutputOnly": "organization-security-policy.js",
+    "moduleSha256": "60bcfff2c06c3311b18e53de966793410dcb2e6a2151262260c1598fff888c58",
+    "publicDeclarationsUnchanged": true,
+    "newModules": 0,
+    "newPersistentSchema": false
+  },
+  "types": {
+    "packedFixtures": 54,
+    "inheritedDiagnostics": 149,
+    "newDiagnostics": 0,
+    "baselineDiagnostics": 154
+  },
+  "package": {
+    "files": 449,
+    "unpackedBytes": 6949536,
+    "ceilingBytes": 8388608,
+    "dependencies": 0
+  },
+  "docsAndSecurity": "passed, including reachable history and exact-path package budget; final report validation remains required",
+  "protectedPriorDelivery": {
+    "pullRequest": "https://github.com/nearbycoder/clank.run/pull/372",
+    "reviewedHead": "6232efe5b378ab21bd7f37acfc0ecfefa5676e7a",
+    "main": "6081d39aa115336ef68297e988a25bacfc9a8d4c",
+    "tree": "5cdffa95631b1b83dc40596f996da14b5e53a398",
+    "eightChecks": "success",
+    "eachCompleteRuntimeAndPacked": {
+      "tests": 3513,
+      "pass": 3476,
+      "fail": 0,
+      "cancelled": 0,
+      "existingSkips": 37
+    },
+    "bothMainCheckoutsSynced": true,
+    "originalLocalFilesPreserved": 23,
+    "openPullRequestsAtDelivery": 0
+  },
+  "nativeAttachmentFollowup": {
+    "head": "6232efe5b378ab21bd7f37acfc0ecfefa5676e7a",
+    "browser": "Chrome",
+    "accountSwitchHeldActualLookup": true,
+    "bobQueueAndRecordsEmpty": true,
+    "sameAliceItemResumedAndAttachedOnce": true,
+    "nativeRecordReceiptObjectCountsEach": 1,
+    "viewport": [
+      390,
+      844
+    ],
+    "clientAndScrollWidth": 375,
+    "browserWarningsOrErrors": 0,
+    "screenshot": "capture timed out; no screenshot proof exists",
+    "discard": "Earlier native-confirm controls timed out; user Cancel/close remains pending",
+    "cleanup": "Separate completed tab closed, viewport reset, exact owned server exited0/root removed/port closed; original pending tab/server retained",
+    "evidence": {
+      "path": "/tmp/clank-review-2026-10-08/offline-attachments-account-chrome-01/native-account-phone-result-02.json",
+      "sha256": "86b812bd6a8a7f3b249aaffbf57bcb6238b570689bc6c73de2766401de142754"
+    },
+    "cleanupEvidence": {
+      "path": "/tmp/clank-review-2026-10-08/offline-attachments-account-chrome-01/cleanup-03.json",
+      "sha256": "17d34eb792f48da53e2139068118451d4e1c3a2482633dc1344af918c9396b7c"
+    }
+  },
+  "hostedAndProtectedDelivery": "Required on fresh published head; not yet claimed for this repair",
+  "acceptance": {
+    "accepted": 29,
+    "pending": 11
+  },
+  "artifacts": [
+    {
+      "path": "/tmp/clank-review-2026-10-08/organization-policy-publication-review-01/finding-boundary-01.json",
+      "sha256": "a2ec7777ab3768d85b84e68f3f5302550b2e87a4a22192c22dddb36d743de9cc",
+      "bytes": 375
+    },
+    {
+      "path": "/tmp/clank-review-2026-10-08/organization-policy-publication-review-01/before-result-qualified-02.json",
+      "sha256": "6aa437c766f2127daa2ada785227e8592bda1f45f070ca40a834bb706b4bfead",
+      "bytes": 550
+    },
+    {
+      "path": "/tmp/clank-review-2026-10-08/organization-policy-publication-review-01/candidate-policy-results-04.json",
+      "sha256": "7451a323ddf27c6d80d9a0ebe9669300089d5717496bad0d21e0703d2bb7f4ad",
+      "bytes": 6413
+    },
+    {
+      "path": "/tmp/clank-review-2026-10-08/organization-policy-publication-review-01/candidate-policy-results-05.json",
+      "sha256": "7e6fffe349bad16867acb5cf91d4f40a70758c2ed89d270d7cb14b94cc7d9c84",
+      "bytes": 1534
+    },
+    {
+      "path": "/tmp/clank-review-2026-10-08/organization-policy-publication-review-01/before-after-qualified-07.json",
+      "sha256": "a2a2b0857e6506b5334cc49ee5d8e9a59f040ee9e83401422ec0d5f6039367f9",
+      "bytes": 2319
+    },
+    {
+      "path": "/tmp/clank-review-2026-10-08/organization-policy-publication-review-01/candidate-integrations-08.json",
+      "sha256": "0b220fa9e97a8b20ad99af74e4247ece09e958a3737fdd12ba9ff3cc3e1f40b8",
+      "bytes": 1188
+    },
+    {
+      "path": "/tmp/clank-review-2026-10-08/organization-policy-publication-review-01/candidate-types-native26-09.log",
+      "sha256": "a9d29fdbcd742a859fd291765c09c9e21ee9ce75835bc35ffb02782826971acc",
+      "bytes": 257
+    },
+    {
+      "path": "/tmp/clank-review-2026-10-08/organization-policy-publication-review-01/before-after-http-10.json",
+      "sha256": "adddfdf7cc266a695f9380f5ec7070daef9b84b0f6b043a499891507795e53e6",
+      "bytes": 2553
+    },
+    {
+      "path": "/tmp/clank-review-2026-10-08/organization-policy-publication-review-01/candidate-paired-build-11.json",
+      "sha256": "e687801f333ed1ef0d0a8cde21aca040cb02052bac20bd6482f4746e5daf4c2e",
+      "bytes": 1195
+    },
+    {
+      "path": "/tmp/clank-review-2026-10-08/organization-policy-publication-review-01/adoption-boundary-12.json",
+      "sha256": "aff0756d678e2a3a1f117ef465c92850f7edb4b1d84e11a8a923c395f4b2b95d",
+      "bytes": 724
+    },
+    {
+      "path": "/tmp/clank-review-2026-10-08/organization-policy-publication-review-01/adopted-paired-build-13.json",
+      "sha256": "de5664273a2068f2915cfb387b3c798625ae5f75dea2d6cd0e92d7f677b98d90",
+      "bytes": 1458
+    },
+    {
+      "path": "/tmp/clank-review-2026-10-08/organization-policy-publication-review-01/adopted-audits-14.json",
+      "sha256": "406e933e3607405cb09695a63531dfdb7b83d2492a5711c96a2e4eef92789c0c",
+      "bytes": 3675
+    }
+  ]
+}
