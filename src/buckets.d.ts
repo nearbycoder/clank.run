@@ -1,3 +1,5 @@
+import type { MutationContext } from "./backend.js";
+import type { SQLiteInternal } from "./sqlite-internal.js";
 import { type McpTool } from "./mcp.js";
 import type { ObjectStore } from "./object-storage.js";
 import type { SQLiteStatement } from "./sqlite-internal.js";
@@ -17,6 +19,17 @@ export interface BucketProcessingBinding {
 }
 /** @internal A copied manager has no native publication capability. */
 export declare function bucketProcessingBinding(manager: BucketManager): BucketProcessingBinding;
+export interface BucketAttachmentReference {
+    readonly bucket: string;
+    readonly key: string;
+    readonly objectId: string;
+    readonly sha256: string;
+    readonly generation: string;
+}
+/** @internal Native synchronous backend mutation binding. */
+export declare function bindBucketAttachmentContext(context: object, manager: BucketManager, sql: SQLiteInternal, owner: string): () => void;
+/** Verify a completed object in the record's own transaction. */
+export declare function resolveBucketAttachment(context: MutationContext<any>, reference: BucketAttachmentReference): BucketObject;
 export type BucketVisibility = "private" | "public";
 export type BucketOwnership = "app" | "user";
 export type BucketBrowserAccess = "authenticated" | "public" | "server";
@@ -98,6 +111,7 @@ export interface BucketImageMetadata {
     readonly height: number;
 }
 export interface BucketObject {
+    readonly generation?: string;
     readonly id: string;
     readonly bucket: string;
     readonly key: string;
@@ -147,6 +161,7 @@ export interface BucketListOptions extends BucketIdentity {
     readonly limit?: number;
 }
 export interface BucketUploadIntentInput extends BucketIdentity {
+    readonly ifSha256?: string | null;
     readonly key: string;
     readonly size: number;
     readonly contentType: string;
@@ -259,6 +274,9 @@ export interface BucketClientOptions {
     readonly csrfToken?: string | (() => string | undefined);
 }
 export interface BucketUploadOptions {
+    readonly ifSha256?: string | null;
+    readonly signal?: AbortSignal;
+    readonly assertCurrent?: () => void;
     readonly key: string;
     readonly value: Uint8Array | ArrayBuffer | Blob;
     readonly contentType?: string;
