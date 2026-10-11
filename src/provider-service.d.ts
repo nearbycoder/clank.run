@@ -83,6 +83,17 @@ export interface DeploymentProviderCanaryState {
   readonly expiresAt: number;
 }
 
+/** Exact isolated SQLite checkpoint provenance; timestamps use the provider clock. */
+export interface DeploymentProviderShadowState extends Omit<DeploymentProviderCanaryState, "protocol"> {
+  readonly protocol: "clank-provider-canary/2";
+  readonly purpose: "shadow";
+  readonly snapshot: Readonly<{ sha256: string; bytes: number; startedAt: number; completedAt: number }> | null;
+}
+
+type ProviderCandidateState = DeploymentProviderCanaryState | DeploymentProviderShadowState;
+type ProviderCanaryPrepareInput = { readonly primary: DeploymentProviderCanaryBinding; readonly controllerEpoch: number; readonly operationId: string; readonly runtime: DeploymentRuntimeCapsule; readonly signal: AbortSignal };
+type ProviderCanaryRoute = { readonly projectId: string; readonly releaseId: string; readonly generation: 1; readonly path: string; readonly token: string; readonly readPaths: readonly string[] };
+
 export interface DeploymentProviderCanaryRetirement {
   readonly protocol: "clank-provider-canary-retirement/1";
   readonly primary: DeploymentProviderCanaryBinding;
@@ -99,11 +110,12 @@ export interface DeploymentProviderCanaryRetirement {
 
 export interface DeploymentProviderCanaryController {
   binding(projectId: string): Promise<DeploymentProviderCanaryBinding | null>;
-  inspect(projectId: string): Promise<DeploymentProviderCanaryState | null>;
+  inspect(projectId: string): Promise<DeploymentProviderCanaryState | DeploymentProviderShadowState | null>;
   /** Trusted callers must fence their native coordinator lease before and after every await. */
-  prepare(input: { readonly primary: DeploymentProviderCanaryBinding; readonly controllerEpoch: number; readonly operationId: string; readonly runtime: DeploymentRuntimeCapsule; readonly signal: AbortSignal }): Promise<DeploymentProviderCanaryState & { readonly route: { readonly projectId: string; readonly releaseId: string; readonly generation: 1; readonly path: string; readonly token: string; readonly readPaths: readonly string[] } }>;
+  prepare(input: ProviderCanaryPrepareInput & { readonly purpose: "shadow"; readonly stateProtocol: "clank-provider-canary/2" }): Promise<DeploymentProviderShadowState & { readonly route: ProviderCanaryRoute }>;
+  prepare(input: ProviderCanaryPrepareInput & { readonly purpose?: never; readonly stateProtocol?: never }): Promise<DeploymentProviderCanaryState & { readonly route: ProviderCanaryRoute }>;
   /** Stops and verifies exact candidate runtime/data absence; it never promotes candidate data. */
-  stop(input: { readonly primary: DeploymentProviderCanaryBinding; readonly controllerEpoch: number; readonly operationId: string }): Promise<DeploymentProviderCanaryState>;
+  stop(input: { readonly primary: DeploymentProviderCanaryBinding; readonly controllerEpoch: number; readonly operationId: string }): Promise<DeploymentProviderCanaryState | DeploymentProviderShadowState>;
   /** Durably fences a possibly lost prepare before verifying absence. Epochs do not replace the caller's native lease assertions. */
   retire(input: { readonly primary: DeploymentProviderCanaryBinding; readonly controllerEpoch: number; readonly operationId: string; readonly releaseId: string; readonly capsuleSha256: string; readonly retirementEpoch: number }): Promise<DeploymentProviderCanaryRetirement>;
 }
