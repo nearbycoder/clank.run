@@ -1,5 +1,5 @@
 import { openNodeEvacuations, type NodeEvacuationPlan, type EvacuationProject, type NodeEvacuationHooks } from "./node-evacuation.ts";
-import { assertProviderShadowSchema, shadowSchemaIdentity, upgradeShadowReportSchema, readShadowRecord, assertShadowReplay, readShadowReplays, saveShadowRecord, retireShadow,
+import { createShadowCandidateRequest, assertProviderShadowSchema, shadowSchemaIdentity, upgradeShadowReportSchema, readShadowRecord, assertShadowReplay, readShadowReplays, saveShadowRecord, retireShadow,
   normalizeShadowPolicy, narrowShadowPolicy, createShadowController, emptyShadowReport, normalizeShadowReview, parseShadowReviewToken, shadowReviewToken, shadowReviewSelection, expandShadowReviewSelection, shadowReviewDigest, assertShadowReviewReplay,
   type ShadowReviewPayload, type ShadowSessionPolicy, type ShadowReplayView, type ShadowReport, type ShadowPhase, type PlatformShadowPolicy, type ShadowRecord, type ShadowOperation, type ShadowOutcome, type ShadowLifecycleAdapter } from "./managed-shadow.ts";
 import { createManagedCanary, validateManagedCanary, type ManagedCanaryOptions } from "./managed-canary.ts";
@@ -2048,6 +2048,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           ? { allowedUpstreamHosts: providerPlacement.allowedProviderHosts }
           : {}),
         admitRequest: admitIngressRequest,
+        shadow: { observe: (request, primary, metadata) => shadowController.observer.observe(request, primary, metadata) },
         assertCanaryCurrent: route => { if (!canaries) throw new Error("Canary routing is unavailable."); return canaries.assertCurrent(route); },
         prepareRoute: async (route) => {
           if (!prepareIngressRoute) throw new Error("Application runtime preparation is unavailable.");
@@ -3859,7 +3860,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     ...shadowLifecycle,
     lock:(projectId,work,wait=false)=>withProjectLock(projectId,work,wait),
     authority:projectId=>captureProjectAuthority(projectId,true),
-    scope:(current,work)=>{const outer=providerWriterScope.getStore();return providerWriterScope.run(()=>{outer?.();current();},work);},
+    // Detached shadow tasks use the captured owner capability, never an ingress request's unrelated ALS scope.
+    scope:(current,work)=>providerWriterScope.run(current,work),
     admit:(projectId,operation)=>assertShadowAdmission(projectId,operation,()=>{}),
     begin(projectId,operation,current){
       const admit=()=>assertShadowAdmission(projectId,operation,current);admit();
@@ -3897,7 +3899,12 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         || route.projectId!==raw.candidateProjectId || route.releaseId!==op.releaseId || route.generation!==1 || route.path!==providerRuntimePath(String(raw.candidateProjectId))
         || typeof route.token!=="string" || !/^clanki_[A-Za-z0-9_-]{32,192}$/u.test(route.token) || !Array.isArray(route.readPaths)
         || route.readPaths.length>128 || route.readPaths.some(path=>typeof path!=="string" || path.length>512) || op.policy.readPaths.some(path=>!(route.readPaths as string[]).includes(path)))throw new Error("Shadow provider proof is unavailable or differs.");
-      return {sha256:canaryDigest(snapshot.sha256),bytes:canaryInteger(snapshot.bytes),providerStartedAt:canaryInteger(snapshot.startedAt),providerCompletedAt:canaryInteger(snapshot.completedAt),platformObservedAt:Date.now()};
+      const checkpoint=Object.freeze({sha256:canaryDigest(snapshot.sha256),bytes:canaryInteger(snapshot.bytes),providerStartedAt:canaryInteger(snapshot.startedAt),providerCompletedAt:canaryInteger(snapshot.completedAt),platformObservedAt:Date.now()});
+      const candidateRoute=Object.freeze({projectId:String(route.projectId),releaseId:String(route.releaseId),path:String(route.path),token:route.token,generation:1,readPaths:Object.freeze([...op.policy.readPaths])});
+      const primaryRoute=Object.freeze({id:`route_${projectId}`,projectId,releaseId:op.primaryReleaseId,hosts:Object.freeze([] as string[]),active:true,upstream:op.origin,
+        runtime:Object.freeze({protocol:DEPLOYMENT_RUNTIME_PROTOCOL,generation:op.credentialGeneration,path:providerRuntimePath(projectId),token:providerIngressToken(masterKey,projectId,op.credentialGeneration)})});
+      return Object.freeze({snapshot:checkpoint,observation:Object.freeze({primary:primaryRoute,
+        request:createShadowCandidateRequest({...candidateRoute,origin:op.origin,protocol:DEPLOYMENT_RUNTIME_PROTOCOL,methods:op.policy.methods})})});
     },
     onError:error=>options.onError?.(error),
   });

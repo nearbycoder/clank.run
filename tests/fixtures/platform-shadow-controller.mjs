@@ -3,6 +3,7 @@ import {join} from 'node:path';
 import {createHash,createHmac,randomUUID} from 'node:crypto';
 import {openPlatform} from '../../dist/platform.js';
 import {serve} from '../../dist/node.js';
+import {createManagedIngress} from '../../dist/data-plane.js';
 import {defineDatabase,openSQLite,openDeploymentOrchestrator} from '../../dist/index.js';
 import {SQLITE_INTERNAL} from '../../dist/sqlite-internal.js';
 import {openSupervisorLease,armSupervisorGuardian,linuxProcessBirth} from '../../dist/platform-supervisor.js';
@@ -17,7 +18,7 @@ const hash=value=>createHash('sha256').update(value).digest('hex');
 let platform,server,owner,lease,guardian,database,orchestrator,leaseTimer,projectLease,projectTimer;
 const close=async()=>{
   if(platform){await server.close();await platform.close();return;}
-  await owner?.close();clearInterval(projectTimer);if(projectLease)await orchestrator.releaseLease(projectLease);
+  await owner?.close();await server?.close();clearInterval(projectTimer);if(projectLease)await orchestrator.releaseLease(projectLease);
   await guardian?.stop();clearInterval(leaseTimer);orchestrator?.close();database?.close();lease?.release();lease?.close();
 };
 if(process.env.CLANK_SHADOW_NATIVE_OWNER==='1'){
@@ -36,6 +37,8 @@ if(process.env.CLANK_SHADOW_NATIVE_OWNER==='1'){
   const current=()=>{lease.assertCurrent(schema);if(!projectLease || !internal.prepare('SELECT 1 FROM clank_distributed_leases WHERE resource=? AND owner=? AND token_hash=? AND fence=? AND expires_at>?').get(projectLease.resource,projectLease.owner,createHash('sha256').update(projectLease.token).digest('base64url'),projectLease.fence,Date.now()))throw new Error('Actual shadow project lease lost.');};
   const read=()=>{const row=internal.prepare('SELECT * FROM clank_platform_provider_canaries WHERE project_id=?').get(projectId);if(!row)return null;const record=shadow.readShadowRecord(row,projectId,hash);shadow.assertShadowReplay(internal,projectId,record,hash);return record};
   const control=async(action,value,guard,signal,bytes)=>{guard();const response=await fetch(new URL(deploymentProviderCanaryPath(projectId,action),input.endpoint),{method:action==='binding'?'GET':'POST',headers:{authorization:'Bearer '+controlToken,...(action==='binding'?{}:{'content-type':bytes?'application/vnd.clank.runtime':'application/json',...(bytes?{'x-clank-canary-input':JSON.stringify(value)}:{})})},...(action==='binding'?{}:{body:bytes??JSON.stringify(value)}),signal,redirect:'error'});guard();const body=await response.json();guard();if(response.status!==200)throw new Error('Exact native provider control refused: '+response.status);return body[action==='binding'?'binding':action==='retire'?'retirement':'state'];};
+  const primaryRoute=Object.freeze({id:'route_'+projectId,projectId,releaseId:project.active_release_id,active:true,hosts:Object.freeze(['shadow.test']),upstream:input.endpoint,runtime:Object.freeze({protocol:'clank-runtime/1',generation,path:'/v1/clank/apps/'+projectId,token:ingressToken})});
+  const assertRoute=(route,id,release)=>{if(route.projectId!==id||route.releaseId!==release||route.generation!==1||route.path!=='/v1/clank/apps/'+id||typeof route.token!=='string')throw new Error('Native provider observation identity mismatch')};
   const adapter={read,save:(id,prior,op,guard)=>shadow.saveShadowRecord(internal,id,prior,op,guard,hash),
     retire:async(id,record,guard)=>{const op=record.operation;return control('retire',{primary:op.primary,operationId:op.operationId,controllerEpoch:op.controllerEpoch,releaseId:op.releaseId,capsuleSha256:op.capsuleSha256,retirementEpoch:op.retirementEpoch},guard)},
     lock:async(id,work)=>{projectLease=await orchestrator.acquireLease('project:'+id,'shadow-source-'+lease.owner);if(!projectLease)throw new Error('Actual project lock unavailable.');projectTimer=setInterval(async()=>{projectLease=await orchestrator.renewLease(projectLease)},10000);try{return await work()}finally{clearInterval(projectTimer);await orchestrator.releaseLease(projectLease);projectLease=null}},
@@ -46,11 +49,16 @@ if(process.env.CLANK_SHADOW_NATIVE_OWNER==='1'){
       change(op=>({...op,capsuleSha256:capsule.sha256,updatedAt:Math.max(Date.now(),op.updatedAt)}));const binding=await control('binding',null,guard,signal);
       change(op=>({...op,primary:binding,phase:'preparing',updatedAt:Math.max(Date.now(),op.updatedAt)}));send({kind:'preparing',pid:process.pid,birth:lease.processBirth,record:read()});
       const op=record().operation,state=await control('prepare',{primary:binding,operationId:op.operationId,controllerEpoch:op.controllerEpoch,releaseId:op.releaseId,capsuleSha256:op.capsuleSha256,purpose:'shadow',stateProtocol:'clank-provider-canary/2'},guard,signal,capsule.bytes);
-      return{sha256:state.snapshot.sha256,bytes:state.snapshot.bytes,providerStartedAt:state.snapshot.startedAt,providerCompletedAt:state.snapshot.completedAt,platformObservedAt:Date.now()};
+      const snapshot={sha256:state.snapshot.sha256,bytes:state.snapshot.bytes,providerStartedAt:state.snapshot.startedAt,providerCompletedAt:state.snapshot.completedAt,platformObservedAt:Date.now()};
+      if(!input.observe)return snapshot;
+      assertRoute(state.route,state.candidateProjectId,candidate.id);
+      const route=Object.freeze({...state.route,readPaths:Object.freeze([...state.route.readPaths])});
+      return{snapshot,observation:Object.freeze({primary:primaryRoute,async request(exact,signal,current){current();if(!route.readPaths.includes(exact.path))throw new Error('Unapproved native sample');const response=await fetch(new URL(route.path+exact.path,input.endpoint),{method:exact.method,headers:{...(exact.accept===null?{}:{accept:exact.accept}),'accept-encoding':'identity','cache-control':'no-store','x-clank-project-id':route.projectId,'x-clank-runtime-protocol':'clank-runtime/1','x-clank-runtime-generation':String(route.generation),'x-clank-runtime-ingress':route.token},signal,redirect:'error'});current();return response;}})};
     },onError:error=>send({kind:'owner-error',error:String(error)})};
   owner=shadow.createShadowController(adapter);const configured=shadow.normalizeShadowPolicy(options.shadowTraffic),epoch=Number(project.provider_canary_epoch)+1,now=Date.now(),sessionId='shadow_'+randomUUID();
   const record=await owner.start(projectId,{kind:'shadow',sessionId,operationId:'shadowop_'+randomUUID(),idempotencyKeyDigest:hash(sessionId),inputDigest:hash('input:'+sessionId),reviewDigest:hash('review:'+sessionId),releaseId:candidate.id,artifactSha256:candidate.digest,capsuleSha256:null,controllerEpoch:epoch,retirementEpoch:epoch,primary:null,primaryReleaseId:project.active_release_id,primaryFence:Number(internal.prepare('SELECT fence FROM clank_deployment_project_fences WHERE project_id=?').get(projectId).fence),nodeId:project.provider_node_id,origin:input.endpoint,credentialGeneration:generation,policyRevision:configured.revision,policyDigest:hash(JSON.stringify(configured)),policy:shadow.narrowShadowPolicy(configured,{}),maxReports:configured.maxReports,phase:'binding',outcome:null,stopRequested:false,snapshot:null,report:input.reportVersion===2?shadow.emptyShadowReport(2):shadow.emptyShadowReport(),reservations:[],retirement:null,createdAt:now,expiresAt:now+configured.maxDurationMs,updatedAt:now},current);
-  send({kind:'ready',pid:process.pid,birth:lease.processBirth,record});
+  if(input.observe){const ingress=createManagedIngress({routes:()=>[primaryRoute],shadow:owner.observer,retries:0});server=await serve(ingress.handle,{hostname:'127.0.0.1',port:0,allowedHosts:['shadow.test']});}
+  send({kind:'ready',pid:process.pid,birth:lease.processBirth,record,url:server?.url});
 }else{
   platform=await openPlatform({dataDirectory:root,publicUrl:'http://127.0.0.1:42431',hostingProfile:'trusted',sqliteIsolation:'trusted-process',signup:false,...options,onError:error=>send({kind:'platform-error',error:String(error)})});
   server=await serve(platform.handle,{hostname:'127.0.0.1',port:0});send({kind:'ready',pid:process.pid,birth:await linuxProcessBirth(process.pid),url:server.url,status:platform.supervisor()});

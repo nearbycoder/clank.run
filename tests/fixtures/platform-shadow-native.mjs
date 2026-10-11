@@ -79,7 +79,7 @@ async function deploy(f,bytes,key){const response=await f.platform.handle(new Re
 
 export async function shadowPlatformFixture(t,policy={stages:[{trafficPercent:50,durationMs:2000,minimumSamples:2},{trafficPercent:100,durationMs:1000,minimumSamples:2}],maximumErrorRate:0.2,maximumP95Ms:1500}, fixedProjectId,fixtureOptions={}){
   const root=await mkdtemp(join(tmpdir(),'clank-platform-provider-canary-')),ports=await reservePlatformTestPorts(),children=[],births=new Map(),runtimes=new Map(),events=[],errors=[];
-  let service,agent,server,platform,sequence=0,retainedPrimary;
+  let service,agent,server,platform,sequence=0,retainedPrimary,heldSample;
   const heldControls=new Map(),ownedGates=new Set(),controlCounts={binding:0,prepare:0,retire:0,'binding-response':0,'prepare-response':0,'retire-response':0};
   const holdControl=async action=>{
     controlCounts[action]++;const held=heldControls.get(action);if(!held||controlCounts[action]<held.at)return;
@@ -133,11 +133,14 @@ export async function shadowPlatformFixture(t,policy={stages:[{trafficPercent:50
     const action=/\/canary\/(binding|prepare|retire)$/.exec(req.url)?.[1];if(action)await holdControl(action);
     const response=await service.handle(input),body=action?Buffer.from(await response.arrayBuffer()):null;
     events.push({kind:'control',path:req.url,status:response.status,...(action==='binding'&&response.status===200?{binding:JSON.parse(body.toString('utf8')).binding}:{})});
-    if(action)await holdControl(action+'-response');res.writeHead(response.status,Object.fromEntries(response.headers));res.end(body??Buffer.from(await response.arrayBuffer()));
+    const payload=body??Buffer.from(await response.arrayBuffer());
+    if(action)await holdControl(action+'-response');
+    if(!action&&heldSample&&String(req.headers['x-clank-project-id']).startsWith('canary_')){heldSample.entered.resolve();await heldSample.release.promise;}
+    res.writeHead(response.status,Object.fromEntries(response.headers));res.end(payload);
   }catch(error){errors.push(String(error));if(!res.headersSent)res.writeHead(500);res.end()}});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const endpoint='http://127.0.0.1:'+server.address().port;
-  const options={publicUrl:origin,signup:'bootstrap',appPortStart:ports.start,appPortEnd:ports.end,platformAdminEmails:['canary-native@example.test'],backups:{intervalMs:false},previews:{cleanupIntervalMs:false},ingress:{baseDomain:'apps.example.test'},deploymentAgents:{registrationToken:'provider-native-registration-12345678901234567890',placement:{activationTimeoutMs:fixtureOptions.activationTimeoutMs??2000}},supervisor:{configurationId:'actual-platform-cluster',configurationRevision:1,leaseMs:30000,pollIntervalMs:50},shadowTraffic:{revision:1,readPaths:['/','/healthz'],methods:['GET','HEAD'],maxSamplePercent:10,maxDurationMs:30000,maxAttempts:10,maxConcurrent:2,maxResponseBytes:1024,maxRequestMs:1000,maxReports:2},...(fixtureOptions.providerPromotionHosts===undefined?{}:{providerPromotionHosts:fixtureOptions.providerPromotionHosts})};
+  const options={publicUrl:origin,signup:'bootstrap',appPortStart:ports.start,appPortEnd:ports.end,platformAdminEmails:['canary-native@example.test'],backups:{intervalMs:false},previews:{cleanupIntervalMs:false},ingress:{baseDomain:'apps.example.test'},deploymentAgents:{registrationToken:'provider-native-registration-12345678901234567890',placement:{activationTimeoutMs:fixtureOptions.activationTimeoutMs??2000}},supervisor:{configurationId:'actual-platform-cluster',configurationRevision:1,leaseMs:30000,pollIntervalMs:50},shadowTraffic:{revision:1,readPaths:['/','/healthz'],methods:['GET','HEAD'],maxSamplePercent:10,maxDurationMs:30000,maxAttempts:10,maxConcurrent:2,maxResponseBytes:1024,maxRequestMs:1000,maxReports:2,...fixtureOptions.shadowTraffic},...(fixtureOptions.providerPromotionHosts===undefined?{}:{providerPromotionHosts:fixtureOptions.providerPromotionHosts})};
   async function start(disabled=false){
     const child=fork(new URL('./platform-shadow-controller.mjs',import.meta.url),[],{env:{...process.env,CLANK_SUPERVISOR_FIXTURE_ROOT:join(root,'platform'),CLANK_SUPERVISOR_FIXTURE_OPTIONS:JSON.stringify({...options,...(disabled?{canary:undefined,shadowTraffic:undefined}:{})})},stdio:['ignore','pipe','pipe','ipc']});await track(child);let output='';for(const stream of [child.stdout,child.stderr])stream.on('data',chunk=>output=(output+chunk).slice(-8192));
     const pending=new Map();child.on('message',message=>{if(message.id&&pending.has(message.id)){const {resolve,reject,timer}=pending.get(message.id);pending.delete(message.id);clearTimeout(timer);message.kind==='error'?reject(new Error(message.error)):resolve(message)}});
@@ -218,6 +221,7 @@ export async function shadowPlatformFixture(t,policy={stages:[{trafficPercent:50
     async pausePlatform(){await agent.close();await platform.close();},
     async reopen(disabled=false,{agent:reopenAgent=true}={}){await agent.close();await platform.close();platform=await start(disabled);await until(async()=>{const value=await platform.rpc({kind:'status'});return value.status.state==='leader'},'gracefully reopened platform leadership',60000);if(reopenAgent)await openAgent();return platform;},
     async successor(){platform=await start(true);await until(async()=>{const value=await platform.rpc({kind:'status'});return value.status.state==='leader'},'actual successor startup recovery',60000);await openAgent();return platform;},
+    holdSample(){const value={entered:gate(),release:gate()};heldSample=value;ownedGates.add(value);return value;},
     hold(action,{once=action==='binding-response',at=controlCounts[action]+1}={}){assert.ok(Object.hasOwn(controlCounts,action),'Known native control gate required.');assert.ok(Number.isSafeInteger(at)&&at>controlCounts[action],'Gate count must be in the future.');const held={entered:gate(),release:gate(),once,at,hits:0};heldControls.set(action,held);ownedGates.add(held);return held},
     async traffic(method='GET',path='/',headers={}){return platform.handle(new Request('http://native-canary.apps.example.test'+path,{method,headers,...(method==='POST'?{body:'write'}:{})}))},
     async state(){return json(platform,`/api/projects/${project.id}/canary`,{token:owner.accessToken})},

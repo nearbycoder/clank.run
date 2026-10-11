@@ -1,3 +1,5 @@
+import type { IngressRoute, IngressShadowObserver } from "./data-plane.ts";
+import type { ExactRequest } from "./security.ts";
 import type { SQLiteInternal } from "./sqlite-internal.js";
 import type { DeploymentProviderCanaryBinding, DeploymentProviderCanaryRetirement } from "./provider-service.js";
 
@@ -128,18 +130,23 @@ export interface ShadowLifecycleAdapter {
 }
 export declare function retireShadow(adapter:ShadowLifecycleAdapter,projectId:string,input:ShadowRecord,current:()=>void,outcome:ShadowOutcome):Promise<ShadowRecord>;
 
+export interface ShadowObservationCapability { readonly primary: Readonly<IngressRoute>; request(exact:Readonly<ExactRequest>,signal:AbortSignal,current:()=>void):Promise<Response>; }
+export interface ShadowCandidateTarget { readonly origin:string; readonly projectId:string; readonly path:string; readonly token:string; readonly protocol:string; readonly generation:1; readonly readPaths:readonly string[]; readonly methods:readonly ("GET"|"HEAD")[]; }
+export declare function createShadowCandidateRequest(input:Readonly<ShadowCandidateTarget>):ShadowObservationCapability["request"];
+export interface ShadowPreparedObservation { readonly snapshot:ShadowCheckpoint; readonly observation?:ShadowObservationCapability; }
 export interface ShadowOwnerAdapter extends ShadowLifecycleAdapter {
   lock<Value>(projectId:string,work:()=>Promise<Value>,wait?:boolean):Promise<Value>;
   authority(projectId:string):()=>void;
   scope<Value>(current:()=>void,work:()=>Promise<Value>):Promise<Value>;
   admit(projectId:string,operation:ShadowOperation):void;
   begin(projectId:string,operation:ShadowOperation,current:()=>void):ShadowRecord;
-  prepare(projectId:string,record:()=>ShadowRecord,change:(update:(operation:ShadowOperation)=>ShadowOperation)=>void,current:()=>void,signal:AbortSignal,reviewedPrimary?:DeploymentProviderCanaryBinding):Promise<ShadowCheckpoint>;
+  prepare(projectId:string,record:()=>ShadowRecord,change:(update:(operation:ShadowOperation)=>ShadowOperation)=>void,current:()=>void,signal:AbortSignal,reviewedPrimary?:DeploymentProviderCanaryBinding):Promise<ShadowCheckpoint|ShadowPreparedObservation>;
   replay?(projectId:string,keyDigest:string,current:()=>void,bySession?:boolean):ShadowReplayView|null;
   onError?(error:unknown):void;
 }
 export interface ShadowReplayView { readonly replay:ShadowReplay; readonly current:ShadowRecord|null; readonly epoch:number; }
 export interface ShadowController {
+  readonly observer: IngressShadowObserver;
   start(projectId:string,operation:ShadowOperation,admission:()=>void,reviewedPrimary?:DeploymentProviderCanaryBinding,authorizeBegin?:()=>void):Promise<ShadowRecord>;
   replay(projectId:string,keyDigest:string,bySession?:boolean):ShadowReplayView|null|undefined;
   requestStop(projectId:string,sessionId:string,operationId:string,controllerEpoch:number,authorized:()=>void):Promise<ShadowRecord|undefined>;

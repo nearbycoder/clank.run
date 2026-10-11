@@ -1,3 +1,5 @@
+import type { IngressRoute, IngressShadowMetadata, IngressShadowTap, IngressShadowObserver } from "./data-plane.ts";
+import { exactRequest, registerRequestHandoff, type ExactRequest } from "./security.ts";
 import type { SQLiteInternal } from "./sqlite-internal.ts";
 import type { DeploymentProviderCanaryBinding, DeploymentProviderCanaryRetirement } from "./provider-service.ts";
 
@@ -504,18 +506,162 @@ export async function retireShadow(adapter:ShadowLifecycleAdapter,projectId:stri
   save({...record.operation,phase:"complete",updatedAt:update()});return record;
 }
 
+/** @internal Ephemeral provider capability; never serialize this object or its credential-bearing closure. */
+export interface ShadowObservationCapability {
+  readonly primary: Readonly<IngressRoute>;
+  request(exact: Readonly<ExactRequest>, signal: AbortSignal, current:()=>void): Promise<Response>;
+}
+export interface ShadowCandidateTarget {
+  readonly origin:string; readonly projectId:string; readonly path:string; readonly token:string;
+  readonly protocol:string; readonly generation:1; readonly readPaths:readonly string[]; readonly methods:readonly ("GET"|"HEAD")[];
+}
+/** @internal Only the verified provider prepare result constructs this private target. */
+export function createShadowCandidateRequest(input:Readonly<ShadowCandidateTarget>):ShadowObservationCapability["request"] {
+  const target=Object.freeze({...input,readPaths:Object.freeze([...input.readPaths]),methods:Object.freeze([...input.methods])});
+  return async (exact,signal,guard)=>{
+    guard();
+    if(!target.methods.includes(exact.method)||!target.readPaths.includes(exact.path)||exact.accept!==null&&(exact.accept.length>512||/[^\x20-\x7e]/u.test(exact.accept)))throw new Error("The exact shadow request is ineligible.");
+    const url=new URL(target.origin);url.pathname=target.path+exact.path;
+    const headers=new Headers({"accept-encoding":"identity","cache-control":"no-store","x-clank-project-id":target.projectId,"x-clank-runtime-protocol":target.protocol,
+      "x-clank-runtime-generation":String(target.generation),"x-clank-runtime-ingress":target.token});
+    if(exact.accept!==null)headers.set("accept",exact.accept);
+    guard();const response=await fetch(url.href,{method:exact.method,headers,signal,redirect:"error",credentials:"omit",cache:"no-store",referrerPolicy:"no-referrer"});
+    try{guard();if(response.redirected||response.url!==url.href)throw new Error("The shadow candidate response changed origin or path.");return response;}
+    catch(error){await response.body?.cancel().catch(()=>undefined);throw error;}
+  };
+}
+export interface ShadowPreparedObservation { readonly snapshot: ShadowCheckpoint; readonly observation?: ShadowObservationCapability; }
+interface ShadowObservationFacts { complete: boolean; bytes: number; elapsed: number|null; statusClass: number|null; mediaType: string|null; }
+function shadowObservationMedia(value:string|null):string|null {
+  if(!value || value.length>1024)return null;
+  const type=value.split(';',1)[0]!.trim().toLowerCase();
+  return type.length<=255 && /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/u.test(type)?type:null;
+}
+function settleShadowObservation(report:ShadowReport,reason:ShadowUnknownReason|null,primary:ShadowObservationFacts,candidate:ShadowObservationFacts,maximum:number):ShadowReport {
+  const comparable=reason===null,both=primary.complete&&candidate.complete;
+  const latency=(before:ShadowLatency,facts:ShadowObservationFacts):ShadowLatency=>({cumulative:before.cumulative.map((count,index)=>count+(facts.complete&&facts.elapsed!==null&&facts.elapsed<=shadowLatencyBuckets[index]! ?1:0)),
+    overflow:before.overflow+(facts.complete&&facts.elapsed!==null&&facts.elapsed>10000?1:0),unknown:before.unknown+(!facts.complete||facts.elapsed===null?1:0)});
+  return normalizeShadowReport({...report,counters:{...report.counters,settled:report.counters.settled+1,comparable:report.counters.comparable+(comparable?1:0),bothComplete:report.counters.bothComplete+(both?1:0),
+    statusClassEqual:report.counters.statusClassEqual+(comparable&&primary.statusClass===candidate.statusClass?1:0),statusClassDifferent:report.counters.statusClassDifferent+(comparable&&primary.statusClass!==candidate.statusClass?1:0),
+    mediaTypeEqual:report.counters.mediaTypeEqual+(comparable&&primary.mediaType===candidate.mediaType?1:0),mediaTypeDifferent:report.counters.mediaTypeDifferent+(comparable&&primary.mediaType!==candidate.mediaType?1:0),
+    unknown:{...report.counters.unknown,...(reason?{[reason]:report.counters.unknown[reason]+1}:{})}},latency:{primary:latency(report.latency.primary,primary),candidate:latency(report.latency.candidate,candidate)}},maximum);
+}
+/** state() reads the owned memory snapshot; native guards, mutations and scopes run only in detached tasks. */
+function shadowObservationOwner(options:{
+  capability:ShadowObservationCapability; global:Set<object>; initial:ShadowRecord; deadline:number;
+  state:()=>ShadowRecord; live:()=>void; verify:()=>void; current:()=>void;
+  change:(update:(operation:ShadowOperation)=>ShadowOperation,current:()=>void)=>void;
+  scope:<Value>(current:()=>void,work:()=>Promise<Value>)=>Promise<Value>;
+  stop:(reason:ShadowOutcome)=>void; error:(error:unknown)=>void;
+}) {
+  const policy=options.initial.operation.policy,identity=options.initial.operation,capability=options.capability;
+  const primaryRoute=capability.primary,submit=capability.request;
+  const schedule=process.getBuiltinModule('node:timers').setImmediate;
+  const pairs=new Set<{deadline:number;cancel:()=>void;flight:Promise<void>}>();
+  let accepting=true,ended=false,flushTimer:ReturnType<typeof setTimeout>|undefined,flushing=false;
+  let pending=Object.fromEntries(shadowSkipReasons.map(key=>[key,0])) as Record<ShadowSkipReason,number>;
+  const native=()=>{if(ended)throw new Error('Shadow observation owner ended.');options.current();const record=options.state();if(record.operation.sessionId!==identity.sessionId||record.operation.operationId!==identity.operationId||record.operation.controllerEpoch!==identity.controllerEpoch||record.operation.phase!=='observing')shadowInvalid('SHADOW_SUPERSEDED');};
+  const live=()=>{native();options.live();options.verify();};
+  const flush=()=>{
+    native();if(!Object.values(pending).some(Boolean))return;
+    const captured=pending;
+    options.change(op=>({...op,report:addShadowSkips(op.report as ShadowReportV2,captured,policy.maxAttempts),updatedAt:Math.max(Date.now(),op.updatedAt)}),native);
+    pending=Object.fromEntries(shadowSkipReasons.map(key=>[key,pending[key]-captured[key]])) as Record<ShadowSkipReason,number>;
+  };
+  const queueFlush=()=>{
+    if(ended||flushTimer||flushing)return;
+    flushTimer=setTimeout(()=>{flushTimer=undefined;if(ended)return;flushing=true;schedule(()=>{void options.scope(options.current,async()=>{if(!ended)flush();}).catch(error=>{options.error(error);options.stop('provider-error');}).finally(()=>{flushing=false;if(!ended&&Object.values(pending).some(Boolean))queueFlush();});});},100);
+  };
+  const skip=(reason:ShadowSkipReason)=>{if(ended)return;pending[reason]=Math.min(shadowSkipMaximum,pending[reason]+1);queueFlush();};
+  const sameRoute=(route:Readonly<IngressRoute>)=>route.active && route.id===primaryRoute.id && route.projectId===primaryRoute.projectId && route.releaseId===primaryRoute.releaseId && route.upstream===primaryRoute.upstream
+    && route.runtime?.protocol===primaryRoute.runtime?.protocol && route.runtime?.generation===primaryRoute.runtime?.generation && route.runtime?.path===primaryRoute.runtime?.path && route.runtime?.token===primaryRoute.runtime?.token;
+  return {
+    observe(request:Request,route:Readonly<IngressRoute>,metadata:Readonly<IngressShadowMetadata>):IngressShadowTap|undefined {
+      if(!accepting||ended)return undefined;
+      const exact=exactRequest(request);if(!exact)return undefined;
+      if(!sameRoute(route)||!policy.methods.includes(exact.method)||!policy.readPaths.includes(exact.path)){skip('ineligible');return undefined;}
+      // The controller owns and updates this in-memory snapshot, without a native read.
+      if(options.state().operation.report.counters.reserved>=policy.maxAttempts){skip('attempt-limit');return undefined;}
+      if(Math.random()*100>=policy.samplePercent){skip('sampled-out');return undefined;}
+      if(pairs.size>=policy.maxConcurrent||options.global.size>=16){skip('capacity');return undefined;}
+      const admitted=performance.now(),deadline=Math.min(admitted+policy.requestMs,options.deadline,admitted+Math.max(0,identity.expiresAt-Date.now()));
+      if(deadline<=admitted){skip('withdrawn');return undefined;}
+      const primary:ShadowObservationFacts={complete:false,bytes:0,elapsed:null,statusClass:metadata.statusClass,mediaType:metadata.mediaType};
+      const candidate:ShadowObservationFacts={complete:false,bytes:0,elapsed:null,statusClass:null,mediaType:null};
+      const abort=new AbortController();let ordinal:number|null=null,handed=false,submitted=false,finished=false,timedOut=false,reason:ShadowUnknownReason|null|undefined,wake:(()=>void)|undefined,reader:ReadableStreamDefaultReader<Uint8Array>|undefined,received:Response|undefined;
+      let cancelHandoff:(()=>void)|undefined,resolveFlight!:()=>void;
+      const pair={deadline,cancel:()=>terminal('cancelled'),flight:new Promise<void>(resolve=>{resolveFlight=resolve;})};pairs.add(pair);options.global.add(pair);
+      const notify=()=>{const ready=wake;wake=undefined;ready?.();};
+      const terminal=(value:ShadowUnknownReason|null)=>{if(reason!==undefined||finished)return;reason=value;if(value!==null)abort.abort();notify();if(!handed)start();};
+      const completed=()=>{if(primary.complete&&candidate.complete)terminal(primary.mediaType&&candidate.mediaType&&primary.statusClass&&candidate.statusClass?null:'content-type-invalid');};
+      const timeout=()=>{const remaining=deadline-performance.now();if(remaining>0){timer=setTimeout(timeout,Math.ceil(remaining));return;}timedOut=true;terminal(ordinal===null?'not-submitted':!submitted?'not-submitted':candidate.complete?'primary-incomplete':'candidate-timeout');};
+      let timer=setTimeout(timeout,Math.max(0,Math.ceil(deadline-performance.now())));
+      const onAbort=()=>{if(!primary.complete)terminal('primary-incomplete');};request.signal.addEventListener('abort',onAbort,{once:true});
+      const cleanup=()=>{finished=true;clearTimeout(timer);request.signal.removeEventListener('abort',onAbort);cancelHandoff?.();pairs.delete(pair);options.global.delete(pair);resolveFlight();};
+      const guard=()=>{native();options.live();if(exactRequest(request)!==exact){terminal('cancelled');throw new Error('The native request proof changed.');}if(performance.now()>=deadline||Date.now()>=identity.expiresAt){timeout();throw new Error('Shadow pair deadline expired.');}if(reason!==undefined&&reason!==null)throw new Error('Shadow pair was cancelled.');};
+      const check=()=>{guard();options.verify();};
+      let started=false;
+      const start=()=>{if(started||finished)return;started=true;schedule(()=>{void options.scope(options.current,async()=>{
+        try{
+          if(!handed||reason!==undefined){skip(!handed&&timedOut?'handoff-timeout':'withdrawn');return;}
+          check();const current=options.state();
+          if(current.operation.report.counters.reserved>=policy.maxAttempts){skip('attempt-limit');options.stop('attempt-limit');return;}
+          const allocated=current.operation.report.counters.reserved+1;
+          options.change(op=>({...op,reservations:[...op.reservations,allocated],report:normalizeShadowReport({...op.report,counters:{...op.report.counters,reserved:allocated}},policy.maxAttempts),updatedAt:Math.max(Date.now(),op.updatedAt)}),guard);ordinal=allocated;
+          check();submitted=true;const submittedAt=performance.now();
+          const response=received=await submit.call(capability,exact,abort.signal,check);check();
+          candidate.statusClass=Math.floor(response.status/100);candidate.mediaType=shadowObservationMedia(response.headers.get('content-type'));
+          if(response.redirected||response.headers.has('content-encoding'))throw new Error('Shadow candidate transport differs.');
+          if(!response.body||exact.method==='HEAD'||response.status===204||response.status===304){candidate.complete=true;candidate.elapsed=Math.max(0,performance.now()-submittedAt);if(response.body)await response.body.cancel();check();}
+          else{reader=response.body.getReader();while(true){check();const next=await reader.read();check();if(next.done){candidate.complete=true;candidate.elapsed=Math.max(0,performance.now()-submittedAt);break;}candidate.bytes+=next.value.byteLength;if(candidate.bytes>policy.maxResponseBytes){terminal('candidate-oversized');break;}}}
+          completed();while(reason===undefined){await new Promise<void>(resolve=>{wake=resolve;});check();completed();}
+        }catch(error){
+          if(ordinal===null){skip('withdrawn');try{live();}catch{options.stop('authority-revoked');}}
+          else if(reason===undefined){try{live();terminal(submitted?'candidate-error':'not-submitted');}catch{terminal('authority-lost');options.stop('authority-revoked');}}
+        }finally{
+          abort.abort();cancelHandoff?.();
+          // Actual completion remains tracked; a nonsettling native cancellation keeps the slot/barrier.
+          if(reader){try{await reader.cancel();}catch{}finally{reader.releaseLock();}}
+          else if(received?.body){try{await received.body.cancel();}catch{}}
+          if(ordinal!==null){
+            native();if(reason===undefined)reason=submitted?'candidate-error':'not-submitted';
+            try{options.live();}catch{if(reason===null||reason===undefined)reason='authority-lost';}
+            const finalReason=reason;
+            const settlementCurrent=()=>{native();if(finalReason===null||finalReason==='content-type-invalid')options.live();};
+            options.change(op=>{if(!op.reservations.includes(ordinal!))shadowInvalid('SHADOW_SUPERSEDED');return{...op,reservations:op.reservations.filter(value=>value!==ordinal),report:settleShadowObservation(op.report,finalReason!,primary,candidate,policy.maxAttempts),updatedAt:Math.max(Date.now(),op.updatedAt)};},settlementCurrent);
+          }
+        }
+      }).catch(error=>{options.error(error);options.stop('provider-error');}).finally(cleanup);});};
+      cancelHandoff=registerRequestHandoff(request,()=>{handed=true;start();return undefined;});
+      if(!cancelHandoff){skip('withdrawn');cleanup();return undefined;}
+      if(request.signal.aborted)onAbort();
+      return Object.freeze({chunk(length:number):undefined{if(!finished&&reason===undefined){primary.bytes+=length;if(primary.bytes>policy.maxResponseBytes)terminal('primary-oversized');}return undefined;},
+        finish(kind:'complete'|'cancelled'|'error',elapsed:number):undefined{if(!finished&&reason===undefined){if(kind==='complete'){primary.complete=true;primary.elapsed=elapsed;completed();}else terminal('primary-incomplete');}return undefined;}});
+    },
+    get size(){return pairs.size;},
+    drained(){return Promise.all([...pairs].map(pair=>pair.flight));},
+    disable(){accepting=false;for(const pair of pairs)pair.cancel();},
+    async close(){accepting=false;for(const pair of pairs)pair.cancel();clearTimeout(flushTimer);flushTimer=undefined;
+      const all=Promise.all([...pairs].map(pair=>pair.flight)),remaining=Math.max(0,...[...pairs].map(pair=>pair.deadline-performance.now()));let timer:ReturnType<typeof setTimeout>|undefined;
+      await Promise.race([all,new Promise<void>(resolve=>{timer=setTimeout(resolve,remaining);})]);clearTimeout(timer);
+      try{if(pairs.size)throw new Error('Shadow task cleanup remains uncertain.');await options.scope(options.current,async()=>flush());}finally{ended=true;clearTimeout(flushTimer);}
+    },
+  };
+}
+
 export interface ShadowOwnerAdapter extends ShadowLifecycleAdapter {
   lock<Value>(projectId:string,work:()=>Promise<Value>,wait?:boolean):Promise<Value>;
   authority(projectId:string):()=>void;
   scope<Value>(current:()=>void,work:()=>Promise<Value>):Promise<Value>;
   admit(projectId:string,operation:ShadowOperation):void;
   begin(projectId:string,operation:ShadowOperation,current:()=>void):ShadowRecord;
-  prepare(projectId:string,record:()=>ShadowRecord,change:(update:(operation:ShadowOperation)=>ShadowOperation)=>void,current:()=>void,signal:AbortSignal,reviewedPrimary?:DeploymentProviderCanaryBinding):Promise<ShadowCheckpoint>;
+  prepare(projectId:string,record:()=>ShadowRecord,change:(update:(operation:ShadowOperation)=>ShadowOperation)=>void,current:()=>void,signal:AbortSignal,reviewedPrimary?:DeploymentProviderCanaryBinding):Promise<ShadowCheckpoint|ShadowPreparedObservation>;
   replay?(projectId:string,keyDigest:string,current:()=>void,bySession?:boolean):ShadowReplayView|null;
   onError?(error:unknown):void;
 }
 export interface ShadowReplayView { readonly replay:ShadowReplay; readonly current:ShadowRecord|null; readonly epoch:number; }
 export interface ShadowController {
+  readonly observer: IngressShadowObserver;
   start(projectId:string,operation:ShadowOperation,admission:()=>void,reviewedPrimary?:DeploymentProviderCanaryBinding,authorizeBegin?:()=>void):Promise<ShadowRecord>;
   replay(projectId:string,keyDigest:string,bySession?:boolean):ShadowReplayView|null|undefined;
   requestStop(projectId:string,sessionId:string,operationId:string,controllerEpoch:number,authorized:()=>void):Promise<ShadowRecord|undefined>;
@@ -526,10 +672,11 @@ export interface ShadowController {
 }
 /** @internal One tracked task owns the native project lease; exact stop never queues behind that task. */
 export function createShadowController(adapter:ShadowOwnerAdapter):ShadowController {
-  type Owner={abort:AbortController;record:ShadowRecord|null;current:(()=>void)|null;flight:Promise<void>;observed:number|null};
-  const owners=new Map<string,Owner>();let closed=false;
+  type Owner={abort:AbortController;record:ShadowRecord|null;current:(()=>void)|null;flight:Promise<void>;observed:number|null;observation?:ReturnType<typeof shadowObservationOwner>};
+  const owners=new Map<string,Owner>(),observations=new Set<object>();let closed=false;
   const report=(error:unknown)=>{try{adapter.onError?.(error);}catch{/* Reporting must not detach the retained cleanup barrier. */}};
   return {
+    observer:Object.freeze({observe(request:Request,primary:Readonly<IngressRoute>,metadata:Readonly<IngressShadowMetadata>){if(closed)return undefined;return owners.get(primary.projectId)?.observation?.observe(request,primary,metadata);}}),
     start(projectId,input,admission,reviewedPrimary,authorizeBegin=admission){
       // Serialize caller-owned values synchronously before lock() can suspend.
       const operation=JSON.parse(shadowBoundedJson(input,64*1024)) as ShadowOperation;
@@ -545,36 +692,47 @@ export function createShadowController(adapter:ShadowOwnerAdapter):ShadowControl
           current();authorizeBegin();admission();if(closed || owner.abort.signal.aborted)throw new Error("Shadow owner closed before admission.");
           owner.record=adapter.begin(projectId,operation,()=>{current();authorizeBegin();admission();});accepted(owner.record);
           let outcome:ShadowOutcome="interrupted",wall=Date.now(),started=performance.now();
-          const live=()=>{
+          const admitCurrent=()=>{
             current();admission();adapter.admit(projectId,owner.record!.operation);if(closed || owner.abort.signal.aborted || owner.record!.operation.stopRequested)throw new Error("Shadow observation was stopped.");
-            const actual=adapter.read(projectId);
-            if(!actual || actual.operation.sessionId!==operation.sessionId || actual.operation.controllerEpoch!==operation.controllerEpoch
-              || actual.epoch!==owner.record!.epoch || actual.serialized!==owner.record!.serialized)shadowInvalid("SHADOW_SUPERSEDED");
             if(Date.now()<wall || Date.now()>=operation.expiresAt || performance.now()-started>=operation.policy.durationMs){outcome="expired";throw new Error("Shadow observation expired.");}
             wall=Date.now();
           };
+          const live=()=>{admitCurrent();shadowCurrent(adapter,projectId,owner.record!,current);};
           const change=(update:(operation:ShadowOperation)=>ShadowOperation)=>{live();owner.record=adapter.save(projectId,owner.record!,update(owner.record!.operation),current);live();};
           try{
-            live();const snapshot=await adapter.prepare(projectId,()=>owner.record!,change,live,owner.abort.signal,expected);live();
+            live();const prepared=await adapter.prepare(projectId,()=>owner.record!,change,live,owner.abort.signal,expected);live();
+            const snapshot="snapshot" in prepared?prepared.snapshot:prepared;
             owner.observed=performance.now();
             change(op=>({...op,snapshot,phase:"observing",updatedAt:Math.max(Date.now(),op.updatedAt)}));
+            if("snapshot" in prepared && prepared.observation && owner.record!.operation.report.protocol===2){
+              owner.observation=shadowObservationOwner({capability:prepared.observation,global:observations,initial:owner.record!,deadline:started+operation.policy.durationMs,
+                state:()=>owner.record!,current,live:admitCurrent,verify:()=>shadowCurrent(adapter,projectId,owner.record!,current),scope:adapter.scope,
+                change:(update,guard)=>{shadowCurrent(adapter,projectId,owner.record!,current);owner.record=adapter.save(projectId,owner.record!,update(owner.record!.operation),guard);shadowCurrent(adapter,projectId,owner.record!,current);},
+                stop:reason=>{outcome=reason;if(reason!=="attempt-limit"){owner.observation?.disable();owner.abort.abort();}},error:report});
+            }
             while(true){
-              live();await new Promise<void>(resolve=>{
+              live();if(owner.record!.operation.report.counters.reserved>=operation.policy.maxAttempts && !owner.observation?.size){outcome="attempt-limit";throw new Error("Shadow attempt budget exhausted.");}
+              await new Promise<void>(resolve=>{
                 const done=()=>{clearTimeout(timer);owner.abort.signal.removeEventListener("abort",done);resolve();};
                 const timer=setTimeout(done,Math.max(1,Math.min(1000,operation.expiresAt-Date.now())));owner.abort.signal.addEventListener("abort",done,{once:true});
               });
             }
           }catch(error){
             if(owner.record!.operation.stopRequested)outcome="stopped";
-            else if((outcome as ShadowOutcome)!=="expired"){
+            else if(!["expired","attempt-limit","authority-revoked","primary-changed","policy-changed"].includes(outcome as ShadowOutcome)){
               const code=String((error as {code?:string})?.code??"");
               outcome=closed?"interrupted":code==="SHADOW_AUTHORITY_REVOKED"?"authority-revoked":code==="SHADOW_PRIMARY_CHANGED"?"primary-changed":"provider-error";
             }
-            try{owner.record=await retireShadow(adapter,projectId,owner.record!,current,outcome);}
+            try{await owner.observation?.close();owner.record=await retireShadow(adapter,projectId,owner.record!,current,outcome);}
             catch(cleanup){report(cleanup);throw cleanup;}
           }
         });
-      }).catch(error=>{rejected(error);report(error);}).finally(()=>{if(owners.get(projectId)===owner)owners.delete(projectId);});
+      }).catch(error=>{rejected(error);report(error);}).finally(()=>{
+        const release=()=>{if(owners.get(projectId)===owner && !owner.observation?.size)owners.delete(projectId);};
+        // Bounded shutdown can release the native lease while real cancellation remains pending.
+        // Keep this exact, now-stale owner as a refusal tombstone until its tracked pairs drain.
+        if(owner.observation?.size)void owner.observation.drained().then(release,report);else release();
+      });
       return ready;
     },
     replay(projectId,keyDigest,bySession=false){
@@ -594,7 +752,7 @@ export function createShadowController(adapter:ShadowOwnerAdapter):ShadowControl
           || record.serialized!==owner.record!.serialized)shadowInvalid("SHADOW_SUPERSEDED");
         if(record.operation.phase==="complete")return record;
         if(!record.operation.stopRequested)owner.record=adapter.save(projectId,record,{...record.operation,stopRequested:true,updatedAt:Math.max(Date.now(),record.operation.updatedAt)},()=>{current();authorized();});
-        current();authorized();owner.abort.abort();return owner.record!;
+        current();authorized();owner.observation?.disable();owner.abort.abort();return owner.record!;
       });
     },
     async stop(projectId,sessionId,epoch,authorized){
@@ -605,7 +763,7 @@ export function createShadowController(adapter:ShadowOwnerAdapter):ShadowControl
         current();authorized();const record=adapter.read(projectId);
         if(!record || record.operation.sessionId!==sessionId || record.epoch!==epoch || record.serialized!==owner.record!.serialized)shadowInvalid("SHADOW_SUPERSEDED");
         owner.record=adapter.save(projectId,record,{...record.operation,stopRequested:true,updatedAt:Math.max(Date.now(),record.operation.updatedAt)},()=>{current();authorized();});
-        owner.abort.abort();
+        owner.observation?.disable();owner.abort.abort();
       });
       await owner.flight;
       return adapter.lock(projectId,async()=>{const fresh=adapter.authority(projectId);return adapter.scope(fresh,async()=>{
@@ -620,7 +778,7 @@ export function createShadowController(adapter:ShadowOwnerAdapter):ShadowControl
         return adapter.scope(current,async()=>{current();const record=adapter.read(projectId);return record?retireShadow(adapter,projectId,record,current,"interrupted"):null;});
       },true);
     },
-    async close(){closed=true;for(const owner of owners.values())owner.abort.abort();await Promise.all([...owners.values()].map(owner=>owner.flight));},
+    async close(){closed=true;for(const owner of owners.values()){owner.observation?.disable();owner.abort.abort();}await Promise.all([...owners.values()].map(owner=>owner.flight));},
   };
 }
 
