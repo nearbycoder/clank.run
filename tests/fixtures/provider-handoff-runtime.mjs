@@ -7,6 +7,7 @@ import {syncBuiltinESMExports} from 'node:module';
 import {openBackend,defineBackend,defineDatabase,defineTable} from '../../dist/backend.js';
 import {s} from '../../dist/ai.js';
 import {SQLITE_INTERNAL} from '../../dist/sqlite-internal.js';
+import {exportPointInTimeRecovery,exportPointInTimeTransfer,openPointInTimeTransferSource} from '../../dist/point-in-time.js';
 import {runSQLiteTask,SQLiteTaskScheduler} from '../../dist/sqlite-task.js';
 import {join} from 'node:path';
 if(process.argv[2]==='foreign-lock'){
@@ -52,6 +53,48 @@ if(config.nativeFault){
  };
 }
 
+let completionConnection,completionInjected=false;
+if(config.completionFault||config.finalFault){
+ const prepare=DatabaseSync.prototype.prepare;
+ DatabaseSync.prototype.prepare=function(sql){if(sql.startsWith('INSERT INTO clank_pitr_state'))completionConnection=this;return prepare.call(this,sql);};
+ if(config.completionFault==='before-base'){
+  const rename=fs.promises.rename;fs.promises.rename=async(...args)=>{const value=await rename(...args);if(String(args[0]).includes('/.stage-bk_')){completionInjected=true;completionConnection.exec('UPDATE clank_pitr_state SET committed_at=committed_at+1');}return value;};
+ }
+ const link=fs.promises.link;
+ fs.promises.link=async(...args)=>{const value=await link(...args);if(config.completionFault&&config.completionFault!=='before-base'&&String(args[1]).endsWith('/head.json')){
+  assert.ok(completionConnection);completionInjected=true;
+  if(config.completionFault==='foreign'){
+   const foreign=new DatabaseSync(config.database);try{foreign.exec("UPDATE clank_pitr_state SET committed_at=committed_at+1");}finally{foreign.close();}
+  }else completionConnection.exec(config.completionSQL);
+ }return value;};syncBuiltinESMExports();
+}
+
+const cleanupErrors=[],cleanupAttempts=[];let runtimeCloseError;
+if(config.cleanupFault){
+ const close=fs.closeSync;
+ fs.closeSync=function(fd){const path=fs.readlinkSync('/proc/self/fd/'+fd),value=close(fd),kind=path==='/run/clank-source/catalog.sqlite'?'reader':path===join(config.app,'.clank-source-recovery-'+config.bootstrap.binding.sourceIncarnation)?'root':undefined;
+  if(kind&&(config.cleanupFault===kind||config.cleanupFault==='both'||config.cleanupFault==='reader-runtime-close'&&kind==='reader')){cleanupAttempts.push(kind);const error=new Error('injected '+kind+' close acknowledgment');cleanupErrors.push(error);throw error;}return value;
+ };syncBuiltinESMExports();
+}
+
+let completionHandle,finalAwaitReached=false;
+if(config.finalFault||config.mode==='completion'){
+ const freeze=Object.freeze;
+ Object.freeze=function(value){const result=freeze(value);if(value&&typeof value.close==='function'&&Object.keys(value).length===2&&('complete' in value||'result' in value)){
+  Object.freeze=freeze;completionHandle=result;
+  if(config.finalFault)queueMicrotask(()=>{
+   finalAwaitReached=true;
+   if(config.finalFault==='native')completionConnection.exec("UPDATE clank_pitr_state SET committed_at=committed_at+1");
+   else if(config.finalFault==='close'){try{runtime.close();}catch(error){if(config.cleanupFault!=='reader-runtime-close')throw error;runtimeCloseError=error;}}
+   else{
+    report({phase:'final-held'});const command=join(config.app,'completion-command.json'),pause=new Int32Array(new SharedArrayBuffer(4)),deadline=Date.now()+10000;
+    while(!fs.existsSync(command)){assert.ok(Date.now()<deadline,'parent must release final completion boundary');Atomics.wait(pause,0,0,5);}
+    assert.deepEqual(JSON.parse(fs.readFileSync(command,'utf8')),{resume:true});
+   }
+  });
+ }return result;};
+}
+
 try{
  if(['missing','oversized','nonconfigurable','writable','enumerable','nonstring'].includes(config.mode)){
   if(config.mode!=='missing')Object.defineProperty(globalThis,slot,{value:config.mode==='oversized'?'x'.repeat(16385):config.mode==='nonstring'?{}:JSON.stringify(config.bootstrap),writable:config.mode==='writable',enumerable:config.mode==='enumerable',configurable:config.mode!=='nonconfigurable'});
@@ -68,9 +111,35 @@ try{
   assert.throws(()=>runtime.database[SQLITE_INTERNAL].guardWrites(()=>undefined),/only be installed/);
   assert.throws(()=>runtime.database.transaction(()=>{}),/unavailable|not completed/);
   if(config.mode==='close'){runtime.close();await assert.rejects(pending);report({ok:true,mode:config.mode});}
-  else if(config.mode==='refuse'||config.fault||config.nativeFault){await assert.rejects(pending);assert.throws(()=>runtime.database.transaction(()=>{}));if(config.fault)assert.equal(held,true);if(config.fault==='worker-queue'){await Promise.all(queueTasks);assert.equal(spawns,2);const again=await runSQLiteTask('inspection','inspectSQLite',[config.database]);assert.ok(again);}report({ok:true,mode:config.mode,spawns});}
+  else if(config.mode==='refuse'||config.fault||config.nativeFault||config.completionFault||config.finalFault){let rejected;await assert.rejects(pending,error=>{rejected=error;return true;});if(config.completionFault)assert.equal(completionInjected,true);
+   if(config.finalFault){
+    assert.equal(finalAwaitReached,true);assert.ok(completionHandle);
+    const closing=completionHandle.close();assert.equal(completionHandle.close(),closing);
+    if(config.cleanupFault){
+     assert.ok(cleanupErrors.length);if(config.cleanupFault==='reader-runtime-close')assert.equal(runtimeCloseError,cleanupErrors[0]);else assert.equal(rejected,cleanupErrors[0]);
+     if(config.cleanupFault==='root'||config.cleanupFault==='both')await assert.rejects(closing,error=>error===cleanupErrors.at(-1));else await closing;
+     runtime.close();assert.deepEqual(cleanupAttempts,config.cleanupFault==='both'?['reader','root']:[config.cleanupFault==='reader-runtime-close'?'reader':config.cleanupFault]);
+    }else await closing;
+    if(config.finalFault==='native')assert.throws(()=>completionHandle.complete(),/consumed/);
+    else{assert.throws(()=>completionHandle.complete(),/closed|consumed/);assert.throws(()=>completionHandle.complete(),/consumed/);}
+    const retained=fs.readdirSync('/proc/self/fd').flatMap(fd=>{try{const path=fs.readlinkSync('/proc/self/fd/'+fd);return path.includes('.clank-source-recovery-')||config.cleanupFault&&(path===config.app||path.startsWith(config.app+'/')||path==='/run/clank-source')?[path]:[];}catch{return [];}});assert.deepEqual(retained,[],'owned repository pins must settle before rejection');
+   }assert.throws(()=>runtime.database.transaction(()=>{}));if(config.fault)assert.equal(held,true);if(config.fault==='worker-queue'){await Promise.all(queueTasks);assert.equal(spawns,2);const again=await runSQLiteTask('inspection','inspectSQLite',[config.database]);assert.ok(again);}report({ok:true,mode:config.mode,spawns});}
   else {
-   await pending;report({phase:'initialized'});
+   const completion=await pending;
+   if(config.mode==='completion'){
+    assert.ok(completion&&typeof completion==='object','successful initialization must return completion data');
+    assert.deepEqual(Object.keys(completion),['captureEpoch','keyId','schemaHash','baseBackupId','observedCursor']);
+    assert.deepEqual(Object.keys(completion.observedCursor),['epoch','sequence','digest']);
+    assert.equal(Object.isFrozen(completion),true);assert.equal(Object.isFrozen(completion.observedCursor),true);
+    assert.ok(Buffer.byteLength(JSON.stringify(completion))<=1024);assert.throws(()=>completionHandle.complete(),/consumed/);
+    assert.throws(()=>{completion.keyId='changed';},TypeError);assert.throws(()=>{completion.observedCursor.sequence=1;},TypeError);
+    assert.throws(()=>anchor.assertSourceRuntime(completion),/genuine/);assert.throws(()=>anchor.sourceContext(completion),/genuine/);
+    assert.throws(()=>anchor.initializeSourceRuntime(runtime),/already been attempted/);
+    await assert.rejects(exportPointInTimeRecovery(completion),/native.*capture/);await assert.rejects(exportPointInTimeTransfer(completion,{}),/native.*capture/);
+    assert.throws(()=>openPointInTimeTransferSource(completion,{}),/native.*capture/);
+    assert.throws(()=>runtime.database[SQLITE_INTERNAL].exec("INSERT INTO clank_meta(_key,_value) VALUES('raw_escape',1)"),/bootstrap|write|permission/);
+    report({phase:'initialized',completion});
+   }else report({phase:'initialized'});
    const command=JSON.parse((await lines.next()).value);
    if(command.revoke)assert.throws(()=>runtime.database.transaction(db=>db.table('records').insert({value:'revoked'})),/grant|catalog|bootstrap/);
    else {assert.throws(()=>runtime.database.transaction(db=>db.table('records').insert({value:'must-not-commit'})),/bootstrap|write|permission/);assert.throws(()=>cached.run(),/bootstrap|write|permission/);}

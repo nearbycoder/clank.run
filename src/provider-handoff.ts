@@ -261,7 +261,11 @@ function pin(c:Context,path:string,directory:boolean,maximum=0,normalize=false):
   const result={fd,path,anchor:(globalThis as any).process.platform==="linux"?`/proc/self/fd/${fd}`:path,dev:before.dev,ino:before.ino,directory,maximum,normalize};
   try {assertPin(c,result);c.pins.push(result);return result;}catch(error){c.fs.closeSync(fd);throw error;}
 }
-function releasePins(c:Context,from:number):void {for(const p of c.pins.splice(from).reverse())c.fs.closeSync(p.fd);}
+function releasePins(c:Context,from:number):void {
+  let failed=false,failure:unknown;
+  for(const p of c.pins.splice(from).reverse())try{c.fs.closeSync(p.fd);}catch(error){if(!failed){failed=true;failure=error;}}
+  if(failed)throw failure;
+}
 function absent(c:Context,path:string):boolean {try{c.fs.lstatSync(path);return false;}catch(error){if(code(error)==="ENOENT")return true;throw error;}}
 function directory(c:Context,parent:Pin,name:string,create=false):Pin {
   assertPin(c,parent);const path=c.path.join(parent.path,name),anchor=`${parent.anchor}/${name}`;
