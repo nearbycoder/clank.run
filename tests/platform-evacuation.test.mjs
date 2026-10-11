@@ -29,6 +29,14 @@ for (const boundary of ['normal', 'revoked-session', 'evacuation-lease', 'projec
   const path='/api/admin/runners/evac-source/evacuations';await payload(platform,path,{confirmation:'evacuate evac-source'},other,403);await payload(platform,path,{confirmation:'evacuate evac-source'},{...admin,csrf:'forged'},403);
   const cancelled=(await payload(platform,path,{confirmation:'evacuate evac-source'},admin,201)).plan;assert.equal(cancelled.projects.length,1);assert.equal((await payload(platform,`${path}/${cancelled.id}/cancel`,{confirmation:cancelled.id},admin)).plan.state,'cancelled');assert.equal(stopped,false);
   const plan=(await payload(platform,path,{confirmation:'evacuate evac-source'},admin,201)).plan;await payload(platform,`/api/projects/${project.id}/secrets`,{values:{KEY:'blocked'}},admin,409,'PUT');
+  if(boundary==='normal'){
+    const incidentPath=`/api/projects/${project.id}/incidents`;
+    const incident=(await payload(platform,incidentPath,{title:'Evacuation recovery',severity:'critical',ownerId:null,operationId:'incident_evac_create_01'},admin,201)).incident;
+    await payload(platform,`${incidentPath}/${incident.id}/change`,{expectedVersion:1,operationId:'incident_evac_note_01',change:{kind:'note',text:'Evacuation holds application mutations; recovery coordination remains available.'}},admin);
+    const detail=(await payload(platform,`${incidentPath}/${incident.id}`,undefined,admin)).detail;
+    assert.equal(detail.incident.version,2);assert.equal(detail.notes.length,1);
+    await payload(platform,`/api/projects/${project.id}/secrets`,{values:{KEY:'still blocked'}},admin,409,'PUT');
+  }
   await payload(platform,`${path}/${plan.id}/run`,{confirmation:plan.id},admin,503);let state=(await payload(platform,`${path}/${plan.id}`,undefined,admin)).plan;assert.equal(state.state,'paused');assert.equal(state.phase,'quiescing');assert.equal(recovered.length,0);assert.equal(state.projects[0].backupId,null);
   badProof=false;
   if(boundary!=='normal'){

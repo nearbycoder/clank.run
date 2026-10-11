@@ -37,6 +37,8 @@ Drill claims and results survive control-plane restarts. One due drill runs per 
 
 ## Per-commit point-in-time recovery
 
+Use the [project incident workspace](project-incidents.md) to connect project alerts to release/error/trace/job/workflow references, ownership, notes and resolution. The incident retains safe release context after artifact cleanup and revalidates current project access; it does not copy private diagnostic payloads or deliver notifications.
+
 `openPointInTimeRecovery(database, options)` attaches a SQLite session to every write transaction. Encrypted changesets, their hash chain and the new state seal commit in the same SQLite transaction as application and service writes. A failed or oversized commit rolls back both. A consistent encrypted base backup and immutable exported journal files recover exact committed boundaries; this is not periodic snapshot approximation.
 
 ```ts
