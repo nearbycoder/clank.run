@@ -10,6 +10,28 @@ import { compile } from '../scripts/compiler.mjs';
 
 const execute = promisify(execFile);
 const declarationFixture = "/** IDE documentation keeps  every byte.\n * Including indentation and `templates`. */\nexport interface Contract {\n    readonly value?: Readonly<Record<string, `key-${string}`>>;\n}\nexport declare const value: number;\n";
+const declarationExpected = declarationFixture.replace('    readonly', 'readonly');
+const declarationFixtures = {
+  // Prefix only known code lines; raw literal/comment lines below are intentional.
+  syntax: {
+    source: '    /// <reference lib="es2022" />\n    export declare namespace Shapes {\n        interface Item<T extends string = string> {\n            readonly key?: T;\n            [key: `field-${string}`]: unknown;\n            new (...args: unknown[]): Item<T>;\n            <U extends T>(value: U): U;\n        }\n        type Mapped<T> = { readonly [K in keyof T as `get-${string & K}`]?: T[K] };\n        type Result<T> = T extends Promise<infer U> ? U : never;\n        type Pair = [first: string, ...rest: number[]];\n        type Word = "keep  interior" | \'also  exact\';\n        const token: unique symbol;\n        function check(value: unknown): value is Item;\n        function check(value: string): boolean;\n        class Holder<T> { readonly value: T; constructor(value: T); }\n    }\n    import type { Contract as Other } from "./contract.js";\n    export type { Other };\n',
+    expected: '/// <reference lib="es2022" />\nexport declare namespace Shapes {\ninterface Item<T extends string = string> {\nreadonly key?: T;\n[key: `field-${string}`]: unknown;\nnew (...args: unknown[]): Item<T>;\n<U extends T>(value: U): U;\n}\ntype Mapped<T> = { readonly [K in keyof T as `get-${string & K}`]?: T[K] };\ntype Result<T> = T extends Promise<infer U> ? U : never;\ntype Pair = [first: string, ...rest: number[]];\ntype Word = "keep  interior" | \'also  exact\';\nconst token: unique symbol;\nfunction check(value: unknown): value is Item;\nfunction check(value: string): boolean;\nclass Holder<T> { readonly value: T; constructor(value: T); }\n}\nimport type { Contract as Other } from "./contract.js";\nexport type { Other };\n',
+  },
+  raw: {
+    source: '    /*! License  stays\n      every byte */\n    /** IDE  hover\n     * @example\n     *     preserve indentation\n     */\n    export type Raw<T extends string> = `first\n    ${`nested-${T}`}\n      last`;\n    export type Escaped = "first\\\n        second";\n',
+    expected: '/*! License  stays\n      every byte */\n/** IDE  hover\n     * @example\n     *     preserve indentation\n     */\nexport type Raw<T extends string> = `first\n    ${`nested-${T}`}\n      last`;\nexport type Escaped = "first\\\n        second";\n',
+  },
+  newlines: {
+    source: '\t export interface Café {\r\n    first: string;\u2028    second: number;\u2029    readonly 𐐀?: boolean;\r\n }\n',
+    expected: 'export interface Café {\r\nfirst: string;\u2028second: number;\u2029readonly 𐐀?: boolean;\r\n}\n',
+  },
+};
+// These use declaration grammar, but deliberately exceed the private scanner's
+// conservative eligibility. The entire input must survive, including earlier edits.
+const escapedDeclaration = '    export interface \\u0043ontract {\n        value: string;\n    }\n';
+const boundedDeclaration = '    export type Nested = ' + '`start${'.repeat(66) + '"value"' + '}end`'.repeat(66) + ';\n';
+declarationFixtures.escaped = {source: escapedDeclaration, expected: escapedDeclaration};
+declarationFixtures.bounded = {source: boundedDeclaration, expected: boundedDeclaration};
 const fixtures = {
   ordinary: 'export function snapshot() {\n    const first = 7;\n    const second = 9;\n    return [first + second, "a  b", /a  b/u.source];\n}\n',
   literals: 'export function snapshot() {\n    const sql = `SELECT  title,  owner\n  FROM  records\n   \n\t WHERE title = \'a  b\';`;\n    const raw = String.raw`first\\n\n  second\\t\n   `;\n    const escaped = "first\\\n    second";\n    return [sql, raw, escaped, "🧪  café  Ελληνικά", /["\'`/]/u.source];\n}\n',
@@ -57,12 +79,16 @@ async function releaseBuild(t, mapped = false) {
   const root = await mkdtemp(join(tmpdir(), 'clank-release-layout-'));
   t.after(() => rm(root, {recursive: true, force: true}));
   for (const name of ['scripts', 'src', 'docs', 'examples']) await mkdir(join(root, name));
-  for (const name of ['build.mjs', 'compiler.mjs', 'tsx.mjs']) {
+  for (const name of ['build.mjs', 'compiler.mjs', 'tsx.mjs', 'docs-audit.mjs']) {
     await copyFile(new URL(`../scripts/${name}`, import.meta.url), join(root, 'scripts', name));
   }
   await writeFile(join(root, 'docs', 'getting-started.md'), '# Setup\n\n## Set up with an agent\n\n```text\nUse the canonical setup prompt.\n```\n');
   for (const [name, source] of Object.entries(fixtures)) await writeFile(join(root, 'src', `${name}.ts`), source);
   await writeFile(join(root, 'src', 'contract.d.ts'), declarationFixture);
+  await writeFile(join(root, 'src', 'malformed.d.ts'), Buffer.concat([Buffer.from('    export interface Malformed { value: string; } // '), Buffer.from([0x80, 0xc3, 0x28]), Buffer.from('\r\n')]));
+  for (const [name, fixture] of Object.entries(declarationFixtures)) await writeFile(join(root, 'src', `${name}.d.ts`), fixture.source);
+  await writeFile(join(root, 'README.md'), '# Fixture\n[Setup](docs/getting-started.md)\n');
+  await writeFile(join(root, 'package.json'), JSON.stringify({type: 'module', exports: {'.': {types: './dist/contract.d.ts', import: './dist/ordinary.js'}}}));
   await writeFile(join(root, 'examples', 'ordinary.ts'), fixtures.ordinary);
   const env = {...process.env};
   if (mapped) env.CLANK_SOURCE_MAPS = '1'; else delete env.CLANK_SOURCE_MAPS;
@@ -77,7 +103,7 @@ test('framework release build removes substantial code indentation while public 
   assert.ok(Buffer.byteLength(expected) - Buffer.byteLength(built) >= 12);
   assert.equal(built, 'export function snapshot(){\nconst first = 7;\nconst second = 9;\nreturn[first + second,"a  b",/a  b/u.source];\n}\n');
   assert.equal(await readFile(join(root, 'examples', 'ordinary.js'), 'utf8'), expected);
-  assert.equal(await readFile(join(root, 'dist', 'contract.d.ts'), 'utf8'), declarationFixture);
+  assert.equal(await readFile(join(root, 'dist', 'contract.d.ts'), 'utf8'), declarationExpected);
   assert.equal(compile(fixtures.ordinary, {filename: join(root, 'src', 'ordinary.ts'), sourceMap: false}), expected);
 });
 
@@ -113,6 +139,8 @@ test('ambiguous syntax and bounded nested scanning preserve the entire original 
 
 test('mapped framework release builds retain exact ordinary compiler output', async t => {
   const root = await releaseBuild(t, true);
+  assert.equal(await readFile(join(root, 'dist', 'contract.d.ts'), 'utf8'), declarationFixture);
+  for (const [name, fixture] of Object.entries(declarationFixtures)) assert.equal(await readFile(join(root, 'dist', `${name}.d.ts`), 'utf8'), fixture.source, name);
   for (const [name, source] of Object.entries(fixtures)) {
     const filename = join(root, 'src', `${name}.ts`);
     assert.equal(await readFile(join(root, 'dist', `${name}.js`), 'utf8'), compile(source, {filename, jsxImportSource: './index.js', sourceMap: true}), name);
@@ -139,7 +167,7 @@ test('release output removes separator spaces while retaining hazardous operator
     const built = await readFile(join(root, 'dist', `${name}.js`), 'utf8');
     assert.ok(built.length < expected.replace(/^[ \t]+/gmu, '').length, `${name}: removes interior spacing beyond indentation`);
   }
-  assert.equal(await readFile(join(root, 'dist', 'contract.d.ts'), 'utf8'), declarationFixture);
+  assert.equal(await readFile(join(root, 'dist', 'contract.d.ts'), 'utf8'), declarationExpected);
 });
 
 test('framework callbacks used in persisted workflow revisions retain accepted indentation-only source', async t => {
@@ -150,7 +178,7 @@ test('framework callbacks used in persisted workflow revisions retain accepted i
   assert.equal((await import(pathToFileURL(join(root, 'dist', 'jobs.js')).href)).snapshot(), '(context) => context.results');
 });
 
-test('rebuilding emitted JavaScript is idempotent and retains declarations exactly', async t => {
+test('rebuilding emitted JavaScript and declarations is idempotent', async t => {
   const root = await releaseBuild(t), first = new Map();
   for (const name of Object.keys(fixtures)) {
     const output = await readFile(join(root, 'dist', `${name}.js`), 'utf8');
@@ -160,5 +188,68 @@ test('rebuilding emitted JavaScript is idempotent and retains declarations exact
   const env = {...process.env}; delete env.CLANK_SOURCE_MAPS;
   await execute(process.execPath, ['--disable-warning=ExperimentalWarning', join(root, 'scripts', 'build.mjs')], {env, timeout: 15000});
   for (const [name, output] of first) assert.equal(await readFile(join(root, 'dist', `${name}.js`), 'utf8'), output, name);
-  assert.equal(await readFile(join(root, 'dist', 'contract.d.ts'), 'utf8'), declarationFixture);
+  assert.equal(await readFile(join(root, 'dist', 'contract.d.ts'), 'utf8'), declarationExpected);
 });
+
+
+test('release declarations compact only code indentation and preserve literal, license, JSDoc and newline bytes', async t => {
+  const root = await releaseBuild(t);
+  for (const [name, fixture] of Object.entries(declarationFixtures)) {
+    const actual = await readFile(join(root, 'dist', `${name}.d.ts`), 'utf8');
+    assert.equal(actual, fixture.expected, name);
+    assert.equal(await readFile(join(root, 'src', `${name}.d.ts`), 'utf8'), fixture.source, `${name}: source is unchanged`);
+    assert.deepEqual(actual.match(/\r\n|[\r\n\u2028\u2029]/gu), fixture.source.match(/\r\n|[\r\n\u2028\u2029]/gu), `${name}: newline bytes`);
+    if (!['escaped', 'bounded'].includes(name)) assert.ok(actual.length < fixture.source.length, `${name}: actual savings`);
+    await writeFile(join(root, 'src', `${name}.d.ts`), actual);
+  }
+  const env = {...process.env}; delete env.CLANK_SOURCE_MAPS;
+  await execute(process.execPath, [join(root, 'scripts', 'build.mjs')], {env, timeout: 15000});
+  for (const [name, fixture] of Object.entries(declarationFixtures)) assert.equal(await readFile(join(root, 'dist', `${name}.d.ts`), 'utf8'), fixture.expected, `${name}: idempotence`);
+});
+
+test('documentation audit requires exact selected declaration output and rejects missing, stale or changed bytes', async t => {
+  for (const mapped of [false, true]) {
+    const root = await releaseBuild(t, mapped), env = {...process.env};
+    if (mapped) env.CLANK_SOURCE_MAPS = '1'; else delete env.CLANK_SOURCE_MAPS;
+    const command = () => execute(process.execPath, [join(root, 'scripts', 'docs-audit.mjs')], {env, timeout: 15000});
+    const output = join(root, 'dist', 'contract.d.ts');
+    const expected = mapped ? declarationFixture : declarationExpected;
+    // This supplies the actual required layout independently of build selection,
+    // so the before-fix copy-only audit rejects the valid default representation.
+    await writeFile(output, expected);
+    assert.match((await command()).stdout, /synchronized declaration files/);
+    for (const altered of [expected.replace('value?:', 'other?:'), expected.replace('every byte', 'every byte!'), expected.replace('key-', 'changed-'), expected.replace('\n', '\r\n'), expected + ' ', expected.slice(0, -1), mapped ? declarationExpected : declarationFixture]) {
+      await writeFile(output, altered);
+      await assert.rejects(command(), error => error.code === 1 && /dist\/contract\.d\.ts does not match/.test(error.stderr));
+    }
+    await rm(output);
+    await assert.rejects(command(), error => error.code === 1 && /dist\/contract\.d\.ts is missing/.test(error.stderr));
+    await writeFile(output, expected);
+    await writeFile(join(root, 'src', 'contract.d.ts'), declarationFixture.replace('value?:', 'replacement?:'));
+    await assert.rejects(command(), error => error.code === 1 && /dist\/contract\.d\.ts does not match/.test(error.stderr));
+  }
+});
+
+
+for (const mapped of [false, true]) {
+  test(`declaration ${mapped ? 'mapped' : 'default'} output preserves malformed UTF-8 as exact raw bytes`, async t => {
+    const root = await releaseBuild(t, mapped);
+    const original = await readFile(join(root, 'src', 'malformed.d.ts'));
+    assert.ok(!Buffer.from(original.toString('utf8')).equals(original), 'fixture actually has malformed UTF-8');
+    assert.deepEqual(await readFile(join(root, 'dist', 'malformed.d.ts')), original);
+  });
+
+  test(`declaration ${mapped ? 'mapped' : 'default'} audit rejects changed malformed bytes with identical decoded text`, async t => {
+    const root = await releaseBuild(t, mapped), env = {...process.env};
+    if (mapped) env.CLANK_SOURCE_MAPS = '1'; else delete env.CLANK_SOURCE_MAPS;
+    const command = () => execute(process.execPath, [join(root, 'scripts', 'docs-audit.mjs')], {env, timeout: 15000});
+    const original = Buffer.concat([Buffer.from('export interface AuditBytes {} // '), Buffer.from([0x80]), Buffer.from('\n')]);
+    const changed = Buffer.from(original); changed[changed.indexOf(0x80)] = 0x81;
+    assert.equal(original.toString('utf8'), changed.toString('utf8'));
+    await writeFile(join(root, 'src', 'audit-bytes.d.ts'), original);
+    await writeFile(join(root, 'dist', 'audit-bytes.d.ts'), original);
+    assert.match((await command()).stdout, /synchronized declaration files/);
+    await writeFile(join(root, 'dist', 'audit-bytes.d.ts'), changed);
+    await assert.rejects(command(), error => error.code === 1 && /dist\/audit-bytes\.d\.ts does not match/.test(error.stderr));
+  });
+}
