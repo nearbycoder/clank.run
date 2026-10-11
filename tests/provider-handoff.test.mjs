@@ -8,6 +8,8 @@ import {DatabaseSync} from 'node:sqlite';
 import {randomUUID} from 'node:crypto';
 import {fork} from 'node:child_process';
 import {once} from 'node:events';
+import {fileURLToPath} from 'node:url';
+import {linuxProcessBirth} from '../dist/platform-supervisor.js';
 import test from 'node:test';
 import {providerDockerClient,runProviderDockerClient} from '../dist/provider-docker-client.js';
 import {acquireProviderServiceOwnership,admitProviderService,createProviderHandoffDomain,initializeProviderHandoff,installProviderHandoffProject,insertProviderHandoffBarrier} from '../dist/provider-handoff.js';
@@ -117,10 +119,9 @@ test('one hundred complete catalogs fit the native bounds and a further reservat
  let owner=await f.open(),domain=await f.getDomain(owner);await assert.rejects(installProviderHandoffProject(owner,domain,'one_too_many'),/capacity/);owner.close();owner=await f.open();await admitProviderService(owner,providerDockerClient(f.options),'owner-original');owner.close();const check=new DatabaseSync(f.index,{readOnly:true});try{assert.equal(check.prepare('SELECT COUNT(*) AS n FROM clank_provider_handoff_projects').get().n,100);}finally{check.close();}
 });
 test('the frozen native command deadline includes inherited output pipes after its direct child exits',async t=>{
- const f=await fixture(t),program=join(f.directory,'pipe-parent.mjs'),pidFile=join(f.directory,'pipe-child.pid');
- await writeFile(program,`import {spawn} from 'node:child_process';import fs from 'node:fs';const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:['ignore','inherit','inherit']});fs.writeFileSync(${JSON.stringify(pidFile)},String(child.pid));child.unref();process.exit(0);`);
- const client=providerDockerClient({executable:process.execPath}),start=performance.now();let pid;
- try{await assert.rejects(runProviderDockerClient(client,[program],{timeoutMs:300,maxOutputBytes:4096}),/deadline/);pid=Number(await readFile(pidFile,'utf8'));assert.ok(performance.now()-start<3000);}finally{if(pid===undefined){try{pid=Number(await readFile(pidFile,'utf8'));}catch{}}if(Number.isInteger(pid)&&pid>0){try{process.kill(pid,'SIGKILL');}catch(error){if(error.code!=='ESRCH')throw error;}}}
+ const f=await fixture(t),program=fileURLToPath(new URL('./fixtures/provider-handoff-pipe-parent.mjs',import.meta.url)),pidFile=join(f.directory,'pipe-child.pid');
+ const client=providerDockerClient({executable:process.execPath}),start=performance.now();let identity;
+ try{await assert.rejects(runProviderDockerClient(client,[program,pidFile],{timeoutMs:300,maxOutputBytes:4096}),/deadline/);identity=JSON.parse(await readFile(pidFile,'utf8'));assert.ok(performance.now()-start<3000);}finally{if(identity===undefined){try{identity=JSON.parse(await readFile(pidFile,'utf8'));}catch{}}if(Number.isInteger(identity?.pid)&&identity.pid>0&&typeof identity.birth==='string'){try{if(await linuxProcessBirth(identity.pid)===identity.birth)process.kill(identity.pid,'SIGKILL');}catch(error){if(!['ESRCH','ENOENT'].includes(error.code))throw error;}}}
 });
 test('a real parent replacement during the domain await refuses and preserves the replacement sentinel',async t=>{
  const f=await fixture(t),owner=await f.open(),pending=f.getDomain(owner),service=join(f.root,'service'),retained=join(f.root,'retained-service');fsSync.renameSync(service,retained);fsSync.mkdirSync(service,{mode:0o700});fsSync.writeFileSync(join(service,'foreign-sentinel'),'preserve',{mode:0o600});await assert.rejects(pending,/identity changed/);owner.close();assert.equal(await readFile(join(service,'foreign-sentinel'),'utf8'),'preserve');assert.ok((await readFile(join(retained,'.writer.sqlite'))).byteLength>0);
