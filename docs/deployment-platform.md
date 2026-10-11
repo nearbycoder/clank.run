@@ -241,6 +241,21 @@ authentication, and only retries cleanup. A stale operation or epoch returns a c
 finishes, interrupted or failed candidates require a new deployment idempotency key. An already
 queued ordinary activation can resume with its original key and current authority.
 
+The Console’s **Deployments → Canary rollout** panel shows retained measurements and provider
+cleanup status even when measurement is disabled. **Clean up candidate** uses the displayed
+operation and epoch; it only stops that candidate. A failed or uncertain request refreshes status
+without automatically sending another mutation. Read-only support sessions cannot run cleanup.
+
+The linked-project CLI provides the same controls:
+
+```sh
+clank canary status --json
+clank canary recover canary_EXACT_OPERATION --expected-epoch 12 --json
+```
+
+Copy the exact operation and current retained epoch from status. A stale epoch is a conflict;
+inspect again before deciding whether to retry. Cleanup does not promote a release.
+
 Restart never resumes a partially measured stage or reuses its pass to allocate a new writer. It
 withdraws candidate routing and retries exact retirement, including when provider canary policy is
 now disabled. An ordinary activation already durably queued can continue. Retained uncertainty
