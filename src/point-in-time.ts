@@ -1,3 +1,4 @@
+import { SOURCE_SEAL_SQL, validateSourceState, validateSourceBase, validateSourceTail, validateSourceSeal, newSourceSeal, sourceBatch } from "./point-in-time-source.ts";
 import { sealPointInTimeState } from "./point-in-time-state.ts";
 import { SQLITE_INTERNAL, type SQLiteCaptureConnection } from "./sqlite-internal.ts";
 import type { SQLiteDatabase } from "./backend.ts";
@@ -106,6 +107,8 @@ export interface PointInTimeArchiveRestoreOptions extends PointInTimeArchiveBoun
   assertCurrent?: () => void;
 }
 const archiveSources = new WeakMap<PointInTimeRecovery, (bounds: PointInTimeArchiveBounds) => Promise<PointInTimeArchive>>();
+const ownedSources = new WeakMap<PointInTimeRecovery, (options: PointInTimeTransferSourceOptions) => PointInTimeTransferSource>();
+const sourceAcknowledgments = new WeakMap<PointInTimeRecovery, () => void>();
 const transferSources = new WeakMap<PointInTimeRecovery, (options: PointInTimeTransferExportOptions) => PointInTimeTransferBatch>();
 const bounded = (value: number, name: string, min: number, max: number) => {
   if (!Number.isSafeInteger(value) || value < min || value > max) throw new TypeError(`Invalid ${name}.`);
@@ -153,6 +156,7 @@ export async function openPointInTimeRecovery(database: SQLiteDatabase<any>, opt
   if (!internal.captureTransactions) throw new Error("Database does not support transactional recovery capture.");
   let connection!: SQLiteCaptureConnection;
   let fatal: unknown;
+  let sourceAdmission: (write?: boolean) => void = () => {};
   let assertSealed!: () => void;
   const hash = (value: string | Uint8Array) => crypto.createHash("sha256").update(value).digest("hex");
   let schema = "";
@@ -185,6 +189,7 @@ export async function openPointInTimeRecovery(database: SQLiteDatabase<any>, opt
     let sessions: Array<{ table: string; session: ReturnType<SQLiteCaptureConnection["createSession"]> }> = [];
     const ensureSealed = () => {
       if (fatal) throw fatal;
+      sourceAdmission();
       if (Number(connection.prepare("PRAGMA data_version").get()?.data_version) !== dataVersion || shape() !== schema) {
         fatal = new Error("Recovery detected another SQLite writer or a schema change; writes are fenced until operator recovery."); throw fatal;
       }
@@ -196,9 +201,9 @@ export async function openPointInTimeRecovery(database: SQLiteDatabase<any>, opt
     const sentinel = connection.createSession({ table: "clank_pitr_state" });
     connection.exec("COMMIT");
     return {
-      before() { ensureSealed(); sessions = [{ table: "*", session: connection.createSession({}) }]; },
+      before() { ensureSealed(); sourceAdmission(true); sessions = [{ table: "*", session: connection.createSession({}) }]; },
       commit() {
-        ensureSealed();
+        ensureSealed(); sourceAdmission(true);
         const changes = sessions.map(({ table, session }) => ({ table, bytes: (globalThis as any).Buffer.from(session.changeset()).toString("base64") })).filter((entry) => entry.bytes);
         const prior = connection.prepare("SELECT * FROM clank_pitr_state WHERE id=1").get()!;
         const state = stateDigest();
@@ -233,13 +238,17 @@ export async function openPointInTimeRecovery(database: SQLiteDatabase<any>, opt
   const state = () => connection.prepare("SELECT * FROM clank_pitr_state WHERE id=1").get()!;
   const status = (): PointInTimeRecoveryStatus => { const row = state(); return { epoch: String(row.epoch), committedThrough: Number(row.sequence), exportedThrough: Number(row.exported), lastCommittedAt: Number(row.committed_at), baseBackupId: String(row.base_id) }; };
   const syncWrite = async (file: string, contents: string, replace = false) => {
+    const checked=async <T>(operation:()=>Promise<T>):Promise<T>=>{sourceAdmission();const value=await operation();sourceAdmission();return value;};
     const temporary = `${file}.tmp-${crypto.randomUUID()}`;
-    const handle = await fs.open(temporary, "wx", 0o600);
-    try { await handle.writeFile(contents); await handle.sync(); } finally { await handle.close(); }
-    try { if (replace) await fs.rename(temporary, file); else await fs.link(temporary, file); } catch (error) {
-      if ((error as { code?: string }).code !== "EEXIST" || await fs.readFile(file, "utf8") !== contents) throw error;
-    } finally { await fs.rm(temporary, { force: true }); }
-    const parent = await fs.open(directory, "r"); try { await parent.sync(); } finally { await parent.close(); }
+    sourceAdmission();const handle=await fs.open(temporary,"wx",0o600);
+    try {sourceAdmission();await checked(()=>handle.writeFile(contents));await checked(()=>handle.sync());} finally {await handle.close();}
+    try {
+      sourceAdmission();if(replace)await checked(()=>fs.rename(temporary,file));else await checked(()=>fs.link(temporary,file));
+    }catch(error){
+      if((error as {code?:string}).code!=="EEXIST"||await checked(()=>fs.readFile(file,"utf8"))!==contents)throw error;
+    }finally{await fs.rm(temporary,{force:true});}
+    sourceAdmission();const parent=await fs.open(directory,"r");
+    try{sourceAdmission();await checked(()=>parent.sync());}finally{await parent.close();}sourceAdmission();
   };
   try {
     if (!state().base_id) {
@@ -252,6 +261,7 @@ export async function openPointInTimeRecovery(database: SQLiteDatabase<any>, opt
   } catch (error) { manager.close(); throw error; }
   const flush = async () => {
     if (closed) throw new Error("Recovery exporter is closed.");
+    sourceAdmission();
     if (flight) return flight;
     flight = (async () => {
       const through = Number(state().sequence);
@@ -259,24 +269,30 @@ export async function openPointInTimeRecovery(database: SQLiteDatabase<any>, opt
         const row = connection.prepare("SELECT envelope FROM clank_pitr_journal WHERE sequence=?").get(cursor);
         if (!row) throw new Error("Recovery journal has a missing committed transaction.");
         await syncWrite(path.join(directory, `${String(cursor).padStart(16, "0")}.json`), String(row.envelope));
-        connection.prepare("UPDATE clank_pitr_state SET exported=? WHERE id=1").run(cursor);
+        sourceAdmission();connection.prepare("UPDATE clank_pitr_state SET exported=? WHERE id=1").run(cursor);sourceAdmission();
       }
       const headRow = state();
       const checkpoint = { epoch: headRow.epoch, sequence: through, digest: through ? JSON.parse(String(connection.prepare("SELECT envelope FROM clank_pitr_journal WHERE sequence=?").get(through)!.envelope)).digest : "0".repeat(64), committedAt: through ? JSON.parse(String(connection.prepare("SELECT envelope FROM clank_pitr_journal WHERE sequence=?").get(through)!.envelope)).committedAt : Number(headRow.committed_at) };
       const encoded = JSON.stringify(checkpoint);
       await syncWrite(path.join(directory, "head.json"), JSON.stringify({ checkpoint, mac: crypto.createHmac("sha256", key).update(encoded).digest("hex") }), true);
-      return status();
+      sourceAdmission();return status();
     })().finally(() => { flight = undefined; });
     return flight;
   };
   await flush();
   if (interval !== false) { timer = setInterval(() => { void flush().catch((error) => { try { onError?.(error); } catch {} }); }, interval); (timer as ReturnType<typeof setInterval> & { unref?: () => void }).unref?.(); }
-  const recovery: PointInTimeRecovery = Object.freeze({ status, flush, async close() { if (closed) return; if (timer) clearInterval(timer); await (flight ?? flush()); closed = true; archiveSources.delete(recovery); transferSources.delete(recovery); manager.close(); } });
+  const recovery: PointInTimeRecovery = Object.freeze({ status, flush, async close() { if (closed) return; if (timer) clearInterval(timer); try {await (flight ?? flush());} finally {closed = true; archiveSources.delete(recovery); transferSources.delete(recovery); ownedSources.delete(recovery); sourceAcknowledgments.delete(recovery); manager.close();} } });
   transferSources.set(recovery, input => {
     const identity = transferIdentity(input.identity), after = transferCursor(input.after), limits = transferBounds(input);
     const through = bounded(input.throughSequence,"throughSequence",after.sequence+1,Number.MAX_SAFE_INTEGER);
     assertSealed();if(closed)throw new Error("Recovery transfer source is closed.");
     const retained=state();
+    if(enrolled){
+      if(JSON.stringify(identity)!==JSON.stringify(enrolled.binding.identity))throw new Error("Enrolled source transfer identity cannot be overridden.");
+      const verified=validateSourceState(connection,crypto,key,stateMaximum);validateSourceBase(connection,crypto,key,verified,enrolled.binding);
+      if(verified.remote_exports_protocol===2)validateSourceSeal(connection,crypto,key,verified,enrolled.binding,enrolled.after!);
+      const batch=sourceBatch(connection,crypto,key,verified,enrolled.binding,after,through,limits);assertSealed();return batch;
+    }
     const digestAt=(sequence:number)=>sequence===0?"0".repeat(64):JSON.parse(String(connection.prepare("SELECT envelope FROM clank_pitr_journal WHERE sequence=?").get(sequence)?.envelope??"null"))?.digest;
     if(after.epoch!==retained.epoch||through>Number(retained.sequence)||through-after.sequence>limits.entries||digestAt(after.sequence)!==after.digest)throw new Error("Transfer prefix is unavailable or does not match the captured journal.");
     const envelopes:string[]=[];let bytes=1024;
@@ -294,14 +310,95 @@ export async function openPointInTimeRecovery(database: SQLiteDatabase<any>, opt
     assertSealed();return Object.freeze(batch);
   });
   let exporting = false;
+  let enrolled: {binding:PointInTimeTransferSourceBinding;assertion:()=>undefined;phase:"acquiring"|"active"|"sealed"|"poisoned";capability?:PointInTimeTransferSource;after?:PointInTimeTransferCursor} | undefined;
+  let control = false, asserting = false;
+  const assertOwner = () => {
+    if(!enrolled)return;
+    if(enrolled.phase==="poisoned"||enrolled.phase==="acquiring"&&!control)throw new Error("Source acquisition is uncertain; managed writes remain fenced until shutdown.");
+    if(asserting)throw new Error("Source authority cannot reenter the captured connection.");
+    asserting=true;
+    try {
+      assertUndefined(enrolled.assertion);
+      if(String(connection.prepare("PRAGMA locking_mode").get()?.locking_mode)!=="exclusive")throw new Error("Source native exclusivity was lost.");
+      const protocol=state().remote_exports_protocol;
+      if(protocol!==(enrolled.phase==="sealed"?2:1))throw new Error("Source terminal protocol changed.");
+      if(enrolled.phase==="sealed")validateSourceSeal(connection,crypto,key,validateSourceState(connection,crypto,key,stateMaximum),enrolled.binding,enrolled.after!);
+      else if(connection.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_pitr_source_seal'").get())throw new Error("Source terminal metadata appeared without its decision.");
+    }catch(error){enrolled.phase="poisoned";throw error;}finally{asserting=false;}
+  };
+  sourceAdmission=(write=false)=>{assertOwner();if(write&&enrolled?.phase==="sealed")throw new Error("Source is terminally sealed; managed writes are forbidden.");};
+  sourceAcknowledgments.set(recovery,()=>{assertSealed();if(closed)throw new Error("Source is closed.");});
+  ownedSources.set(recovery,input=>{
+    const binding=sourceBinding(input),assertion=input.assertSourceCurrent;
+    if(typeof assertion!=="function")throw new TypeError("A synchronous native source ownership assertion is required.");
+    if(closed||flight||exporting)throw new Error("Source capture must be idle and open.");
+    if(enrolled){
+      if(JSON.stringify(enrolled.binding)!==JSON.stringify(binding)||enrolled.assertion!==assertion)throw new Error("Source enrollment identity or authority retry conflict.");
+      assertSealed();if(!enrolled.capability)throw new Error("Source acquisition is uncertain.");return enrolled.capability;
+    }
+    return connection.withNativeControl(()=>{
+      assertUndefined(assertion);assertSealed();
+      if(connection.path===":memory:"||String(connection.prepare("PRAGMA journal_mode").get()?.journal_mode)!=="wal"||![2,3].includes(Number(connection.prepare("PRAGMA synchronous").get()?.synchronous)))throw new Error("Source requires native file-backed WAL with FULL or EXTRA durability.");
+      const prior=validateSourceState(connection,crypto,key,stateMaximum);validateSourceBase(connection,crypto,key,prior,binding);
+      if(prior.remote_exports_protocol!==1)throw new Error("Source is already terminal.");
+      enrolled={binding,assertion,phase:"acquiring"};control=true;let began=false;
+      try {
+        connection.exec("PRAGMA locking_mode=EXCLUSIVE");connection.exec("BEGIN IMMEDIATE");began=true;
+        assertSealed();const acquired=validateSourceState(connection,crypto,key,stateMaximum);validateSourceBase(connection,crypto,key,acquired,binding);assertOwner();
+        connection.exec("COMMIT");began=false;assertOwner();assertSealed();enrolled.phase="active";
+        const capability:PointInTimeTransferSource=Object.freeze({
+          export(options:Omit<PointInTimeTransferExportOptions,"identity">){
+            try{if(!options||Object.keys(options).some(name=>!["after","throughSequence","maxBatchBytes","maxEntries"].includes(name)))throw new TypeError("Source export identity and authority cannot be overridden.");
+              return exportPointInTimeTransfer(recovery,{identity:binding.identity,after:options.after,throughSequence:options.throughSequence,maxBatchBytes:options.maxBatchBytes,maxEntries:options.maxEntries});
+            }catch(error){return Promise.reject(error);}
+          },
+          seal(inputAfter:PointInTimeTransferCursor){
+            const after=transferCursor(inputAfter);
+            return connection.withNativeControl(()=>{
+              if(closed||flight||exporting)throw new Error("Source capture must be idle and open before sealing.");
+              if(enrolled!.phase==="poisoned"){
+                // A lost native COMMIT acknowledgment may still leave exact durable evidence.
+                // Reading that proof never revives managed writes or an uncertain acquisition.
+                assertUndefined(assertion);
+                if(String(connection.prepare("PRAGMA locking_mode").get()?.locking_mode)!=="exclusive")throw new Error("Source native exclusivity was lost.");
+                const retained=validateSourceState(connection,crypto,key,stateMaximum),receipt=validateSourceSeal(connection,crypto,key,retained,binding,after);
+                assertUndefined(assertion);return receipt;
+              }
+              assertSealed();const before=validateSourceState(connection,crypto,key,stateMaximum);validateSourceBase(connection,crypto,key,before,binding);
+              if(enrolled!.phase==="sealed"){const receipt=validateSourceSeal(connection,crypto,key,before,binding,after);assertSealed();return receipt;}
+              validateSourceTail(connection,crypto,key,before,binding,after);
+              let started=false;
+              try {
+                connection.exec("BEGIN IMMEDIATE");started=true;assertSealed();
+                const stateBefore=validateSourceState(connection,crypto,key,stateMaximum);validateSourceBase(connection,crypto,key,stateBefore,binding);validateSourceTail(connection,crypto,key,stateBefore,binding,after);
+                const receipt=newSourceSeal(crypto,key,stateBefore,binding,after),encoded=JSON.stringify(receipt),bytes=(globalThis as any).Buffer.byteLength(encoded);
+                if(bytes>16384)throw new Error("Source seal exceeds its byte bound.");
+                connection.exec(SOURCE_SEAL_SQL);
+                const inserted=connection.prepare("INSERT INTO clank_pitr_source_seal VALUES(1,1,?,?)").run(encoded,bytes);
+                const updated=connection.prepare("UPDATE clank_pitr_state SET remote_exports_protocol=2 WHERE id=1 AND epoch=? AND remote_exports_protocol=1 AND sequence=? AND digest=? AND state_hash=? AND base_id=?").run(stateBefore.epoch,stateBefore.sequence,stateBefore.digest,stateBefore.state_hash,stateBefore.base_id);
+                const actual=validateSourceState(connection,crypto,key,stateMaximum);
+                if(Number(inserted.changes)!==1||Number(updated.changes)!==1||JSON.stringify(actual)!==JSON.stringify({...stateBefore,remote_exports_protocol:2}))throw new Error("Source terminal decision was not retained atomically.");
+                validateSourceSeal(connection,crypto,key,actual,binding,after);
+                assertUndefined(assertion);if(String(connection.prepare("PRAGMA locking_mode").get()?.locking_mode)!=="exclusive")throw new Error("Source native exclusivity was lost.");
+                connection.exec("COMMIT");started=false;enrolled!.phase="sealed";enrolled!.after=after;
+                assertSealed();return receipt;
+              }catch(error){if(started)try{connection.exec("ROLLBACK");}catch{}enrolled!.phase="poisoned";throw error;}
+            });
+          }
+        });
+        enrolled.capability=capability;return capability;
+      }catch(error){if(began)try{connection.exec("ROLLBACK");}catch{}enrolled.phase="poisoned";throw error;}finally{control=false;}
+    });
+  });
   archiveSources.set(recovery, async bounds => {
     const limits = archiveBounds(bounds);
     if (closed || exporting) throw new Error("Recovery archive exporter is closed or busy.");
     exporting = true;
     try {
+      if(enrolled&&(bounds.operationId!==enrolled.binding.baseOperationId||JSON.stringify(bounds.binding)!==JSON.stringify(enrolled.binding.identity.source)))throw new Error("Enrolled source permits only exact retained base archive replay.");
       if(bounds.operationId!==undefined){
         if(!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(bounds.operationId)) throw new TypeError("Invalid recovery export operationId.");
-        if(state().remote_exports_protocol!==1)throw new Error("Retained remote export protocol is unsupported.");
+        if(state().remote_exports_protocol!==1&&!(enrolled?.phase==="sealed"&&state().remote_exports_protocol===2))throw new Error("Retained remote export protocol is unsupported.");
         assertSealed();
         const retained=connection.prepare("SELECT max_bytes,max_entries,archive,bytes FROM clank_pitr_remote_exports WHERE operation=?").get(bounds.operationId);
         if(retained){
@@ -314,6 +411,7 @@ export async function openPointInTimeRecovery(database: SQLiteDatabase<any>, opt
             return Object.freeze(archive) as PointInTimeArchive;
         }
       }
+      if(enrolled)throw new Error("Enrolled source retained base receipt is missing.");
       assertSealed(); await flush(); assertSealed();
       // Read one authenticated head. Immutable journal entries remain valid if
       // later application transactions or periodic exports advance the head.
@@ -674,7 +772,7 @@ function transferAuthority(options:PointInTimeTransferAuthority):()=>void {
 /** Reads only the requested immutable encrypted native journal entries; never copies the base again. */
 export function exportPointInTimeTransfer(recovery:PointInTimeRecovery,options:PointInTimeTransferExportOptions):Promise<PointInTimeTransferBatch> {
   const source=transferSources.get(recovery);
-  try{if(!source)throw new Error("A current native point-in-time capture handle is required.");return Promise.resolve(source(options));}catch(error){return Promise.reject(error);}
+  try{if(!source)throw new Error("A current native point-in-time capture handle is required.");const result=source(options),acknowledge=sourceAcknowledgments.get(recovery);return Promise.resolve().then(()=>{acknowledge?.();return result;});}catch(error){return Promise.reject(error);}
 }
 interface TransferWorkspace {fs:any;path:any;crypto:any;target:string;root:string;anchoredTarget:string;anchoredRoot:string;directories:readonly PinnedSQLiteDirectory[];current:()=>void;}
 async function transferWorkspace<T>(targetPath:string,authority:()=>void,work:(context:TransferWorkspace)=>Promise<T>):Promise<T>{
@@ -792,4 +890,87 @@ async function restorePinnedSQLiteBackup(sourcePath:string,destinationPath:strin
   }finally{
     for(const suffix of ["","-journal","-wal","-shm"])await fs.rm(anchoredTemporary+suffix,{force:true});
   }
+}
+
+export interface PointInTimeTransferSourceBinding {
+  identity: PointInTimeTransferIdentity;
+  baseOperationId: string;
+  baseArchiveSha256: string;
+  initialCursor: PointInTimeTransferCursor;
+}
+export interface PointInTimeTransferSourceOptions extends PointInTimeTransferSourceBinding {
+  /** Actual synchronous native ownership, never a generation number or heartbeat. */
+  assertSourceCurrent(): undefined;
+}
+export interface PointInTimeTransferSource {
+  export(options: Omit<PointInTimeTransferExportOptions, "identity">): Promise<PointInTimeTransferBatch>;
+  seal(after: PointInTimeTransferCursor): PointInTimeTransferSourceSeal;
+}
+export interface PointInTimeTransferSourceSeal extends Readonly<PointInTimeTransferSourceBinding> {
+  readonly protocol: "clank-pitr-source-seal/1";
+  readonly baseBackupId: string;
+  readonly keyId: string;
+  readonly after: PointInTimeTransferCursor;
+  readonly through: PointInTimeTransferCursor;
+  readonly committedAt: number;
+  readonly schemaHash: string;
+  readonly stateHash: string;
+  readonly inputDigest: string;
+  readonly authentication: string;
+}
+export interface PointInTimeTransferSourceInspectionOptions extends PointInTimeTransferSourceBinding {
+  sourcePath: string;
+  encryptionKey: Uint8Array;
+  after: PointInTimeTransferCursor;
+  /** Current ownership of the retained source data/barrier; does not prove process absence. */
+  assertCurrent(): undefined;
+  maxDurationMs?: number;
+  maxDatabaseBytes?: number;
+  maxStateBytes?: number;
+}
+export interface PointInTimeTransferSealedExportOptions extends PointInTimeTransferSourceInspectionOptions, PointInTimeTransferBounds {
+  expectedCursor: PointInTimeTransferCursor;
+  throughSequence: number;
+}
+
+function assertUndefined(assertion:()=>undefined):void {
+  const result:unknown=assertion();
+  if(result!==undefined){if(result&&(typeof result==='object'||typeof result==='function')&&typeof Reflect.get(result,'then')==='function')void Promise.resolve(result).catch(()=>undefined);throw new TypeError("Native source ownership assertions must synchronously return undefined.");}
+}
+function sourceBinding(input:PointInTimeTransferSourceBinding):PointInTimeTransferSourceBinding {
+  const identity=transferIdentity(input.identity),initialCursor=transferCursor(input.initialCursor),baseOperationId=input.baseOperationId,baseArchiveSha256=input.baseArchiveSha256;
+  if(typeof baseOperationId!=="string"||!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(baseOperationId)||typeof baseArchiveSha256!=="string"||!transferHashPattern.test(baseArchiveSha256))throw new TypeError("An exact operation-bound source base is required.");
+  return Object.freeze({identity,baseOperationId,baseArchiveSha256,initialCursor});
+}
+/** Retains actual native SQLite exclusion. This capability does not stop a provider runtime. */
+export function openPointInTimeTransferSource(recovery:PointInTimeRecovery,options:PointInTimeTransferSourceOptions):PointInTimeTransferSource {
+  const enroll=ownedSources.get(recovery);if(!enroll)throw new Error("A current native capture handle is required for source ownership.");return enroll(options);
+}
+/** Read-only retained evidence; missing or blocked files never prove source absence. */
+export function inspectPointInTimeTransferSourceSeal(options:PointInTimeTransferSourceInspectionOptions):Promise<PointInTimeTransferSourceSeal>{return inspectSealedSource(options,false) as Promise<PointInTimeTransferSourceSeal>;}
+/** Recover the terminal tail after a lost live-source response without reopening a writer. */
+export function exportSealedPointInTimeTransfer(options:PointInTimeTransferSealedExportOptions):Promise<PointInTimeTransferBatch>{return inspectSealedSource(options,true) as Promise<PointInTimeTransferBatch>;}
+async function inspectSealedSource(options:PointInTimeTransferSourceInspectionOptions|PointInTimeTransferSealedExportOptions,exportTail:boolean):Promise<PointInTimeTransferSourceSeal|PointInTimeTransferBatch>{
+  const binding=sourceBinding(options),after=transferCursor(options.after),key=keyBytes(options.encryptionKey),sourcePath=options.sourcePath,assertion=options.assertCurrent;
+  if(typeof assertion!=="function")throw new TypeError("Current retained-data ownership is required.");
+  const current=restoreGuard(options.maxDurationMs,()=>assertUndefined(assertion)),maximum=bounded(options.maxDatabaseBytes??512*1024*1024,"maxDatabaseBytes",4096,512*1024*1024),stateMaximum=bounded(options.maxStateBytes??32*1024*1024,"maxStateBytes",1024,128*1024*1024);
+  const tail=exportTail?options as PointInTimeTransferSealedExportOptions:undefined;
+  const request={binding,after,stateMaximum,maximum,...(tail?{expectedCursor:transferCursor(tail.expectedCursor),throughSequence:bounded(tail.throughSequence,"throughSequence",1,Number.MAX_SAFE_INTEGER),limits:transferBounds(tail)}:{})};
+  let pinned:PinnedSQLiteDirectory|undefined;
+  try {
+    current();const fsName="node:fs",pathName="node:path";const [fs,path]=await Promise.all([import(fsName),import(pathName)]);current();
+    if((globalThis as any).process.platform!=="linux"||typeof sourcePath!=="string"||!sourcePath||sourcePath.includes("\0"))throw new Error("Source inspection requires an exact private Linux file.");
+    const source=path.resolve(sourcePath),parent=path.dirname(source);
+    pinned=await pinSQLiteDirectory(parent);current();
+    const directory=fs.fstatSync(pinned.fd),anchored=`${pinned.anchor}/${path.basename(source)}`,file=fs.lstatSync(anchored);
+    if(directory.uid!==(globalThis as any).process.geteuid()||(directory.mode&0o022)!==0||!file.isFile()||file.isSymbolicLink()||file.nlink!==1||file.uid!==(globalThis as any).process.geteuid()||(file.mode&0o022)!==0||file.size>maximum)throw new Error("Source inspection requires a bounded privately owned regular file.");
+    const check=()=>{current();const visible=fs.lstatSync(parent),actual=fs.lstatSync(anchored);if(visible.dev!==directory.dev||visible.ino!==directory.ino||actual.dev!==file.dev||actual.ino!==file.ino||!actual.isFile()||actual.nlink!==1)throw new Error("Retained source path changed during inspection.");};
+    check();const result=await runSQLiteTask<PointInTimeTransferSourceSeal|PointInTimeTransferBatch>("recovery","inspectSourceSeal",[source,{...request,fileIdentity:{dev:file.dev,ino:file.ino},key:Array.from(key)}],[pinned]);check();
+    // The worker returns only validated bounded immutable protocol data.
+    return freezeSourceProof(result);
+  }finally{key.fill(0);await pinned?.close();current();}
+}
+
+function freezeSourceProof<T>(value:T):T {
+  if(value&&typeof value==="object"){for(const item of Object.values(value))freezeSourceProof(item);Object.freeze(value);}return value;
 }

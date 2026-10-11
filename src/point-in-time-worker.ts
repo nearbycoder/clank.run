@@ -1,3 +1,4 @@
+import { validateSourceState, validateSourceSeal, sourceBatch } from "./point-in-time-source.ts";
 import { sealPointInTimeState } from "./point-in-time-state.ts";
 /** Called only inside the bounded SQLite namespace. Never publishes its working database. */
 export async function replayJournal(databasePath: string, envelopes: string[], keyBytes: number[], epoch: string, through?: number, asOf?: number) {
@@ -194,4 +195,26 @@ export async function prepareTransferBase(databasePath:string,envelopePath:strin
     if(bytes!==manifest.databaseBytes||digest.digest("hex")!==manifest.databaseSha256)throw new Error("Transfer plaintext checksum failed.");
     await transferDatabase(databasePath,(database,crypto)=>{capturedState(database,crypto);if(String(database.prepare("PRAGMA integrity_check").get()?.integrity_check)!=="ok"||database.prepare("PRAGMA foreign_key_check").all().length)throw new Error("Transfer base integrity failed.");});
   }finally{key.fill(0);await handle.close();}
+}
+
+/** Does not bootstrap schema or write application/control data; WAL locking metadata may be needed. */
+export async function inspectSourceSeal(databasePath:string,request:any){
+  const sqliteName="node:sqlite",cryptoName="node:crypto",fsName="node:fs";
+  const [{DatabaseSync},crypto,fs]=await Promise.all([import(sqliteName),import(cryptoName),import(fsName)]);
+  const stat=fs.lstatSync(databasePath);
+  if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1||stat.size>request.maximum||stat.dev!==request.fileIdentity.dev||stat.ino!==request.fileIdentity.ino)throw new Error("Retained source is not the exact bounded regular file.");
+  const database=new DatabaseSync(databasePath,{readOnly:true}),key=new Uint8Array(request.key);
+  try {
+    database.enableLoadExtension(false);database.exec("PRAGMA query_only=ON;PRAGMA trusted_schema=OFF;PRAGMA busy_timeout=1000;BEGIN");
+    try {
+      const state=validateSourceState(database,crypto,key,request.stateMaximum),receipt=validateSourceSeal(database,crypto,key,state,request.binding,request.after);
+      if(String(database.prepare("PRAGMA integrity_check").get()?.integrity_check)!=="ok"||database.prepare("PRAGMA foreign_key_check").all().length)throw new Error("Retained source failed native integrity checks.");
+      let result:any=receipt;
+      if(request.expectedCursor){
+        if(request.expectedCursor.sequence<receipt.after.sequence)throw new Error("Sealed export cursor predates the independent terminal prefix.");
+        result=sourceBatch(database,crypto,key,state,request.binding,request.expectedCursor,request.throughSequence,request.limits);
+      }
+      database.exec("COMMIT");return result;
+    }catch(error){try{database.exec("ROLLBACK");}catch{}throw error;}
+  }finally{key.fill(0);database.close();}
 }

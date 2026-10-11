@@ -132,3 +132,47 @@ export interface PointInTimeTransferResult {
 export declare function exportPointInTimeTransfer(recovery: PointInTimeRecovery, options: PointInTimeTransferExportOptions): Promise<PointInTimeTransferBatch>;
 export declare function stagePointInTimeTransfer(archive: PointInTimeArchive, options: PointInTimeTransferStageOptions): Promise<PointInTimeTransferResult>;
 export declare function applyPointInTimeTransfer(batch: PointInTimeTransferBatch, options: PointInTimeTransferApplyOptions): Promise<PointInTimeTransferResult>;
+
+export interface PointInTimeTransferSourceBinding {
+  identity: PointInTimeTransferIdentity;
+  baseOperationId: string;
+  baseArchiveSha256: string;
+  initialCursor: PointInTimeTransferCursor;
+}
+export interface PointInTimeTransferSourceOptions extends PointInTimeTransferSourceBinding {
+  /** Actual synchronous native ownership, never a generation number or heartbeat. */
+  assertSourceCurrent(): undefined;
+}
+export interface PointInTimeTransferSource {
+  export(options: Omit<PointInTimeTransferExportOptions, "identity">): Promise<PointInTimeTransferBatch>;
+  seal(after: PointInTimeTransferCursor): PointInTimeTransferSourceSeal;
+}
+export interface PointInTimeTransferSourceSeal extends Readonly<PointInTimeTransferSourceBinding> {
+  readonly protocol: "clank-pitr-source-seal/1";
+  readonly baseBackupId: string;
+  readonly keyId: string;
+  readonly after: PointInTimeTransferCursor;
+  readonly through: PointInTimeTransferCursor;
+  readonly committedAt: number;
+  readonly schemaHash: string;
+  readonly stateHash: string;
+  readonly inputDigest: string;
+  readonly authentication: string;
+}
+export interface PointInTimeTransferSourceInspectionOptions extends PointInTimeTransferSourceBinding {
+  sourcePath: string;
+  encryptionKey: Uint8Array;
+  after: PointInTimeTransferCursor;
+  /** Current ownership of the retained source data/barrier; does not prove process absence. */
+  assertCurrent(): undefined;
+  maxDurationMs?: number;
+  maxDatabaseBytes?: number;
+  maxStateBytes?: number;
+}
+export interface PointInTimeTransferSealedExportOptions extends PointInTimeTransferSourceInspectionOptions, PointInTimeTransferBounds {
+  expectedCursor: PointInTimeTransferCursor;
+  throughSequence: number;
+}
+export declare function openPointInTimeTransferSource(recovery: PointInTimeRecovery, options: PointInTimeTransferSourceOptions): PointInTimeTransferSource;
+export declare function inspectPointInTimeTransferSourceSeal(options: PointInTimeTransferSourceInspectionOptions): Promise<PointInTimeTransferSourceSeal>;
+export declare function exportSealedPointInTimeTransfer(options: PointInTimeTransferSealedExportOptions): Promise<PointInTimeTransferBatch>;

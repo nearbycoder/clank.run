@@ -152,11 +152,9 @@ test('missing native provider receipt storage cannot silently reset an enrolled 
   const f=await fixture(t);await f.scope.run(async()=>{
     f.database.transaction(db=>db.table('records').insert({value:'retained'}));const archive=await exportPointInTimeRecovery(f.recovery,{operationId:'retained_native_receipt'}),epoch=await readFile(join(f.directory,'epoch.json'),'utf8');await f.recovery.close();f.database.close();
     const native=new DatabaseSync(f.source);try{native.exec('DROP TABLE clank_pitr_remote_exports');}finally{native.close();}
-    const database=await openSQLite(schema,{path:f.source});try{
-      await assert.rejects(openPointInTimeRecovery(database,{directory:f.directory,encryptionKey:f.key,exportIntervalMs:false}),/remote export protocol is missing or unsupported/);
-      const observer=new DatabaseSync(f.source,{readOnly:true});try{observer.exec('PRAGMA busy_timeout=5000');assert.equal(observer.prepare('SELECT epoch,remote_exports_protocol FROM clank_pitr_state').get().epoch,archive.epoch);assert.equal(observer.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE name='clank_pitr_remote_exports'").get().n,0);}finally{observer.close();}
-      assert.equal(await readFile(join(f.directory,'epoch.json'),'utf8'),epoch);
-    }finally{database.close();}
+    await assert.rejects(openSQLite(schema,{path:f.source}),/remote export protocol is terminal, partial or unsupported/);
+    const observer=new DatabaseSync(f.source,{readOnly:true});try{observer.exec('PRAGMA busy_timeout=5000');assert.equal(observer.prepare('SELECT epoch,remote_exports_protocol FROM clank_pitr_state').get().epoch,archive.epoch);assert.equal(observer.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE name='clank_pitr_remote_exports'").get().n,0);}finally{observer.close();}
+    assert.equal(await readFile(join(f.directory,'epoch.json'),'utf8'),epoch);
   });
 });
 
@@ -175,11 +173,12 @@ for(const fault of ['missing-row','missing-journal','missing-both'])test(`native
     const epoch=await readFile(join(f.directory,'epoch.json'),'utf8'),envelope=await readFile(join(f.directory,'0000000000000001.json'),'utf8');
     await f.recovery.close();f.database.close();const corrupt=new DatabaseSync(f.source);
     try{if(fault==='missing-row')corrupt.exec('DELETE FROM clank_pitr_state');else if(fault==='missing-journal')corrupt.exec('DROP TABLE clank_pitr_journal');else corrupt.exec('DROP TABLE clank_pitr_state; DROP TABLE clank_pitr_journal');}finally{corrupt.close();}
-    const database=await openSQLite(schema,{path:f.source});try{
-      await assert.rejects(openPointInTimeRecovery(database,{directory:f.directory,encryptionKey:f.key,exportIntervalMs:false}),/retained epoch is missing or partial/);
-      assert.equal(await readFile(join(f.directory,'epoch.json'),'utf8'),epoch);assert.equal(await readFile(join(f.directory,'0000000000000001.json'),'utf8'),envelope);
-      assert.equal(database.read(db=>db.table('records').collect())[0].value,'retained');
-      const inspect=new DatabaseSync(f.source,{readOnly:true});try{if(fault==='missing-row')assert.equal(inspect.prepare('SELECT count(*) AS n FROM clank_pitr_state').get().n,0);if(fault==='missing-both')assert.equal(inspect.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE name IN ('clank_pitr_state','clank_pitr_journal')").get().n,0);}finally{inspect.close();}
-    }finally{database.close();}
+    await assert.rejects(openSQLite(schema,{path:f.source}),/Retained recovery (?:state is missing or invalid|metadata is partial)/);
+    assert.equal(await readFile(join(f.directory,'epoch.json'),'utf8'),epoch);assert.equal(await readFile(join(f.directory,'0000000000000001.json'),'utf8'),envelope);
+    const inspect=new DatabaseSync(f.source,{readOnly:true});try{
+      assert.equal(JSON.parse(inspect.prepare('SELECT _data FROM clank_records').get()._data).value,'retained');
+      if(fault==='missing-row')assert.equal(inspect.prepare('SELECT count(*) AS n FROM clank_pitr_state').get().n,0);
+      if(fault==='missing-both')assert.equal(inspect.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE name IN ('clank_pitr_state','clank_pitr_journal')").get().n,0);
+    }finally{inspect.close();}
   });
 });

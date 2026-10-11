@@ -472,6 +472,35 @@ interface DatabaseSyncConstructor {
   new(path: string): DatabaseSyncLike;
 }
 
+// Only openSQLite can register the actual native object. Compatible structural
+// connections keep ordinary database support without gaining source ownership.
+const nativeSQLiteHandles = new WeakSet<DatabaseSyncLike>();
+
+function assertSQLiteSourceStartup(native: DatabaseSyncLike): void {
+  const markers = native.prepare(`SELECT name,type FROM sqlite_schema WHERE name COLLATE NOCASE IN
+    ('clank_pitr_state','clank_pitr_journal','clank_pitr_remote_exports','clank_pitr_source_seal') LIMIT 5`).all();
+  if (!markers.length) return;
+  const names = new Set(markers.map(row => row.name));
+  if (markers.length !== names.size || markers.some(row => row.type !== "table" || typeof row.name !== "string" || row.name !== row.name.toLowerCase())) {
+    throw new Error("Retained recovery metadata is invalid; preserve its evidence.");
+  }
+  if (names.has("clank_pitr_source_seal")) throw new Error("A terminal source seal forbids ordinary SQLite startup; preserve its evidence.");
+  if (!names.has("clank_pitr_state") || !names.has("clank_pitr_journal")) {
+    throw new Error("Retained recovery metadata is partial; preserve its evidence.");
+  }
+  const rows = native.prepare("SELECT id FROM clank_pitr_state LIMIT 2").all();
+  if (rows.length !== 1 || rows[0]!.id !== 1) throw new Error("Retained recovery state is missing or invalid; preserve its evidence.");
+  const versioned = native.prepare("PRAGMA table_info(clank_pitr_state)").all().some(column => column.name === "remote_exports_protocol");
+  if (!versioned) {
+    if (names.has("clank_pitr_remote_exports")) throw new Error("Retained remote export protocol is missing; preserve its evidence.");
+    return; // Legacy capture is upgraded only by authenticated recovery setup.
+  }
+  const protocol = native.prepare("SELECT remote_exports_protocol FROM clank_pitr_state WHERE id=1").get()?.remote_exports_protocol;
+  if (protocol !== 1 || !names.has("clank_pitr_remote_exports")) {
+    throw new Error("Retained remote export protocol is terminal, partial or unsupported; preserve its evidence.");
+  }
+}
+
 function assertGuardedSQLiteSQL(sql:string,readPragmas=false):void {
   if(readPragmas&&/^\s*(?:EXPLAIN\s+(?:QUERY\s+PLAN\s+)?)?PRAGMA\s+(?:[A-Za-z_][A-Za-z0-9_]*\.)?(?:table_info|table_xinfo|index_list|index_info|index_xinfo|database_list|foreign_key_list)\s*(?:\([^;]*\))?\s*;?\s*$/iu.test(sql))return;
   const forbidden=new Set(["BEGIN","COMMIT","END","ROLLBACK","SAVEPOINT","RELEASE","ATTACH","DETACH","PRAGMA","VACUUM"]);
@@ -552,6 +581,7 @@ export async function openSQLite<Schema extends DatabaseSchema<any>>(
   const sqlite = await import(moduleName) as unknown as { DatabaseSync: DatabaseSyncConstructor };
   const path = await prepareSQLitePath(options.path ?? ":memory:");
   const native = new sqlite.DatabaseSync(path);
+  nativeSQLiteHandles.add(native);
   let database: SQLiteDatabase<Schema> | undefined;
   try {
     database = createSQLiteDatabase(schema, native, { ...options, path });
@@ -560,6 +590,7 @@ export async function openSQLite<Schema extends DatabaseSchema<any>>(
   } catch (error) {
     if (database) database.close();
     else native.close();
+    nativeSQLiteHandles.delete(native);
     throw error;
   }
 }
@@ -591,6 +622,9 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
     try { void Promise.resolve(options.onError?.(error)).catch(() => undefined); } catch { /* Error reporting must never change database behavior. */ }
   };
 
+  // Read markers before any connection-changing PRAGMA or schema bootstrap.
+  // This is an early refusal boundary, not authentication or rollback proof.
+  assertSQLiteSourceStartup(native);
   native.enableLoadExtension?.(false);
   native.exec("PRAGMA foreign_keys = ON");
   native.exec("PRAGMA trusted_schema = OFF");
@@ -692,13 +726,26 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
   let transactionActive = false;
   let activeChanges: ReturnType<typeof changesForTransaction> | undefined;
   let readActive = false;
+  let nativeControlActive = false;
   let snapshotToken: object | undefined;
   let synchronizing = false;
   const listeners = new Set<(change: DatabaseChange) => void>();
   let poller: ReturnType<typeof setInterval> | undefined;
 
+  const assertNoNativeControl = () => {
+    if (nativeControlActive) throw new Error("SQLite native source control is active; managed reentry is forbidden.");
+  };
   const ensureOpen = () => {
     if (closed) throw new Error("SQLite database is closed.");
+    assertNoNativeControl();
+  };
+  const assertNativeIdle = () => {
+    ensureOpen();
+    if (!nativeSQLiteHandles.has(native) || path === ":memory:") throw new Error("Native source ownership requires a file-backed database opened by openSQLite.");
+    if (transactionActive || readActive || synchronizing
+      || (native as DatabaseSyncLike & { readonly isTransaction?: boolean }).isTransaction !== false) {
+      throw new Error("Native source control requires an idle SQLite database.");
+    }
   };
 
   const publish = (change: DatabaseChange) => {
@@ -709,7 +756,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
   };
 
   const synchronizeChanges = (through?: number, strict = true) => {
-    if (closed || transactionActive || readActive || synchronizing) return;
+    if (closed || transactionActive || readActive || synchronizing || nativeControlActive) return;
     synchronizing = true;
     try {
       const target = through ?? readGlobalRevision(prepared);
@@ -1398,6 +1445,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
     schema,
     inspectDatabaseQueries() { ensureOpen(); return Object.freeze([...sqlDiagnostics.values()]); },
     get version() {
+      assertNoNativeControl();
       synchronizeChanges(undefined, true);
       return version;
     },
@@ -1418,6 +1466,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
       return () => listeners.delete(listener);
     },
     close() {
+      assertNoNativeControl();
       if (closed) return;
       closed = true;
       if (poller) clearInterval(poller);
@@ -1426,6 +1475,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
       sqlDiagnostics.clear();
       capture?.close();
       native.close();
+      nativeSQLiteHandles.delete(native);
     },
     [SQLITE_INTERNAL]: {
       guardWrites(guard) {
@@ -1442,7 +1492,22 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
         ensureOpen();
         if (capture || transactionActive || readActive) throw new Error("Recovery capture requires an idle database and can only be installed once.");
         if (!native.createSession) throw new Error("Point-in-time recovery requires Node SQLite session support.");
-        capture = factory({ path, exec: (sql) => native.exec(sql), prepare: (sql) => native.prepare(sql), createSession: (options) => native.createSession!(options) });
+        capture = factory({ path, exec: (sql) => native.exec(sql), prepare: (sql) => native.prepare(sql), createSession: (options) => native.createSession!(options),
+          assertNativeIdle,
+          withNativeControl<Value>(handler: () => Value): Value {
+            assertNativeIdle();
+            if (typeof handler !== "function") throw new TypeError("Native source control requires a synchronous callback.");
+            nativeControlActive = true;
+            try {
+              const value = handler();
+              if (value && typeof (value as unknown as PromiseLike<unknown>).then === "function") {
+                void Promise.resolve(value).catch(() => undefined);
+                throw new TypeError("Native source control must complete synchronously.");
+              }
+              return value;
+            } finally { nativeControlActive = false; }
+          },
+        });
       },
       get inTransaction() {
         return transactionActive;
@@ -1459,10 +1524,12 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
         }
       },
       prepare(sql) {
+        ensureOpen();
         // Some PRAGMAs change native connection state during preparation itself.
         if (capture || writeGuard) assertGuardedSQLiteSQL(sql, true);
         let statement = prepared(sql);
         const invoke = <Value>(handler: () => Value): Value => {
+          ensureOpen();
           if (capture || writeGuard) assertGuardedSQLiteSQL(sql, true);
           if ((capture || recoveryRequired || writeGuard) && readActive && !/^\s*(?:SELECT|EXPLAIN)\b/iu.test(sql)) throw new Error(capture || recoveryRequired ? "Recovery forbids service writes inside a read snapshot." : "Native write authority forbids service writes inside a read snapshot.");
           if (capture) statement = native.prepare(sql);
