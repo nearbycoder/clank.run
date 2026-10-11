@@ -2,18 +2,20 @@ import assert from 'node:assert/strict';
 import {fork} from 'node:child_process';
 import {once} from 'node:events';
 import {createServer,request as httpRequest} from 'node:http';
-import {createHash,generateKeyPairSync,sign} from 'node:crypto';
+import {createHash,generateKeyPairSync,sign,randomUUID} from 'node:crypto';
 import {Readable} from 'node:stream';
 import {pipeline} from 'node:stream/promises';
 import {mkdtemp,mkdir,readFile,writeFile,rm,readdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
-import {createDeploymentBundle,deploymentDigest,createDeploymentCoordinatorClient,openProviderDeploymentAgent} from '../../dist/index.js';
+import {createDeploymentBundle,deploymentDigest,createDeploymentCoordinatorClient,openProviderDeploymentAgent,defineDatabase,openSQLite,openDeploymentOrchestrator} from '../../dist/index.js';
 import {openDeploymentProviderDataStore} from '../../dist/provider-data.js';
 import {openDeploymentProviderService,deploymentProviderCanaryPath} from '../../dist/provider-service.js';
 import {createDeploymentRuntimeIngress} from '../../dist/provider-runtime.js';
-import {linuxProcessBirth} from '../../dist/platform-supervisor.js';
+import {openSupervisorLease,linuxProcessBirth} from '../../dist/platform-supervisor.js';
+import {SQLITE_INTERNAL} from '../../dist/sqlite-internal.js';
+import * as shadow from '../../dist/managed-shadow.js';
 import {reservePlatformTestPorts} from './platform-test-ports.mjs';
 
 const origin='http://127.0.0.1:4200';
@@ -45,16 +47,21 @@ async function fresh(platform,control,auth,native=true){
   const credential={id:credentialId,rawId:credentialId,type:'public-key',response:{clientDataJSON:client.toString('base64url'),authenticatorData:data.toString('base64url'),signature:sign('sha256',Buffer.concat([data,createHash('sha256').update(client).digest()]),privateKey).toString('base64url'),userHandle:null}};
   return json(transport,'/__clank/auth/reauthenticate/passkey/finish',{method:'POST',body:{challengeId:started.challengeId,challenge:started.options.challenge,credential},cookie:auth.cookie,csrf:auth.csrf});
 }
+class NativePlatformTransportClosed extends Error {
+  constructor(cause){super('Owned native HTTP connection closed: '+cause.code,{cause});this.code='NATIVE_PLATFORM_TRANSPORT_CLOSED';this.nativeCode=cause.code;}
+}
+export const isNativePlatformTransportClosure=error=>error instanceof NativePlatformTransportClosed;
 function nativeRequest(url,input,{dropResponse=false,timeoutMs=20000,maxResponseBytes=1024*1024}={}){
   const target=new URL(input.url),destination=new URL(target.pathname+target.search,url);
   assert.ok(Number.isSafeInteger(timeoutMs)&&timeoutMs>0);assert.ok(Number.isSafeInteger(maxResponseBytes)&&maxResponseBytes>0);
   return new Promise((resolve,reject)=>{
     let settled=false,timer;
     const finish=(error,value)=>{if(settled)return;settled=true;clearTimeout(timer);error?reject(error):resolve(value)};
-    const outgoing=httpRequest(destination,{method:input.method,headers:{...Object.fromEntries(input.headers),host:input.headers.get('host')??target.host},signal:input.signal},incoming=>{
+    const transportError=error=>finish(['ECONNRESET','ECONNREFUSED','EPIPE'].includes(error.code)?new NativePlatformTransportClosed(error):error);
+    const outgoing=httpRequest(destination,{path:target.pathname+(target.search || (input.url.includes('?')?'?':'')),method:input.method,headers:{...Object.fromEntries(input.headers),host:input.headers.get('host')??target.host},signal:input.signal},incoming=>{
       const headers=new Headers();for(let i=0;i<incoming.rawHeaders.length;i+=2)headers.append(incoming.rawHeaders[i],incoming.rawHeaders[i+1]);
       const metadata={status:incoming.statusCode,statusText:incoming.statusMessage,headers};
-      incoming.on('error',error=>finish(error));
+      incoming.on('error',transportError);
       // Drop only after a genuine HTTP acknowledgment exists; no response body
       // or session identity is consumed. This does not cancel platform ownership.
       if(dropResponse){finish(null,{...metadata,dropped:true});incoming.destroy();outgoing.destroy();return}
@@ -62,7 +69,7 @@ function nativeRequest(url,input,{dropResponse=false,timeoutMs=20000,maxResponse
       incoming.on('data',chunk=>{bytes+=chunk.length;if(bytes>maxResponseBytes){const error=new Error('Native fixture response exceeded its byte bound.');finish(error);incoming.destroy(error);outgoing.destroy(error)}else chunks.push(chunk)});
       incoming.on('end',()=>{try{finish(null,new Response(input.method==='HEAD'||[204,205,304].includes(metadata.status)?null:Buffer.concat(chunks),metadata))}catch(error){finish(error)}});
     });
-    outgoing.on('error',error=>finish(error));
+    outgoing.on('error',transportError);
     timer=setTimeout(()=>{const error=new Error('Native platform request timed out.');finish(error);outgoing.destroy(error)},timeoutMs);
     // Preserve a live request stream so tests can hold a body across another
     // operation. The IPC helper intentionally retains its older buffered path.
@@ -89,8 +96,13 @@ export async function shadowPlatformFixture(t,policy={stages:[{trafficPercent:50
   t.after(async()=>{
     for(const held of ownedGates)held.release.resolve();await agent?.close();
     for(const child of children){if(child.exitCode!==null||child.signalCode!==null)continue;
-      assert.equal(await linuxProcessBirth(child.pid),births.get(child),'Only the captured owned child may be stopped.');
-      const exited=once(child,'exit');child.send({kind:'stop'});let timer;
+      const exited=once(child,'exit');let timer;
+      const birth=await linuxProcessBirth(child.pid).catch(error=>{if(['ENOENT','ESRCH'].includes(error.code))return null;throw error});
+      if(birth!==null){assert.equal(birth,births.get(child),'Only the captured owned child may be stopped.');
+        // A corruption guardian may close IPC after the identity read. Channel
+        // failure is contained while actual process exit remains mandatory.
+        child.send({kind:'stop'},()=>{});
+      }
       try{await Promise.race([exited,new Promise((_,reject)=>timer=setTimeout(()=>reject(new Error('Owned graceful shutdown timed out')),10000))]);}
       catch{assert.equal(await linuxProcessBirth(child.pid),births.get(child));child.kill('SIGKILL');await exited;}finally{clearTimeout(timer);}
     }
@@ -140,17 +152,17 @@ export async function shadowPlatformFixture(t,policy={stages:[{trafficPercent:50
   }catch(error){errors.push(String(error));if(!res.headersSent)res.writeHead(500);res.end()}});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const endpoint='http://127.0.0.1:'+server.address().port;
-  const options={publicUrl:origin,signup:'bootstrap',appPortStart:ports.start,appPortEnd:ports.end,platformAdminEmails:['canary-native@example.test'],backups:{intervalMs:false},previews:{cleanupIntervalMs:false},ingress:{baseDomain:'apps.example.test'},deploymentAgents:{registrationToken:'provider-native-registration-12345678901234567890',placement:{activationTimeoutMs:fixtureOptions.activationTimeoutMs??2000}},supervisor:{configurationId:'actual-platform-cluster',configurationRevision:1,leaseMs:30000,pollIntervalMs:50},shadowTraffic:{revision:1,readPaths:['/','/healthz'],methods:['GET','HEAD'],maxSamplePercent:10,maxDurationMs:30000,maxAttempts:10,maxConcurrent:2,maxResponseBytes:1024,maxRequestMs:1000,maxReports:2,...fixtureOptions.shadowTraffic},...(fixtureOptions.providerPromotionHosts===undefined?{}:{providerPromotionHosts:fixtureOptions.providerPromotionHosts})};
+  const options={publicUrl:origin,signup:'bootstrap',appPortStart:ports.start,appPortEnd:ports.end,platformAdminEmails:['canary-native@example.test'],backups:{intervalMs:false},previews:{cleanupIntervalMs:false},ingress:{baseDomain:'apps.example.test'},deploymentAgents:{registrationToken:'provider-native-registration-12345678901234567890',placement:{activationTimeoutMs:fixtureOptions.activationTimeoutMs??2000}},supervisor:{configurationId:'actual-platform-cluster',configurationRevision:1,leaseMs:30000,pollIntervalMs:50},shadowTraffic:{revision:1,readPaths:['/','/healthz'],methods:['GET','HEAD'],maxSamplePercent:10,maxDurationMs:30000,maxAttempts:10,maxConcurrent:2,maxResponseBytes:1024,maxRequestMs:1000,maxReports:2,...fixtureOptions.shadowTraffic},...(fixtureOptions.serviceAccounts?{serviceAccounts:{}}:{}),...(fixtureOptions.providerPromotionHosts===undefined?{}:{providerPromotionHosts:fixtureOptions.providerPromotionHosts})};
   async function start(disabled=false){
     const child=fork(new URL('./platform-shadow-controller.mjs',import.meta.url),[],{env:{...process.env,CLANK_SUPERVISOR_FIXTURE_ROOT:join(root,'platform'),CLANK_SUPERVISOR_FIXTURE_OPTIONS:JSON.stringify({...options,...(disabled?{canary:undefined,shadowTraffic:undefined}:{})})},stdio:['ignore','pipe','pipe','ipc']});await track(child);let output='';for(const stream of [child.stdout,child.stderr])stream.on('data',chunk=>output=(output+chunk).slice(-8192));
     const pending=new Map();child.on('message',message=>{if(message.id&&pending.has(message.id)){const {resolve,reject,timer}=pending.get(message.id);pending.delete(message.id);clearTimeout(timer);message.kind==='error'?reject(new Error(message.error)):resolve(message)}});
     const ready=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('Platform readiness: '+output)),60000);child.on('message',message=>{if(message.kind==='ready'){clearTimeout(timer);resolve(message)}});child.once('exit',()=>{clearTimeout(timer);reject(new Error('Platform exit: '+output))})});assert.equal(ready.kind,'ready');
-    const rpc=message=>new Promise((resolve,reject)=>{if(!child.connected){reject(new Error('Platform was terminated'));return}const id=String(++sequence),timer=setTimeout(()=>{pending.delete(id);reject(new Error('Platform request timed out: '+output))},20000);pending.set(id,{resolve,reject,timer});child.send({...message,id})});
+    const rpc=message=>new Promise((resolve,reject)=>{if(!child.connected){reject(new Error('Platform was terminated'));return}const id=String(++sequence),timer=setTimeout(()=>{pending.delete(id);reject(new Error('Platform request timed out: '+output))},20000);pending.set(id,{resolve,reject,timer});child.send({...message,id},error=>{if(error){const entry=pending.get(id);if(entry){pending.delete(id);clearTimeout(entry.timer);entry.reject(error)}}})});
     child.once('exit',()=>{for(const {reject,timer} of pending.values()){clearTimeout(timer);reject(new Error('Platform was terminated'))}pending.clear()});
     const handle=async request=>{const message=await rpc({kind:'request',url:request.url,method:request.method,headers:[...request.headers],body:request.body?Buffer.from(await request.arrayBuffer()).toString('base64'):null});return new Response(Buffer.from(message.body,'base64'),{status:message.status,headers:message.headers})};
     return {child,handle,rpc,url:ready.url,nativeRequest:(input,settings)=>nativeRequest(ready.url,input,settings),async close(){child.send({kind:'stop'});await once(child,'exit')}};
   }
-  platform=await start();
+  platform=await start(Boolean(fixtureOptions.disabledShadow));
   const client=createDeploymentCoordinatorClient({baseUrl:origin,fetch:(url,init)=>platform.handle(new Request(url,init))});
   const openAgent=async()=>agent=await openProviderDeploymentAgent({client,registrationToken:options.deploymentAgents.registrationToken,node:{id:'canary-native-provider',region:'local',endpoint,capacity:16},provider:{kind:'http',async reconcile(input){events.push({kind:'reconcile',projectId:input.operation.projectId,generation:input.desired.generation,mode:input.runtime?.manifest.database.mode,candidates:[...runtimes.keys()].filter(id=>id.startsWith('canary_'))});try{
       // Capture only the exact genuine reconciliation request, without its spent
@@ -162,9 +174,13 @@ export async function shadowPlatformFixture(t,policy={stages:[{trafficPercent:50
   await openAgent();
 
   const owner=await authorize(platform),{project}=await json(platform,'/api/projects',{method:'POST',token:owner.accessToken,body:{name:'Native canary',slug:'native-canary',placement:'provider'}},201);
-  const control=new DatabaseSync(join(root,'platform/control.sqlite'));control.exec('PRAGMA busy_timeout=5000');t.after(()=>control.close());
+  const openControl=()=>{const value=new DatabaseSync(join(root,'platform/control.sqlite'));value.exec('PRAGMA busy_timeout=5000');return value;};
+  let control=openControl();t.after(()=>control?.close());
   if(fixedProjectId){control.prepare('UPDATE clank_platform_projects SET id=? WHERE id=?').run(fixedProjectId,project.id);project.id=fixedProjectId;}
-  const f={root,owner,project,events,errors,control,get service(){return service},runtimes,data,endpoint,options,children,track,get platform(){return platform},
+  const f={root,owner,project,events,errors,get control(){return control},
+    suspendControl(){assert.ok(control,'Independent observer must be open.');control.close();control=null;},
+    resumeControl(){assert.equal(control,null,'Independent observer must be closed.');control=openControl();},
+    get service(){return service},runtimes,data,endpoint,options,children,track,get platform(){return platform},
     register:(email,{native=true}={})=>browserSession(platform,'register',email,native),
     async invite(email){
       const transport={handle:platform.nativeRequest};
@@ -252,3 +268,29 @@ export async function shadowPlatformFixture(t,policy={stages:[{trafficPercent:50
 
 
 export {origin,artifact,deploy,request,json,until,gate};
+
+// Produce history only after the real platform is stopped. This is the same
+// native journal/replay transition implementation used by production, guarded
+// by genuinely acquired supervisor and project leases. These binding-only
+// interruptions prove status storage, not public start or provider isolation.
+export async function appendShadowHistory(f,count,{version=1,maxReports=2,maximumPolicy=false}={}){
+ assert.ok(f.platform.child.exitCode!==null||f.platform.child.signalCode!==null,'Stop the owned platform before acquiring its native catalog.');assert.ok(Number.isSafeInteger(count)&&count>0&&count<=1024);
+ // Close the independent observer before another genuine owner changes WAL/schema
+ // state. Reopen explicitly afterward; never retry or mask an observer error.
+ f.suspendControl();
+ const path=join(f.root,'platform/control.sqlite');let lease,database,orchestrator,held;
+ try{
+  lease=await openSupervisorLease(path,f.options.supervisor);assert.equal(lease.acquire(),true);database=await openSQLite(defineDatabase({}),{path});const internal=database[SQLITE_INTERNAL],schema={prepare:sql=>internal.prepare(sql==='PRAGMA table_list'?'SELECT * FROM pragma_table_list':sql)};
+  internal.guardWrites(()=>lease.assertCurrent(schema));orchestrator=openDeploymentOrchestrator(database,{distributedLeaseMs:30000});held=await orchestrator.acquireLease('project:'+f.project.id,'status-history-'+randomUUID());assert.ok(held);
+  const current=()=>{lease.assertCurrent(schema);assert.ok(internal.prepare('SELECT 1 FROM clank_distributed_leases WHERE resource=? AND owner=? AND token_hash=? AND fence=? AND expires_at>?').get(held.resource,held.owner,createHash('sha256').update(held.token).digest('base64url'),held.fence,Date.now()))};
+  const hash=value=>createHash('sha256').update(value).digest('hex'),project=f.project.id,read=()=>{const row=internal.prepare('SELECT * FROM clank_platform_provider_canaries WHERE project_id=?').get(project);return row?shadow.readShadowRecord(row,project,hash):null},save=(id,prior,op,guard)=>shadow.saveShadowRecord(internal,id,prior,op,guard,hash);
+  if(version===2){shadow.upgradeShadowReportSchema(internal,current);lease.enrollProviderShadow();}
+  const configured=shadow.normalizeShadowPolicy({...f.options.shadowTraffic,maxReports,...(maximumPolicy?{readPaths:Array.from({length:32},(_,i)=>'/'+String(i).padStart(3,'0')+'x'.repeat(252)),methods:['GET','HEAD'],maxSamplePercent:100,maxDurationMs:1800000,maxAttempts:10000,maxConcurrent:16,maxResponseBytes:65536,maxRequestMs:10000}:{})}),identities=[];
+  for(let index=0;index<count;index++){
+   if(index%8===0){lease.renew();lease.assertCurrent(schema);held=await orchestrator.renewLease(held);assert.ok(held)}
+   const previous=read(),epoch=(previous?.epoch??0)+1,now=Date.now(),sessionId=(index%2?'_':'-')+'shadow_'+randomUUID(),op={kind:'shadow',sessionId,operationId:'operation_'+randomUUID(),idempotencyKeyDigest:hash(sessionId),inputDigest:hash('input:'+sessionId),reviewDigest:hash('review:'+sessionId),releaseId:'candidate_'+epoch,artifactSha256:hash('artifact'),capsuleSha256:null,controllerEpoch:epoch,retirementEpoch:epoch,primary:null,primaryReleaseId:f.project.activeReleaseId??'primary',primaryFence:1,nodeId:'node',origin:f.endpoint,credentialGeneration:1,policyRevision:configured.revision,policyDigest:hash(JSON.stringify(configured)),policy:shadow.narrowShadowPolicy(configured,{}),maxReports,phase:'binding',outcome:null,stopRequested:false,snapshot:null,report:shadow.emptyShadowReport(version),reservations:[],retirement:null,createdAt:now,expiresAt:now+configured.maxDurationMs,updatedAt:now};
+   const record=save(project,previous,op,current);const complete=await shadow.retireShadow({read,save,retire(){throw new Error('Binding-only history must have no provider retirement.')}},project,record,current,'interrupted');identities.push({sessionId,controllerEpoch:epoch,epoch:complete.epoch});
+  }
+  return identities;
+ }finally{try{if(held)await orchestrator.releaseLease(held);orchestrator?.close();database?.close();lease?.release();lease?.close()}finally{f.resumeControl()}}
+}

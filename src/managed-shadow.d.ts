@@ -142,13 +142,18 @@ export interface ShadowOwnerAdapter extends ShadowLifecycleAdapter {
   begin(projectId:string,operation:ShadowOperation,current:()=>void):ShadowRecord;
   prepare(projectId:string,record:()=>ShadowRecord,change:(update:(operation:ShadowOperation)=>ShadowOperation)=>void,current:()=>void,signal:AbortSignal,reviewedPrimary?:DeploymentProviderCanaryBinding):Promise<ShadowCheckpoint|ShadowPreparedObservation>;
   replay?(projectId:string,keyDigest:string,current:()=>void,bySession?:boolean):ShadowReplayView|null;
+  history?(projectId:string,current:()=>void):ShadowHistoryView;
   onError?(error:unknown):void;
 }
+export interface ShadowHistoryView { readonly replays:readonly ShadowReplay[]; readonly current:ShadowRecord|null; readonly epoch:number; }
+export interface ShadowHistoryRead { readonly view:ShadowHistoryView; readonly assertCurrent:()=>void; }
+export interface ShadowCursor { readonly version:1; readonly projectId:string; readonly ceilingEpoch:number; readonly beforeEpoch:number; }
 export interface ShadowReplayView { readonly replay:ShadowReplay; readonly current:ShadowRecord|null; readonly epoch:number; }
 export interface ShadowController {
   readonly observer: IngressShadowObserver;
   start(projectId:string,operation:ShadowOperation,admission:()=>void,reviewedPrimary?:DeploymentProviderCanaryBinding,authorizeBegin?:()=>void):Promise<ShadowRecord>;
   replay(projectId:string,keyDigest:string,bySession?:boolean):ShadowReplayView|null|undefined;
+  history(projectId:string):ShadowHistoryRead|undefined;
   requestStop(projectId:string,sessionId:string,operationId:string,controllerEpoch:number,authorized:()=>void):Promise<ShadowRecord|undefined>;
   elapsed(projectId:string,sessionId:string):number|null;
   stop(projectId:string,sessionId:string,epoch:number,authorized:()=>void):Promise<ShadowRecord>;
@@ -184,3 +189,9 @@ export interface ShadowSchemaIdentity { readonly enrollmentId: string; readonly 
 export declare function upgradeShadowReportSchema(connection: SQLiteInternal, current:()=>void): ShadowSchemaIdentity;
 /** @internal Read only: protocol-three startup must never reconstruct missing state. */
 export declare function assertProviderShadowSchema(connection: Pick<SQLiteInternal, "prepare">): ShadowSchemaIdentity;
+
+export declare function normalizeShadowCursor(value:unknown):ShadowCursor;
+export declare function shadowCursorToken(value:ShadowCursor,sign:(canonical:string)=>Uint8Array):string;
+export declare function parseShadowCursorToken(value:unknown):Readonly<{payload:ShadowCursor;canonical:string;signature:Uint8Array}>;
+export declare function shadowStatusQuery(search:string):Readonly<{limit:number;before?:string}>;
+export declare function selectShadowHistory(view:ShadowHistoryView,limit:number,cursor?:ShadowCursor):Readonly<{views:readonly ShadowReplayView[];nextEpoch:number|null;ceilingEpoch:number}>;

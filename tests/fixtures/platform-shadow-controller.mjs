@@ -13,7 +13,7 @@ import * as shadow from '../../dist/managed-shadow.js';
 
 const root=process.env.CLANK_SUPERVISOR_FIXTURE_ROOT,options=JSON.parse(process.env.CLANK_SUPERVISOR_FIXTURE_OPTIONS??'{}');
 if(!root || !process.send)throw new Error('Owned shadow controller root and IPC required.');
-const send=value=>{if(process.connected)process.send(value)};
+const send=value=>{if(process.connected)process.send(value,()=>{})};
 const hash=value=>createHash('sha256').update(value).digest('hex');
 let platform,server,owner,lease,guardian,database,orchestrator,leaseTimer,projectLease,projectTimer;
 const close=async()=>{
@@ -66,5 +66,5 @@ if(process.env.CLANK_SHADOW_NATIVE_OWNER==='1'){
 process.on('message',message=>void(async()=>{
   if(message?.kind==='stop'){await close();send({kind:'stopped',id:message.id});process.disconnect();return}
   if(message?.kind==='status'){send({kind:'status',id:message.id,status:platform?.supervisor()});return}
-  if(message?.kind==='request'&&platform){const response=await platform.handle(new Request(message.url,{method:message.method,headers:message.headers,...(message.body===null?{}:{body:Buffer.from(message.body,'base64')})}));send({kind:'response',id:message.id,status:response.status,headers:[...response.headers],body:Buffer.from(await response.arrayBuffer()).toString('base64')});}
+  if(message?.kind==='request'&&platform){const input=new Request(message.url,{method:message.method,headers:message.headers,...(message.body===null?{}:{body:Buffer.from(message.body,'base64')})});const pending=platform.handle(input);if(message.mutateHeader)input.headers.set(...message.mutateHeader);const response=await pending;send({kind:'response',id:message.id,status:response.status,headers:[...response.headers],body:Buffer.from(await response.arrayBuffer()).toString('base64')});}
 })().catch(error=>send({kind:'error',id:message?.id,error:String(error)})));

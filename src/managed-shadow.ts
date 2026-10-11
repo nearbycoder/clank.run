@@ -657,13 +657,18 @@ export interface ShadowOwnerAdapter extends ShadowLifecycleAdapter {
   begin(projectId:string,operation:ShadowOperation,current:()=>void):ShadowRecord;
   prepare(projectId:string,record:()=>ShadowRecord,change:(update:(operation:ShadowOperation)=>ShadowOperation)=>void,current:()=>void,signal:AbortSignal,reviewedPrimary?:DeploymentProviderCanaryBinding):Promise<ShadowCheckpoint|ShadowPreparedObservation>;
   replay?(projectId:string,keyDigest:string,current:()=>void,bySession?:boolean):ShadowReplayView|null;
+  history?(projectId:string,current:()=>void):ShadowHistoryView;
   onError?(error:unknown):void;
 }
+export interface ShadowHistoryView { readonly replays:readonly ShadowReplay[]; readonly current:ShadowRecord|null; readonly epoch:number; }
+export interface ShadowHistoryRead { readonly view:ShadowHistoryView; readonly assertCurrent:()=>void; }
+export interface ShadowCursor { readonly version:1; readonly projectId:string; readonly ceilingEpoch:number; readonly beforeEpoch:number; }
 export interface ShadowReplayView { readonly replay:ShadowReplay; readonly current:ShadowRecord|null; readonly epoch:number; }
 export interface ShadowController {
   readonly observer: IngressShadowObserver;
   start(projectId:string,operation:ShadowOperation,admission:()=>void,reviewedPrimary?:DeploymentProviderCanaryBinding,authorizeBegin?:()=>void):Promise<ShadowRecord>;
   replay(projectId:string,keyDigest:string,bySession?:boolean):ShadowReplayView|null|undefined;
+  history(projectId:string):ShadowHistoryRead|undefined;
   requestStop(projectId:string,sessionId:string,operationId:string,controllerEpoch:number,authorized:()=>void):Promise<ShadowRecord|undefined>;
   elapsed(projectId:string,sessionId:string):number|null;
   stop(projectId:string,sessionId:string,epoch:number,authorized:()=>void):Promise<ShadowRecord>;
@@ -740,6 +745,14 @@ export function createShadowController(adapter:ShadowOwnerAdapter):ShadowControl
       if(closed || !owner?.record || !owner.current)return undefined;
       if(!adapter.replay)throw new Error("The native replay reader is unavailable.");
       owner.current();const result=adapter.replay(projectId,keyDigest,owner.current,bySession);owner.current();return result;
+    },
+    history(projectId){
+      const owner=owners.get(projectId);if(!owner)return undefined;
+      if(!owner.record || !owner.current || !adapter.history)shadowInvalid("SHADOW_BUSY");
+      const current=owner.current;
+      const assertCurrent=()=>{if(closed || owners.get(projectId)!==owner || owner.current!==current)shadowInvalid("SHADOW_SUPERSEDED");current();shadowCurrent(adapter,projectId,owner.record!,current);};
+      assertCurrent();const view=adapter.history(projectId,assertCurrent);assertCurrent();
+      return Object.freeze({view,assertCurrent});
     },
     elapsed(projectId,sessionId){const owner=owners.get(projectId);return owner?.record?.operation.sessionId===sessionId && owner.observed!==null?Math.max(0,Math.floor(performance.now()-owner.observed)):null;},
     async requestStop(projectId,sessionId,operationId,controllerEpoch,authorized){
@@ -831,7 +844,7 @@ export function parseShadowReviewToken(token:unknown):Readonly<{payload:ShadowRe
   const parts=token.split("."),bytes=reviewBytes(parts[1]!),signature=reviewBytes(parts[2]!);
   if(bytes.byteLength>3072 || signature.byteLength!==32 || reviewBase64(bytes)!==parts[1] || reviewBase64(signature)!==parts[2])shadowInvalid("SHADOW_REVIEW_INVALID");
   let canonical:string,payload:ShadowReviewPayload;
-  try{canonical=new TextDecoder("utf-8",{fatal:true}).decode(bytes);payload=normalizeShadowReview(JSON.parse(canonical));}catch{shadowInvalid("SHADOW_REVIEW_INVALID");}
+  try{canonical=new TextDecoder("utf-8",{fatal:true,ignoreBOM:true}).decode(bytes);payload=normalizeShadowReview(JSON.parse(canonical));}catch{shadowInvalid("SHADOW_REVIEW_INVALID");}
   if(JSON.stringify(payload)!==canonical)shadowInvalid("SHADOW_REVIEW_INVALID");
   return Object.freeze({payload,canonical,signature});
 }
@@ -926,4 +939,53 @@ export function assertProviderShadowSchema(connection: Pick<SQLiteInternal, "pre
     if (publication || connection.prepare("SELECT 1 FROM clank_platform_releases WHERE purpose='shadow-upload' LIMIT 1").get()) invalid();
   } else if (!publication || publication.type !== "TEXT" || publication.notnull !== 0 || publication.dflt_value !== null) invalid();
   return Object.freeze({enrollmentId:row.enrollment_id as string,version});
+}
+
+/** @internal Exact selected cursor; no authentication or native state is implied by decoded fields. */
+export function normalizeShadowCursor(value:unknown):ShadowCursor {
+  const code="SHADOW_CURSOR_INVALID",raw=closedShadowObject(value,["version","projectId","ceilingEpoch","beforeEpoch"],code);
+  if(raw.version!==1 || typeof raw.projectId!=="string" || !/^[A-Za-z0-9_-]{1,128}$/u.test(raw.projectId)
+    || !Number.isSafeInteger(raw.ceilingEpoch) || Number(raw.ceilingEpoch)<1 || !Number.isSafeInteger(raw.beforeEpoch) || Number(raw.beforeEpoch)<1 || Number(raw.beforeEpoch)>Number(raw.ceilingEpoch))shadowInvalid(code);
+  return Object.freeze({version:1,projectId:raw.projectId,ceilingEpoch:Number(raw.ceilingEpoch),beforeEpoch:Number(raw.beforeEpoch)});
+}
+export function shadowCursorToken(value:ShadowCursor,sign:(canonical:string)=>Uint8Array):string {
+  const canonical=JSON.stringify(normalizeShadowCursor(value)),bytes=new TextEncoder().encode(canonical),signature=sign(canonical);
+  if(bytes.byteLength>256 || !(signature instanceof Uint8Array) || signature.byteLength!==32)shadowInvalid("SHADOW_CURSOR_INVALID");
+  return "clankshc1."+reviewBase64(bytes)+"."+reviewBase64(signature);
+}
+export function parseShadowCursorToken(value:unknown):Readonly<{payload:ShadowCursor;canonical:string;signature:Uint8Array}> {
+  const code="SHADOW_CURSOR_INVALID";
+  try{
+    if(typeof value!=="string" || value.length>512 || !/^clankshc1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/u.test(value))shadowInvalid(code);
+    const parts=value.split("."),bytes=reviewBytes(parts[1]!),signature=reviewBytes(parts[2]!);
+    if(bytes.byteLength>256 || signature.byteLength!==32 || reviewBase64(bytes)!==parts[1] || reviewBase64(signature)!==parts[2])shadowInvalid(code);
+    const canonical=new TextDecoder("utf-8",{fatal:true,ignoreBOM:true}).decode(bytes),payload=normalizeShadowCursor(JSON.parse(canonical));
+    if(JSON.stringify(payload)!==canonical)shadowInvalid(code);
+    return Object.freeze({payload,canonical,signature});
+  }catch{shadowInvalid(code);}
+}
+/** @internal Validate the literal query before URLSearchParams can erase spellings. */
+export function shadowStatusQuery(search:string):Readonly<{limit:number;before?:string}> {
+  const code="SHADOW_CURSOR_INVALID";if(search==="")return Object.freeze({limit:20});
+  if(typeof search!=="string" || search.length>540 || !search.startsWith("?"))shadowInvalid(code);
+  let limit=20,before:string|undefined;const seen=new Set<string>();
+  for(const field of search.slice(1).split("&")){
+    const pair=field.split("=");if(pair.length!==2 || seen.has(pair[0]!) || !pair[1])shadowInvalid(code);seen.add(pair[0]!);
+    if(pair[0]==="limit"){if(!/^(?:[1-9]|1[0-9]|20)$/u.test(pair[1]!))shadowInvalid(code);limit=Number(pair[1]);}
+    else if(pair[0]==="before"){parseShadowCursorToken(pair[1]);before=pair[1];}
+    else shadowInvalid(code);
+  }
+  return Object.freeze({limit,...(before===undefined?{}:{before})});
+}
+/** @internal Full validated native history is required; selection never replaces mirror verification. */
+export function selectShadowHistory(view:ShadowHistoryView,limit:number,cursor?:ShadowCursor):Readonly<{views:readonly ShadowReplayView[];nextEpoch:number|null;ceilingEpoch:number}> {
+  const code="SHADOW_STATE_INVALID";
+  if(!Number.isSafeInteger(view.epoch) || view.epoch<0 || view.replays.length>1024 || !Number.isSafeInteger(limit) || limit<1 || limit>20)shadowInvalid(code);
+  const epochs=new Set<number>();
+  for(const replay of view.replays){const epoch=replay.receipt.identity.controllerEpoch;if(!Number.isSafeInteger(epoch) || epoch<1 || epoch>view.epoch || replay.receipt.identity.epoch>view.epoch || epochs.has(epoch))shadowInvalid(code);epochs.add(epoch);}
+  const ceilingEpoch=cursor?.ceilingEpoch??view.epoch;if(ceilingEpoch>view.epoch)shadowInvalid(code);
+  const rows=view.replays.filter(row=>row.receipt.identity.controllerEpoch<=ceilingEpoch && (!cursor || row.receipt.identity.controllerEpoch<cursor.beforeEpoch))
+    .sort((a,b)=>b.receipt.identity.controllerEpoch-a.receipt.identity.controllerEpoch).slice(0,limit+1);
+  const selected=rows.slice(0,limit),views=selected.map(replay=>Object.freeze({replay,current:view.current?.operation.sessionId===replay.receipt.identity.sessionId?view.current:null,epoch:view.epoch}));
+  return Object.freeze({views:Object.freeze(views),nextEpoch:rows.length>limit?selected[selected.length-1]!.receipt.identity.controllerEpoch:null,ceilingEpoch});
 }

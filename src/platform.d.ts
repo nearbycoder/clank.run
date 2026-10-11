@@ -348,6 +348,7 @@ export interface PlatformShadowSession {
   readonly snapshot:Readonly<{sha256:string;bytes:number;providerStartedAt:number;providerCompletedAt:number;platformObservedAt:number;elapsedSinceObservationMs:number|null;crossHostFreshness:"unknown"}>|null;
   readonly report:ShadowReport|null; readonly createdAt:number; readonly expiresAt:number; readonly updatedAt:number; readonly nextAction:"none"|"wait"|"stop"|"recover"|"review";
 }
+export interface PlatformShadowList { readonly ok:true; readonly enabled:boolean; readonly epoch:number; readonly policy:PlatformShadowPolicy|null; readonly sessions:readonly PlatformShadowSession[]; readonly nextBefore:string|null; }
 export interface PlatformShadowResponse { readonly ok:true; readonly enabled:boolean; readonly epoch:number; readonly session:PlatformShadowSession; }
 export interface PlatformShadowPreview {
   readonly ok:true; readonly reviewToken:string; readonly expiresAt:number;

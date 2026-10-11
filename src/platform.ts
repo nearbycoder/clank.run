@@ -1,5 +1,5 @@
 import { openNodeEvacuations, type NodeEvacuationPlan, type EvacuationProject, type NodeEvacuationHooks } from "./node-evacuation.ts";
-import { createShadowCandidateRequest, assertProviderShadowSchema, shadowSchemaIdentity, upgradeShadowReportSchema, readShadowRecord, assertShadowReplay, readShadowReplays, saveShadowRecord, retireShadow,
+import { shadowStatusQuery, parseShadowCursorToken, shadowCursorToken, selectShadowHistory, type ShadowHistoryView, type ShadowCursor, createShadowCandidateRequest, assertProviderShadowSchema, shadowSchemaIdentity, upgradeShadowReportSchema, readShadowRecord, assertShadowReplay, readShadowReplays, saveShadowRecord, retireShadow,
   normalizeShadowPolicy, narrowShadowPolicy, createShadowController, emptyShadowReport, normalizeShadowReview, parseShadowReviewToken, shadowReviewToken, shadowReviewSelection, expandShadowReviewSelection, shadowReviewDigest, assertShadowReviewReplay,
   type ShadowReviewPayload, type ShadowSessionPolicy, type ShadowReplayView, type ShadowReport, type ShadowPhase, type PlatformShadowPolicy, type ShadowRecord, type ShadowOperation, type ShadowOutcome, type ShadowLifecycleAdapter } from "./managed-shadow.ts";
 import { createManagedCanary, validateManagedCanary, type ManagedCanaryOptions } from "./managed-canary.ts";
@@ -615,6 +615,7 @@ export interface PlatformShadowSession {
   readonly snapshot:Readonly<{sha256:string;bytes:number;providerStartedAt:number;providerCompletedAt:number;platformObservedAt:number;elapsedSinceObservationMs:number|null;crossHostFreshness:"unknown"}>|null;
   readonly report:ShadowReport|null; readonly createdAt:number; readonly expiresAt:number; readonly updatedAt:number; readonly nextAction:"none"|"wait"|"stop"|"recover"|"review";
 }
+export interface PlatformShadowList { readonly ok:true; readonly enabled:boolean; readonly epoch:number; readonly policy:PlatformShadowPolicy|null; readonly sessions:readonly PlatformShadowSession[]; readonly nextBefore:string|null; }
 export interface PlatformShadowResponse { readonly ok:true; readonly enabled:boolean; readonly epoch:number; readonly session:PlatformShadowSession; }
 export interface PlatformShadowPreview {
   readonly ok:true; readonly reviewToken:string; readonly expiresAt:number;
@@ -947,7 +948,7 @@ interface TokenPrincipal {
 // Request-local authority never becomes a persisted credential or an audit field.
 const admittedTokenAuthority = new WeakMap<TokenPrincipal, string>();
 function machineProjectPermission(operation: string, method: string): ProjectPermission {
-  if(method==='GET' && ['', 'usage', 'releases', 'backups'].includes(operation)) return 'read';
+  if(method==='GET' && (['', 'usage', 'releases', 'backups', 'shadow'].includes(operation) || /^shadow\/[A-Za-z0-9_-]{1,128}$/u.test(operation))) return 'read';
   if(method==='GET' && operation==='logs') return 'logs';
   if(method==='GET' && operation==='audit') return 'audit';
   if(operation==='secrets' && ['GET','PUT'].includes(method) || /^secrets\/[^/]+$/u.test(operation) && method==='DELETE') return 'secrets';
@@ -3872,6 +3873,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       return saveShadowRecord(storage.internal,projectId,prior,operation,admit,value=>syncHash(value,"hex"));
     },
     replay:(projectId,key,current,bySession=false)=>readShadowReplayView(projectId,key,current,bySession),
+    history:(projectId,current)=>readShadowHistoryView(projectId,current),
     async prepare(projectId,record,change,current,signal,reviewedPrimary){
       const op=record().operation,project=projectById(storage.internal,projectId),candidate=releaseById(storage.internal,op.releaseId),primary=releaseById(storage.internal,op.primaryReleaseId);
       if(!project || !candidate || !primary || candidate.config.jobs || !op.policy.readPaths.includes(candidate.config.health.path))throw new Error("Shadow candidates require an approved public health path and no declared jobs.");
@@ -5471,6 +5473,16 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     const rows=readShadowReplays(storage.internal,projectId,shadowHash),replay=rows.find(row=>bySession?row.receipt.identity.sessionId===key:row.receipt.identity.idempotencyKeyDigest===key);
     current();return replay?Object.freeze({replay,current:record?.protocol===2 && record.operation.sessionId===replay.receipt.identity.sessionId?record:null,epoch:record?.epoch??0}):null;
   }));
+  const readShadowHistoryView=(projectId:string,current:()=>void):ShadowHistoryView=>providerWriterScope.run(current,()=>storage.internal.transaction(()=>{
+    current();
+    const catalog=storage.internal.prepare("SELECT name FROM sqlite_schema WHERE name IN ('clank_platform_shadow_state','clank_platform_shadow_reports')").all();
+    const project=storage.internal.prepare("SELECT * FROM clank_platform_projects WHERE id=?").get(projectId);
+    if(!project || catalog.length!==0 && catalog.length!==2 || catalog.length===0 && (shadowPolicy || project.shadow_replay_receipt!=null))throw new PlatformError(409,"SHADOW_STATE_INVALID","Retained shadow history is missing; preserve it for recovery.");
+    if(catalog.length)assertProviderShadowSchema({prepare:sql=>storage.internal.prepare(sql==="PRAGMA table_list"?"SELECT * FROM pragma_table_list":sql)});
+    const record=providerCandidateRecord(projectId),replays=catalog.length?readShadowReplays(storage.internal,projectId,shadowHash):Object.freeze([]);
+    const view=Object.freeze({replays,current:record?.protocol===2?record:null,epoch:record?.epoch??0});
+    selectShadowHistory(view,1);current();return view;
+  }));
   const shadowSessionPayload=(view:ShadowReplayView):PlatformShadowSession=>{
     const retained=view.replay.receipt.identity,op=view.current?.operation,identity=op??retained,snapshot=identity.snapshot;
     return {sessionId:identity.sessionId,operationId:identity.operationId,controllerEpoch:identity.controllerEpoch,epoch:view.current?.epoch??retained.epoch,
@@ -5481,6 +5493,46 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       nextAction:identity.phase==="complete"?"none":identity.phase==="retiring" || identity.phase==="retired"?"recover":identity.stopRequested?"wait":"stop"};
   };
   const shadowResponse=(view:ShadowReplayView):PlatformShadowResponse=>({ok:true,enabled:Boolean(shadowPolicy),epoch:view.epoch,session:shadowSessionPayload(view)});
+  const shadowCursorSignature=(canonical:string)=>process.getBuiltinModule("node:crypto").createHmac("sha256",masterKey).update("clank-shadow-cursor/1\n").update(canonical).digest();
+  const readShadowStatus=async(principal:TokenPrincipal,projectId:string,search:string,sessionId:string|undefined,request:Request,identity:Readonly<{url:string;method:string;headers:string}>)=>{
+    const {url:admittedUrl,method:admittedMethod,headers:admittedHeaders}=identity,supervisor=leadership;
+    const authorized=()=>{
+      if(closed || leadership!==supervisor)throw new PlatformError(503,"PLATFORM_CLOSED","Platform authority is unavailable.");
+      supervisor?.assertCurrent();
+      if(principal.impersonation)throw new PlatformError(403,"IMPERSONATION_FORBIDDEN","Shadow status requires the current account principal.");
+      requireCurrentPlatformPrincipal(storage,principal);
+      if(principal.tokenId && principal.projectId && !principal.permissions.includes("read"))throw new PlatformError(403,"TOKEN_SCOPE_DENIED","Shadow status requires explicit project read permission.");
+      accessibleProject(storage.internal,projectId,principal,"read");
+      if(request.url!==admittedUrl || request.method!==admittedMethod || JSON.stringify([...request.headers])!==admittedHeaders)throw new PlatformError(403,"SHADOW_REQUEST_CHANGED","Shadow request identity changed.");
+    };
+    authorized();let cursor:ShadowCursor|undefined,limit=20;
+    if(sessionId!==undefined){shadowRequestId(sessionId);if(search)throw new PlatformError(400,"SHADOW_CURSOR_INVALID","Shadow detail does not accept query fields.");}
+    else{
+      const query=shadowStatusQuery(search);limit=query.limit;
+      if(query.before){const parsed=parseShadowCursorToken(query.before),signature=shadowCursorSignature(parsed.canonical);
+        if(parsed.payload.projectId!==projectId || !process.getBuiltinModule("node:crypto").timingSafeEqual(signature,parsed.signature))throw new PlatformError(400,"SHADOW_CURSOR_INVALID","Refresh the shadow status cursor.");
+        cursor=parsed.payload;
+      }
+    }
+    const payload=(view:ShadowHistoryView)=>{
+      authorized();selectShadowHistory(view,limit,cursor);
+      let value:PlatformShadowResponse|PlatformShadowList;
+      if(sessionId!==undefined){const replay=view.replays.find(row=>row.receipt.identity.sessionId===sessionId);if(!replay)throw new PlatformError(404,"SHADOW_SESSION_NOT_FOUND","Shadow session not found.");
+        value=shadowResponse({replay,current:view.current?.operation.sessionId===sessionId?view.current:null,epoch:view.epoch});
+      }else{const selected=selectShadowHistory(view,limit,cursor);value={ok:true,enabled:Boolean(shadowPolicy),epoch:view.epoch,policy:shadowPolicy??null,sessions:selected.views.map(shadowSessionPayload),
+        nextBefore:selected.nextEpoch===null?null:shadowCursorToken({version:1,projectId,ceilingEpoch:selected.ceilingEpoch,beforeEpoch:selected.nextEpoch},shadowCursorSignature)};}
+      const sessions="session" in value?[value.session]:value.sessions;
+      if(sessions.some(session=>new TextEncoder().encode(JSON.stringify(session)).byteLength>32768))throw new PlatformError(409,"SHADOW_STATE_INVALID","Shadow status exceeds its retained bound.");
+      const body=JSON.stringify(value);if(new TextEncoder().encode(body).byteLength>1048576)throw new PlatformError(409,"SHADOW_STATE_INVALID","Shadow status exceeds its response bound.");
+      authorized();return body;
+    };
+    const owned=shadowController.history(projectId);
+    if(owned){const body=payload(owned.view);return{body,assertCurrent:()=>{authorized();owned.assertCurrent();authorized();}};}
+    const body=await withProjectLock(projectId,async()=>{authorized();const current=captureProjectAuthority(projectId);const view=readShadowHistoryView(projectId,current);const result=payload(view);current();return result;},false);
+    // This reader intentionally released its own project lease. The snapshot is
+    // point-in-time data, while principal and supervisor authority remain current.
+    authorized();return{body,assertCurrent:authorized};
+  };
   const shadowReviewedArtifacts=async(project:ProjectRow,candidate:ReleaseRow,primary:ReleaseRow,policy:ShadowSessionPolicy,nodeId:string,current:()=>void)=>{
     current();if(candidate.config.jobs || !policy.readPaths.includes(candidate.config.health.path))throw new PlatformError(409,"SHADOW_CANDIDATE_INELIGIBLE","Shadow requires a reviewed public health path and no declared jobs.");
     await providerPromotionCertificate(project,nodeId);current();
@@ -7821,6 +7873,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     if (closed) return problem(503, "PLATFORM_CLOSED", "Platform is closed.");
     try {
       const url = new URL(request.url);
+      const shadowReadIdentity=request.method==="GET" && /^\/api\/projects\/[^/]+\/shadow(?:\/[^/]+)?$/u.test(url.pathname)
+        ?Object.freeze({url:request.url,method:request.method,headers:JSON.stringify([...request.headers])}):undefined;
       // Caddy calls this permission endpoint over loopback, so it must be
       // handled before Host-based application dispatch. The secret is still
       // required because the path can also arrive through a public listener.
@@ -9773,8 +9827,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           ? "tokens"
         : operation.startsWith("dependencies")
           ? operation === "dependencies" && request.method === "PUT" ? "tokens" : operation.startsWith("dependencies/activations/") && request.method === "POST" ? "rollback" : "read"
-        : operation.startsWith("shadow/")
-          ? "deploy"
+        : operation === "shadow" || operation.startsWith("shadow/")
+          ? request.method === "GET" ? "read" : "deploy"
         : operation.startsWith("environments") || operation.startsWith("channels")
           ? request.method === "GET" ? "read" : "deploy"
         : operation.startsWith("previews")
@@ -9817,6 +9871,17 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         accessibleProject(storage.internal, project.id, principal, requiredPermission);
         if (/^backups\/[^/]+\/restore$/u.test(operation) || (!operation && request.method === "DELETE")) requireFreshPlatformAuthentication(principal);
       };
+      const shadowDetail=/^shadow\/([A-Za-z0-9_-]{1,128})$/u.exec(operation);
+      if(request.method==="GET" && (operation==="shadow" || shadowDetail)){
+        try{
+          if(!shadowReadIdentity || url.hash)throw new PlatformError(400,"SHADOW_CURSOR_INVALID","Shadow status requires an exact request target.");
+          const result=await readShadowStatus(principal,project.id,url.search || (shadowReadIdentity.url.includes("?")?"?":""),shadowDetail?.[1],request,shadowReadIdentity);
+          const current=()=>{try{result.assertCurrent();}catch(error){const code=String((error as {code?:string})?.code??"");if(code.startsWith("SHADOW_"))throw new PlatformError(409,code,"Shadow status authority changed.");throw error;}};
+          current();machineResponseGuards.set(request,current);
+          return new Response(result.body,{headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store","x-content-type-options":"nosniff"}});
+        }
+        catch(error){if(error instanceof PlatformError)throw error;const code=String((error as {code?:string})?.code??"");if(code.startsWith("SHADOW_"))throw new PlatformError(code==="SHADOW_CURSOR_INVALID"?400:409,code,"Shadow status refused the input or retained state.");throw error;}
+      }
       const shadowStop=/^shadow\/([A-Za-z0-9_-]{1,128})\/stop$/u.exec(operation);
       if(request.method==="POST" && (operation==="shadow/preview" || operation==="shadow/start" || shadowStop)) {
         requireShadowHuman(principal,project.id);
