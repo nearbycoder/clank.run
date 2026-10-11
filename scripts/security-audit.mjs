@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertReleasePackageBudget } from "./release-package-budget.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const failures = [];
@@ -165,7 +166,17 @@ try {
 } catch {
   fail(`npm pack did not return valid JSON: ${packed.stderr || packed.stdout}`);
 }
-const files = packResult?.files ?? [];
+let files = [];
+try {
+  // Issue #364: one exact manifest for this source snapshot, with no optional
+  // future feature paths or count fallback. Rejected paths are never read below.
+  const manifest = JSON.parse(await read("scripts/release-package-files.json"));
+  const budget = assertReleasePackageBudget(packResult, manifest);
+  files = packResult.files;
+  pass(`publish allowlist contains ${budget.files} exact files / ${budget.bytes} bounded bytes`);
+} catch (error) {
+  fail(`Release package budget validation failed: ${error.message}`);
+}
 if (packResult?.name !== packageJson.name) fail("npm pack changed the scoped package identity.");
 if (packResult?.version !== packageJson.version) fail("npm pack changed the package version.");
 const forbiddenPackagePath = /(?:^|\/)(?:node_modules|\.(?:clank|proact)(?:-(?:platform|runner|provider))?)(?:\/|$)|(?:^|\/)\.env(?:\.|$)|\.(?:sqlite(?:-(?:shm|wal))?|db|pem|p12|pfx|key)$/iu;
@@ -175,21 +186,6 @@ for (const file of files) {
 for (const expected of ["README.md", "SECURITY.md", "LICENSE", "dist/index.js", "dist/index.d.ts"]) {
   if (!files.some((file) => file.path === expected)) fail(`Published package is missing ${expected}.`);
 }
-// The forty-feature release adds reviewed public APIs, declarations, internal
-// workers, and CLI helpers while preserving the zero-dependency contract.
-// Proposal #265 adds exactly the optional component harness module/declaration.
-// The 6 MiB byte ceiling remains unchanged; no file headroom is reserved.
-// Proposal #273 adds only the optional fleet module and its declaration.
-// Four deliberate public/private service-account runtime and declaration files.
-// Proposal #313 adds exactly platform-supervisor.js and its declaration.
-// Proposal #339 adds exactly the private managed-shadow.js policy/report helper
-// and its declaration; the package byte ceiling remains unchanged.
-// Proposal #339 staging adds exactly the private object-storage-internal.js module.
-// Proposal #338 private ownership adds exactly provider-handoff.js and provider-docker-client.js.
-if ((packResult?.entryCount ?? 0) > 422) fail("Published package unexpectedly exceeds 422 files.");
-if ((packResult?.unpackedSize ?? 0) > 6 * 1024 * 1024) fail("Published package unexpectedly exceeds 6 MiB unpacked.");
-pass(`publish allowlist contains ${packResult?.entryCount ?? 0} bounded files`);
-
 const secretPatterns = [
   ["private key", new RegExp(`-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE ${"KEY"}-----`, "u")],
   ["GitHub token", new RegExp(`gh[opusr]_[A-Za-z0-9]{36,}`, "u")],

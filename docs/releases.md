@@ -90,6 +90,35 @@ after 270 seconds. A newer verification run cancels the preceding one. The workf
 rebuild, deploy, prune releases, or use deployment credentials. Pull requests, forks, failed CI
 runs, and other branches cannot start its verification job.
 
+## Package budget and exact inventory
+
+[Issue #364](https://github.com/nearbycoder/clank.run/issues/364) sets a hard **8 MiB
+(8,388,608 bytes) unpacked** ceiling. The security audit also requires the exact,
+sorted path list in the unshipped `scripts/release-package-files.json`. The initial
+main manifest contains 422 paths. It has no optional feature paths or spare slots:
+each feature pull request must add its exact reviewed, source-backed path delta
+alongside the source that emits it. Removing one path does not permit another.
+A separately measured 449-file feature composition is not an alternate main
+manifest or permission to ship unaccepted features.
+
+The audit rejects missing, unexpected or duplicate paths, malformed inventories,
+inconsistent entry counts, invalid member sizes, and totals that differ from the
+sum of member bytes. Exactly 8 MiB is allowed; one additional byte fails. The
+manifest and its fixed-limit validator are private audit inputs, not package
+exports or published files. Package identity, credential/state-path checks and
+the zero-dependency contract remain independently enforced.
+
+This budget change preserves runtime output, readable SQL and scripts, compiler
+and mapped-build behavior, browser imports, workflow revisions and every
+independent performance threshold. It does not establish feature acceptance or
+guarantee that unfinished work fits. Every integrated release must report its
+actual package inventory and growth under the same ceiling; exceeding it requires
+new review, never an automatic increase.
+
+Rollback the manifest together with its matching source snapshot. Restoring the
+old 6 MiB budget can correctly refuse a larger candidate; it does not shrink an
+installed package. Previously published distributions remain immutable.
+
 ## Failure handling
 
 - Do not reuse or move a published version or tag.
