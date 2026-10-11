@@ -128,7 +128,9 @@ test('exact stop cancels a held candidate without waiting for or cancelling prim
 });
 
 test('sixteen leader-wide slots include all sessions and never queue a seventeenth selected request',async t=>{
- const held=gate();const f=await fixture(t,{policy:{maxConcurrent:16,maxRequestMs:10000,maxDurationMs:30000},candidate:async(req,res)=>{await held.promise;res.setHeader('content-type','application/json');res.end('candidate')}});t.after(()=>held.resolve());await f.start();await f.start('projecttest1');
+ // Use fresh candidate connections so this capacity check does not depend on
+ // reusing a socket cancelled after the first batch's native EOF.
+ const held=gate();const f=await fixture(t,{policy:{maxConcurrent:16,maxRequestMs:10000,maxDurationMs:30000},candidate:async(req,res)=>{await held.promise;res.setHeader('connection','close');res.setHeader('content-type','application/json');res.end('candidate')}});t.after(()=>held.resolve());await f.start();await f.start('projecttest1');
  const responses=await Promise.all(Array.from({length:16},()=>f.request()));assert.ok(responses.every(value=>value.body==='primary'));await until(()=>f.events.length===16,'all sixteen candidate requests',5000);
  await f.request({project:'projecttest1'});await until(()=>f.read('projecttest1').operation.report.skips.capacity===1,'leader-wide capacity refusal');assert.equal(f.read('projecttest1').operation.report.counters.reserved,0);assert.equal(f.events.length,16);
  held.resolve();await until(()=>f.read().operation.report.counters.settled===16,'all real candidates completed',10000);await f.request({project:'projecttest1'});await until(()=>f.read('projecttest1').operation.report.counters.settled===1,'new owner can use actually released capacity');assert.equal(f.events.length,17);

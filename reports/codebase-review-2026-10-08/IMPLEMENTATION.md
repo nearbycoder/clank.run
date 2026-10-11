@@ -44,6 +44,14 @@ All three cost modules pass 57/57 with experimental coverage on each of Node22.1
 
 This stage changes the production cost module; prior fixture-only claims retain their historical scope. Schemas, public API, production quotas, provider profiles, CI windows and main protection are unchanged. Counts remain29 accepted/11 pending; fresh hosted checks and protected merge are required for this final source change. See [delivery evidence](feature-branch-delivery.json).
 
+## Combined delivery fresh candidate connection follow-up
+
+The production cost repair at `2145a92` passed seven hosted checks. Both complete runtime suites reported3,469 tests/3,432 passes/zero failures or cancellations/37 existing skips. Packaged coverage reported3,431 passes and one failure: the leader-wide capacity fixture expected a fresh seventeenth candidate server event but observed16 after that attempt settled. This failed gate remains retained; it is not reported as successful conformance.
+
+A declared native socket-close fault reproduces the same assertion on Node22: destroying only the first batch's server sockets at fresh native fetch dispatch settles a candidate transport error before the server receives that request. Node24/26 pass the original fault and are not failed-before proof. Closing completed candidate response connections in this one capacity fixture makes its fresh-capacity check independent of those pooled sockets. The exact hosted transport cause remains unknown. The initial probe runner's incorrect expectation of failure on every runtime, its mixed results and correction are retained.
+
+All178 observer assertion expressions remain unchanged, including strict16-slot admission, seventeenth refusal and the later actual fresh server event. The corrected controlled fault and complete40-case observer module pass with experimental coverage on Node22/24/26, with zero failures/cancellations/skips. Production source and limits, all320emitted outputs, exported types/package/dependencies, CI windows and main protection are unchanged by this follow-up. Feature acceptance remains29/11; fresh hosted checks and protected delivery are required. See [delivery evidence](feature-branch-delivery.json).
+
 ## Release declaration, CLI identity and typing repairs accepted
 
 Protected PR #361 merged the release-map typing fix, and protected [PR #360](https://github.com/nearbycoder/clank.run/pull/360) merged the combined declaration spacing and linked CLI argument repairs as `53cfec2`, tree `e63b94e923ee2d12b40fbdf425d5bcdb979bd9e8`. Both main checkouts match and all 23 existing local files are preserved. Draft PR #362 is closed because its six reviewed CLI files are included exactly. These maintenance changes add no accepted feature: counts remain 29 accepted / 11 remaining. [Verification](release-repair-verification.json).
