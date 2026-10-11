@@ -1,0 +1,88 @@
+{
+  "disposition": "Combined reviewed code delivery; protected publication checks pending; feature acceptance remains29/11",
+  "priorProtectedMain": {
+    "head": "95f332233fb56feb08993853f765ba26df081999",
+    "tree": "5882fe2dae0720cdc8b667c4ff952568a46a555c",
+    "mergedMaintenancePRs": [
+      365,
+      366,
+      367,
+      368
+    ],
+    "preservedLocalFiles": 23
+  },
+  "reviewedSource": {
+    "head": "f2c07860ba3ee747132d39dd40b6dc232a482ac2",
+    "tree": "e093bb245bb2c3d39731024d6938b8065b8b2252",
+    "sourceInputs": 1337,
+    "emittedOutputs": 320,
+    "pairedOutputsIdentical": true
+  },
+  "originalPRs": [
+    301,
+    303,
+    310,
+    316,
+    318,
+    323,
+    325,
+    326,
+    329,
+    343,
+    347,
+    349,
+    350
+  ],
+  "localSelectedEachRuntime": {
+    "nativeTransfer": 2,
+    "consoleCli": 265,
+    "quorum": 27,
+    "taskBudgetClientCanaryLayoutPerformance": 69,
+    "totalPassed": 363,
+    "failures": 0,
+    "cancellations": 0,
+    "skips": 0
+  },
+  "sourceTypes": {
+    "existing": 149,
+    "new": 0,
+    "baseline": 154,
+    "packedFixtures": 54
+  },
+  "package": {
+    "files": 449,
+    "unpackedBytes": 6940183,
+    "fixedCeilingBytes": 8388608,
+    "dependencies": 0
+  },
+  "priorBroaderRun": {
+    "runtime": "26.10",
+    "reported": 1376,
+    "passed": 1366,
+    "failures": 1,
+    "explicitExistingPrivilegedSkips": 9,
+    "failure": "Isolated actual-route VM omitted temporaryAccessView; preserved and corrected with inactive context, assertions unchanged."
+  },
+  "immutableEvidence": {
+    "path": "/tmp/clank-review-2026-10-08/feature-composition-merge-delivery-02/evidence-composition-01.json",
+    "sha256": "7e363d90e906380ac55f245eff484bf5d401c7a20142fcf75e021366e6b84976"
+  },
+  "remainingAcceptance": {
+    "accepted": 29,
+    "remaining": 11,
+    "features": [
+      7,
+      9,
+      10,
+      13,
+      14,
+      17,
+      30,
+      36,
+      37,
+      38,
+      40
+    ]
+  },
+  "qualification": "Original branch source reviews and failed-before proofs retain their named revisions. Local source publication is not browser, production provider, source-wide stop/activation or privileged host certification. Required final hosted checks and protected main merge remain pending."
+}
