@@ -12,6 +12,7 @@ import { createRetentionController, dispatchRetention } from "./retention-intern
 import type { RetentionAdministrationOptions } from "./retention-administration.ts";
 import { openAuditExporter, type AuditExportOptions } from "./audit-export.ts";
 import { forecastUsage } from "./usage-forecast.ts";
+import { openPlatformProjectCosts, ProjectCostError, type PlatformProjectCostOptions, type ProjectCostAuthority } from "./platform-project-costs.ts";
 import { openOrganizationSso, type OrganizationSsoOptions, type OrganizationProvisioningAssignment } from "./organization-sso.ts";
 import { captureLogLines, redactLogSecrets } from "./security.ts";
 import { createSQLiteTaskScope, runSQLiteTask } from "./sqlite-task.ts";
@@ -775,6 +776,8 @@ export interface ClankPlatformOptions {
   };
   /** Receives unexpected failures for private operator logging. */
   onError?: (error: unknown) => void;
+  /** Trusted measured cost reconciliation. Retained admission policies survive disabling the collector. */
+  projectCosts?: PlatformProjectCostOptions;
 }
 
 export type PlatformRuntimePolicy = "always_on" | "on_demand" | "suspended";
@@ -967,7 +970,7 @@ function organizationPolicyAllows(internal: SQLiteInternal, principal: TokenPrin
   catch (error) {if (error instanceof AuthError && [401,403].includes(error.status)) return false; throw error;}
 }
 function machineProjectPermission(operation: string, method: string): ProjectPermission {
-  if(method==='GET' && ['', 'usage', 'releases', 'backups'].includes(operation)) return 'read';
+  if(method==='GET' && ['', 'usage', 'releases', 'backups', 'costs', 'costs/history'].includes(operation)) return 'read';
   if(method==='GET' && operation==='logs') return 'logs';
   if(method==='GET' && operation==='audit') return 'audit';
   if(operation==='secrets' && ['GET','PUT'].includes(method) || /^secrets\/[^/]+$/u.test(operation) && method==='DELETE') return 'secrets';
@@ -1621,6 +1624,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
   let temporaryAccess: ReturnType<typeof openPlatformTemporaryAccess> | undefined;
   let auditExporter: Awaited<ReturnType<typeof openAuditExporter>> | undefined;
   let retentionController: Awaited<ReturnType<typeof createRetentionController>> | undefined;
+  let projectCosts: ReturnType<typeof openPlatformProjectCosts>;
   let invitationDeliveries: ReturnType<typeof createPlatformInvitationDeliveryScheduler>;
   const usageOpenedAt = Date.now();
   try {
@@ -1677,6 +1681,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         try { return JSON.parse(String(row.signal)).resourceId === projectId ? {state: Number(row.active) === 1 ? "open" : "resolved", observedAt: Number(row.updated_at)} : null; } catch { return null; }
       },
     });
+    projectCosts = openPlatformProjectCosts(storage.internal, options.projectCosts);
     serviceAccounts = options.serviceAccounts ? openPlatformServiceAccounts(storage.internal, options.serviceAccounts, {
     hash: syncHash, encrypt: value => encryptSecret(value, masterKey), decrypt: value => decryptSecret(value, masterKey),
     eligibleOwner(organizationId, ownerId, projectId, permissions) {
@@ -1739,6 +1744,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     temporaryAccess?.close();
     statusPages?.close();
     closeProjectSlos?.();
+    projectCosts?.close();
     serviceAccounts?.close();
     retentionController?.close();
     await auditExporter?.close();
@@ -2104,6 +2110,14 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
   let lastMetricPrune = 0;
   let lastUsagePrune = usageOpenedAt;
   const admitIngressRequest = (request: Readonly<IngressAdmissionRequest>): IngressAdmissionDecision => {
+    if (projectCosts) {
+      try {
+        const decision = projectCosts.admission(request.projectId);
+        if (!decision.allowed) return {allowed: false, code: decision.code!, message: decision.message!, retryAfterSeconds: decision.retryAfterSeconds!};
+      } catch {
+        return {allowed: false, code: "PROJECT_COST_ADMISSION_UNAVAILABLE", message: "Project cost admission could not verify its retained policy.", retryAfterSeconds: 60};
+      }
+    }
     if (request.recordedAt - lastUsagePrune >= 60 * 60_000) {
       lastUsagePrune = request.recordedAt;
       pruneUsageStorage(storage.internal, request.recordedAt, limits.usageRetentionMonths);
@@ -7678,6 +7692,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           || value.status === "projected_exhaustion" || value.status === "exhausted"),
         message: "Workspace usage is near its configured limit or projected to exhaust it this period." });
     }
+    if (projectCosts) signals.push(...projectCosts.signals());
     return signals;
   }, options.operations.restoreDrills ? async (projectId) => {
     const project = projectById(storage.internal, projectId);
@@ -7983,6 +7998,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
             hostingProfile,
             runnerKind: runner.kind,
             signupMode: signupPolicy,
+            projectCostsEnabled: !!projectCosts,
             impersonation: impersonation ? {
               id: impersonation.id,
               actor: {
@@ -9941,6 +9957,32 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         if (incident?.[2] === "change" && request.method === "POST") return api({ok: true, incident: await projectIncidents.change(project.id, incident[1]!, authority, await readJsonRequest(request, 16 * 1024))});
         throw new PlatformError(404, "NOT_FOUND", "Incident endpoint not found.");
       }
+      if (operation === "costs" || operation.startsWith("costs/")) {
+        if (!projectCosts) throw new PlatformError(404, "NOT_FOUND", "Project costs are not configured.");
+        const authority: ProjectCostAuthority = {
+          actorId: principal.userId,
+          authorize(admin) {
+            requireCurrentProjectAuthority();
+            const current = accessibleProject(storage.internal, project.id, principal, "read");
+            if (admin) {
+              if (principal.tokenId || principal.impersonation || !principal.sessionId || !["owner", "admin"].includes(current.role)) throw new PlatformError(403, "COST_HUMAN_REQUIRED", "Cost changes require a current project administrator browser session.");
+              const session = storage.auth.refreshSession(principal.sessionId);
+              if (session?.user?.id !== principal.userId) throw new PlatformError(401, "UNAUTHENTICATED", "Sign in to continue.");
+              storage.auth.requireFreshAuthentication(session, freshAuthenticationAge);
+            }
+          },
+          audit(action, metadata) { audit(storage.internal, principal.userId, principal.tokenId, project.id, action, metadata, true); },
+        };
+        if (request.method === "GET" && operation === "costs" && [...url.searchParams.keys()].every(key => key === "month") && url.searchParams.getAll("month").length <= 1) return api({ok: true, report: projectCosts.read(project.id, authority, url.searchParams.get("month") ?? undefined)});
+        if (request.method === "GET" && operation === "costs/history" && url.searchParams.size === 1 && url.searchParams.getAll("month").length === 1) return api({ok: true, snapshots: projectCosts.history(project.id, authority, url.searchParams.get("month")!)});
+        if (request.method !== "POST" || url.searchParams.size || !["costs/reconcile", "costs/policy", "costs/override"].includes(operation)) throw new PlatformError(422, "COST_INPUT", "Choose a supported cost endpoint and exact fields.");
+        authority.authorize(true);
+        const input = await readJsonRequest(request, 8_192);
+        authority.authorize(true);
+        if (operation === "costs/reconcile") return api({ok: true, snapshot: await projectCosts.reconcile(project.id, authority, input)});
+        if (operation === "costs/policy") return api({ok: true, policy: projectCosts.changePolicy(project.id, authority, input)});
+        return api({ok: true, override: projectCosts.changeOverride(project.id, authority, input)});
+      }
       if (operation === "dependencies" && request.method === "GET") {
         requireCurrentProjectAuthority();
         const configuration = dependencyConfiguration(project.id);
@@ -11708,6 +11750,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     } catch (error) {
       if(error instanceof CustomerStatusError)return problem(error.status,error.code,error.message);
       if(error instanceof DomainVerificationError)return problem(422,'STATUS_DOMAIN_OWNERSHIP_PENDING',error.message);
+      if (error instanceof ProjectCostError) return problem(error.status, error.code, error.message);
       if (error instanceof ServiceAccountError) return problem(error.status,error.code,error.message);
       if (error instanceof BackendActionError) return problem(error.status, error.code, error.message);
       if (error instanceof PlatformError) return problem(error.status, error.code, error.message, error.retryAfter);
@@ -11840,6 +11883,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       closed = true;
       for (const intake of stagingIntakes) intake.abort();
       if (stagingIntakes.size) await Promise.all([...locks.values()].map(pending => pending.catch(() => undefined)));
+      projectCosts?.close();
       if (releaseWindowTimer) clearTimeout(releaseWindowTimer);
       releaseWindowTimer = undefined;
       await releaseWindowFlight?.catch(()=>undefined);

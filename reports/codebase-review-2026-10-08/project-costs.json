@@ -1,0 +1,90 @@
+{
+  "feature": 38,
+  "status": "Implemented source; full native/release/type/package/docs verification passed; actual browser interaction and hosted/protected merge acceptance pending; not counted",
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/320",
+  "source": {
+    "head": "51f46be886a81b12acc88ea4b5680efe19295751",
+    "tree": "38b63371a0712be4addd9f73030177a964534c19",
+    "baseMain": "38ac812becdbfd1bd1ee0c1d3a686b32a4de9e1a",
+    "tarSha256": "77adbd29cfd388d5bf93c60b49a7ca932600ee205ffc8797addf70d383fe2b74"
+  },
+  "trackedInputs": 1121,
+  "immutableEvidence": {
+    "path": "/tmp/clank-review-2026-10-08/project-costs-evidence-01/index.json",
+    "sha256": "2d37f6672fc06489f0e3e4dc20fca49b9a3196923cde6dd1da8144f667b094b5",
+    "files": 40
+  },
+  "fullLinuxChecks": [
+    {
+      "node": 26,
+      "tests": 2137,
+      "passed": 2134,
+      "failed": 0,
+      "cancelled": 0,
+      "existingHostSkips": 3,
+      "exit": 0,
+      "coverageSummary": "# all files                              |  91.64 |    81.05 |   90.03 | ",
+      "logSha256": "ca660fdf7d720d1aa8f2b87f76239dbebcecf8ee72afb01bf69157a402eb3cd6"
+    },
+    {
+      "node": 22,
+      "tests": 2137,
+      "passed": 2134,
+      "failed": 0,
+      "cancelled": 0,
+      "existingHostSkips": 3,
+      "exit": 0,
+      "coverageSummary": "# all files                              |  91.63 |    81.06 |   90.07 | ",
+      "logSha256": "1e103330fd1921e24ddba8c63c81e27d70002670d2c0726fbbb86023d88f1dd3"
+    }
+  ],
+  "focused": {
+    "nativeCostAndExistingConsoleOperationalChecks": {
+      "reported": 52,
+      "passed": 52
+    },
+    "isolatedConsoleRegressionChecks": {
+      "reported": 95,
+      "passed": 95
+    },
+    "packedTypeFixtures": 35,
+    "newSourceDiagnostics": 0,
+    "existingSourceDiagnostics": 159,
+    "packedSemanticNegativeAssertions": 163
+  },
+  "package": {
+    "files": 417,
+    "unpackedBytes": 6014166,
+    "compressedBytes": 1496064,
+    "limitBytes": 6291456,
+    "headroomBytes": 277290,
+    "npmDependencies": 0
+  },
+  "documentation": {
+    "canonicalGuides": 102,
+    "words": 178595,
+    "nativeHttpMcpChecks": 11,
+    "publicDeploymentCertified": false
+  },
+  "behavior": [
+    "Native trusted collector, exact cumulative integer pricing and immutable UTC-month rate-card revisions.",
+    "Durable reconciliation corrections, exact retries, policies, expiring overrides and private cost alerts.",
+    "Current human session, mandatory native recent authentication, current owner/admin role and organization boundaries repeated after awaits and at transaction commit.",
+    "Ignored or altered native audit writes roll back the corresponding cost mutation/receipt transaction.",
+    "Typed native DOM settings view, bounded account-bound client, read-only native-authenticated CLI and MCP tools."
+  ],
+  "limits": [
+    "Measured estimates are not invoices or a concurrent monetary ceiling.",
+    "Opt-in admission blocks only from the latest complete current-month observation; incomplete or stale data is explicit.",
+    "Actual mutation button/keyboard and physical authenticator/browser revocation acceptance remain pending.",
+    "Current reports count 27 accepted features, across 24 batches; 13 remain. Feature 38 is not counted."
+  ],
+  "regressionsFixed": [
+    "Malformed JSON responses no longer expose server payload fragments through parser messages.",
+    "Lost mutation acknowledgments retain the exact UUID and reviewed input even when a polling read fails.",
+    "Dirty drafts can explicitly discard and refresh after stale-version rejection; account revocation clears private state.",
+    "Nine old console compile fixtures now include the new transitive module without changing their assertions.",
+    "CLI --history is recognized as a boolean flag instead of a positional path."
+  ],
+  "originalLocalFilesPreserved": 23
+}

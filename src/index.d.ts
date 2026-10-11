@@ -92,3 +92,5 @@ export * from "./translation-review.js";
 
 export * from "./project-incidents.js";
 export * from "./service-accounts.js";
+export * from "./project-costs.js";
+export type { PlatformProjectCostOptions } from "./platform-project-costs.js";

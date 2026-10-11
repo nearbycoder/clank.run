@@ -89,3 +89,5 @@ export * from "./translation-review.ts";
 
 export * from "./project-incidents.ts";
 export * from "./service-accounts.ts";
+export * from "./project-costs.ts";
+export type { PlatformProjectCostOptions } from "./platform-project-costs.ts";
