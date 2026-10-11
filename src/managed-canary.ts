@@ -119,12 +119,19 @@ export function createManagedCanary(internal: SQLiteInternal, input: ManagedCana
       authority();
       const entry = { upstream, route: control?.route, primary: control?.primary, assertCurrent: authority, report, lastWall: Date.now(), samples: [] as Array<{ duration: number; error: boolean }>, total: 0, startedAt: Date.now(), failure: null as string | null };
       const assertCurrent = () => {
+        if (shutdown.signal.aborted) throw new Error("Platform closed during canary evaluation.");
         authority();
         const now = Date.now();
         if (now < entry.lastWall) throw new Error("Canary measurement clock regressed.");
         entry.lastWall = now;
       };
       entry.assertCurrent = assertCurrent;
+      const assessStage = (minimumSamples: number) => {
+        summarize(entry);
+        const decision = assessRollout(report, { ...policy, minimumSamples });
+        if (decision.action === "rollback") throw new Error(`Canary guardrail failed: ${decision.reasons.join(" ")}`);
+        return decision;
+      };
       running.set(projectId, entry);
       try {
         for (let index = 0; index < policy.stages.length; index++) {
@@ -134,11 +141,13 @@ export function createManagedCanary(internal: SQLiteInternal, input: ManagedCana
           Object.assign(report, { stage: index, trafficPercent: stage.trafficPercent, samples: 0, errorRate: 0, p95Ms: 0, updatedAt: Date.now() }); assertCurrent(); persist(report, assertCurrent);
           const deadline = performance.now() + stage.durationMs; let lastHealth = performance.now(), lastPersist = performance.now();
           do {
-            if (shutdown.signal.aborted) throw new Error("Platform closed during canary evaluation.");
-            assertCurrent(); summarize(entry);
-            const decision = assessRollout(report, { ...policy, minimumSamples: stage.minimumSamples });
-            if (decision.action === "rollback") throw new Error(`Canary guardrail failed: ${decision.reasons.join(" ")}`);
-            if (performance.now() - lastHealth >= 1000) { await check(); assertCurrent(); lastHealth = performance.now(); }
+            assertCurrent();
+            let decision = assessStage(stage.minimumSamples);
+            if (performance.now() - lastHealth >= 1000) {
+              await check(); assertCurrent(); lastHealth = performance.now();
+              // Requests can complete while health is pending; assess the current samples.
+              decision = assessStage(stage.minimumSamples);
+            }
             if (performance.now() - lastPersist >= 1000) { report.updatedAt = Date.now(); assertCurrent(); persist(report, assertCurrent); lastPersist = performance.now(); }
             if (performance.now() >= deadline) {
               if (decision.action !== "continue") throw new Error(`Canary stage lacked required evidence: ${decision.reasons.join(" ")}`);
@@ -147,6 +156,7 @@ export function createManagedCanary(internal: SQLiteInternal, input: ManagedCana
             await new Promise<void>((resolve) => { setTimeout(resolve, Math.max(1, Math.min(100, deadline - performance.now()))); });
           } while (true);
           assertCurrent(); await check(); assertCurrent();
+          assessStage(stage.minimumSamples);
         }
         assertCurrent(); report.state = "passed"; report.updatedAt = Date.now(); persist(report, assertCurrent);
         return Object.freeze({ ...report });

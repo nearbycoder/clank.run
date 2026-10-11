@@ -13,19 +13,20 @@ import { openSupervisorLease } from '../dist/platform-supervisor.js';
 
 const gate = () => { let resolve; return { promise: new Promise(done => { resolve = done; }), resolve: value => resolve(value) }; };
 
-async function fixture(t, { provider = false, streaming = false } = {}) {
+async function fixture(t, { provider = false, streaming = false, durationMs = 10000, minimumSamples = 1, healthCheck = async () => undefined } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'clank-managed-canary-drain-'));
   const database = await openSQLite(defineDatabase({}), { path: join(root, 'control.sqlite') });
   const lease = await openSupervisorLease(join(root, 'lease.sqlite'), { configurationId: 'canary-drain', configurationRevision: 1, leaseMs: 30000, pollIntervalMs: 50 });
   assert.equal(lease.acquire(), true);
   const revoker = new DatabaseSync(join(root, 'lease.sqlite'));
-  const policy = { stages: [{ trafficPercent: 100, durationMs: 10000, minimumSamples: 1 }], maximumErrorRate: 0.1, maximumP95Ms: 10000 };
+  const policy = { stages: [{ trafficPercent: 100, durationMs, minimumSamples }], maximumErrorRate: 0.1, maximumP95Ms: 10000 };
   const canaries = createManagedCanary(database[SQLITE_INTERNAL], policy);
   const received = gate(), disconnected = gate(), failures = [], metrics = [], selections = [], requests = [];
   let held, run, source, candidateRequests = 0;
   const server = createServer((request, response) => {
     requests.push(request.url); candidateRequests++;
     if (request.url.endsWith('/fail')) { response.writeHead(500); response.end('failed'); return; }
+    if (request.url.endsWith('/ok')) { response.writeHead(200); response.end('ok'); return; }
     held = response; response.on('close', () => disconnected.resolve());
     if (streaming) { response.writeHead(200); response.write('first'); }
     received.resolve();
@@ -44,12 +45,13 @@ async function fixture(t, { provider = false, streaming = false } = {}) {
     canaries.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
     await run; revoker.close(); lease.close(); database.close(); await rm(root, { recursive: true, force: true });
   });
-  run = canaries.run(primary.projectId, candidate.releaseId, upstream, async () => undefined,
+  run = canaries.run(primary.projectId, candidate.releaseId, upstream, healthCheck,
     { assertCurrent: () => lease.assertCurrent(), ...(provider ? { route: candidate, primary } : {}) }).catch(error => { failures.push(error); });
   // The first asynchronous health boundary precedes publishing the stage.
   while (canaries.route(primary.projectId)?.trafficPercent !== 100) await new Promise(resolve => setTimeout(resolve, 1));
   return {
     ingress, canaries, metrics, selections, requests, received, disconnected, assertion,
+    catalogPath: join(root, 'control.sqlite'), settle: () => run, failures,
     get held() { return held; }, get candidateRequests() { return candidateRequests; },
     request: path => new Request(`https://app.example.test${path}`),
     reuseSelection: route => { source = () => [route]; },
@@ -136,4 +138,95 @@ test('closing the local coordinator invalidates even its already admitted drain 
   await f.fail(); f.canaries.close(); f.held.end('closed coordinator');
   const response = await pending;
   assert.equal(response.status, 503); assert.equal((await response.json()).error.code, 'CANARY_UNAVAILABLE');
+});
+
+for (const status of [200, 500]) test(`canary assessment includes ${status} responses completed during an awaited health check`, { timeout: 15000 }, async t => {
+  const entered = gate(), release = gate();
+  // Release a failed assertion's held health check before fixture teardown waits.
+  t.after(() => release.resolve());
+  let checks = 0;
+  const durationMs = 1500;
+  const f = await fixture(t, { durationMs, minimumSamples: 2, healthCheck: async () => {
+    if (++checks === 2) { entered.resolve(); await release.promise; }
+  } });
+  await entered.promise;
+  const observer = new DatabaseSync(f.catalogPath, { readOnly: true });
+  const retained = () => JSON.parse(observer.prepare('SELECT report FROM clank_platform_canaries WHERE release_id=?').get('release_candidate').report);
+  try {
+    const stage = retained();
+    for (let index = 0; index < 2; index++) {
+      const response = await f.ingress.handle(f.request(status === 500 ? '/fail' : '/ok'));
+      assert.equal(response.status, status);
+      assert.equal(await response.text(), status === 500 ? 'failed' : 'ok');
+    }
+    assert.equal(f.metrics.length, 2);
+    assert.ok(f.metrics.every(metric => metric.admitted && metric.releaseId === 'release_candidate'
+      && metric.recordedAt <= stage.updatedAt + durationMs), 'Both native responses must finish inside the original stage window.');
+    // Keep the health await open past the original deadline. Its earlier empty
+    // snapshot cannot decide the stage after these real responses complete.
+    await new Promise(resolve => setTimeout(resolve, Math.max(1, stage.updatedAt + durationMs + 100 - Date.now())));
+    release.resolve(); await f.settle();
+    const final = retained();
+    assert.equal(final.samples, 2);
+    assert.equal(final.errorRate, status === 500 ? 1 : 0);
+    assert.equal(final.state, status === 500 ? 'failed' : 'passed');
+    if (status === 500) {
+      assert.equal(f.failures.length, 1); assert.match(f.failures[0].message, /Canary guardrail/);
+    } else assert.deepEqual(f.failures, []);
+  } finally { observer.close(); }
+});
+
+for (const mode of ['close', 'lease replacement']) test(`canary cannot publish after ${mode} during an awaited health check`, { timeout: 15000 }, async t => {
+  const entered = gate(), release = gate();
+  t.after(() => release.resolve());
+  let checks = 0;
+  const f = await fixture(t, { durationMs: 1500, minimumSamples: 2, healthCheck: async () => {
+    if (++checks === 2) { entered.resolve(); await release.promise; }
+  } });
+  for (let index = 0; index < 2; index++) {
+    const response = await f.ingress.handle(f.request('/ok'));
+    assert.equal(response.status, 200); assert.equal(await response.text(), 'ok');
+  }
+  await entered.promise;
+  if (mode === 'close') f.canaries.close(); else f.revoke();
+  // Cross the stage deadline while health is held; no later loop iteration
+  // can repair an authority or shutdown check omitted after this await.
+  await new Promise(resolve => setTimeout(resolve, 650));
+  release.resolve(); await f.settle();
+  const observer = new DatabaseSync(f.catalogPath, { readOnly: true });
+  try {
+    const final = JSON.parse(observer.prepare('SELECT report FROM clank_platform_canaries WHERE release_id=?').get('release_candidate').report);
+    assert.equal(final.state, mode === 'close' ? 'failed' : 'running');
+    // A lost lease cannot publish a failed report either; its retained running
+    // row belongs to the next owner. Closing a current owner records failure.
+    assert.equal(f.failures.length, 1);
+    assert.match(f.failures[0].message, mode === 'close' ? /Platform closed/ : /leadership|lease|ownership/i);
+  } finally { observer.close(); }
+});
+
+
+test('canary final health check cannot publish an earlier healthy sample snapshot', { timeout: 15000 }, async t => {
+  const entered = gate(), release = gate();
+  t.after(() => release.resolve());
+  let checks = 0;
+  const f = await fixture(t, { durationMs: 1500, minimumSamples: 2, healthCheck: async () => {
+    if (++checks === 3) { entered.resolve(); await release.promise; }
+  } });
+  for (let index = 0; index < 2; index++) {
+    const response = await f.ingress.handle(f.request('/ok'));
+    assert.equal(response.status, 200); assert.equal(await response.text(), 'ok');
+  }
+  await entered.promise;
+  for (let index = 0; index < 2; index++) {
+    const response = await f.ingress.handle(f.request('/fail'));
+    assert.equal(response.status, 500); assert.equal(await response.text(), 'failed');
+  }
+  release.resolve(); await f.settle();
+  const observer = new DatabaseSync(f.catalogPath, { readOnly: true });
+  try {
+    const final = JSON.parse(observer.prepare('SELECT report FROM clank_platform_canaries WHERE release_id=?').get('release_candidate').report);
+    assert.equal(final.state, 'failed');
+    assert.equal(final.samples, 4); assert.equal(final.errorRate, 0.5);
+    assert.equal(f.failures.length, 1); assert.match(f.failures[0].message, /Canary guardrail/);
+  } finally { observer.close(); }
 });
