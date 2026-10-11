@@ -239,12 +239,12 @@ function compactReleaseLayout(source, preserveInteriorSpacing = false) {
 
 // Private Buffer-in/Buffer-out build/audit contract, not a package export.
 // Mapped copies and malformed UTF-8 stay byte-exact. Eligible declarations
-// retain interior spacing and every literal/comment byte.
+// remove code indentation/separator spacing, retaining every literal/comment byte.
 export function declarationReleaseLayout(source, { sourceMap = process.env.CLANK_SOURCE_MAPS === "1" } = {}) {
   if (sourceMap) return source;
   const text = source.toString("utf8");
   if (!Buffer.from(text).equals(source)) return source;
-  return Buffer.from(compactReleaseLayout(text, true));
+  return Buffer.from(compactReleaseLayout(text, false));
 }
 
 export async function build({ quiet = false } = {}) {

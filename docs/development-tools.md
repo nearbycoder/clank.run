@@ -61,9 +61,10 @@ accepted indentation-only layout because the framework's default workflow output
 callback contributes its exact reflected source to persisted definition revisions.
 Interior-spacing removal must not change those existing workflow revisions. This private
 build step does not change public `compile()` output, example compilation
-or mapped/debug builds. Unmapped release declarations remove only leading code
-indentation with the same conservative scanner; interior spacing, all type tokens,
-newlines, comments/JSDoc, licenses and literal bytes remain. Source declarations and
+or mapped/debug builds. Unmapped release declarations remove leading code indentation
+and spacing beside the same standalone separators with the conservative scanner;
+all type tokens, other token-boundary spacing, newlines, comments/JSDoc, licenses and
+literal bytes remain. Source declarations and
 mapped declaration copies retain their exact bytes. Malformed UTF-8 declarations are
 copied unchanged in both modes. The documentation audit compares raw bytes of
 each declaration against its exact selected build output and rejects every other byte
