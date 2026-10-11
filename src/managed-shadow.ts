@@ -475,31 +475,40 @@ export interface ShadowOwnerAdapter extends ShadowLifecycleAdapter {
   scope<Value>(current:()=>void,work:()=>Promise<Value>):Promise<Value>;
   admit(projectId:string,operation:ShadowOperation):void;
   begin(projectId:string,operation:ShadowOperation,current:()=>void):ShadowRecord;
-  prepare(projectId:string,record:()=>ShadowRecord,change:(update:(operation:ShadowOperation)=>ShadowOperation)=>void,current:()=>void,signal:AbortSignal):Promise<ShadowCheckpoint>;
+  prepare(projectId:string,record:()=>ShadowRecord,change:(update:(operation:ShadowOperation)=>ShadowOperation)=>void,current:()=>void,signal:AbortSignal,reviewedPrimary?:DeploymentProviderCanaryBinding):Promise<ShadowCheckpoint>;
+  replay?(projectId:string,keyDigest:string,current:()=>void,bySession?:boolean):ShadowReplayView|null;
   onError?(error:unknown):void;
 }
+export interface ShadowReplayView { readonly replay:ShadowReplay; readonly current:ShadowRecord|null; readonly epoch:number; }
 export interface ShadowController {
-  start(projectId:string,operation:ShadowOperation,admission:()=>void):Promise<ShadowRecord>;
+  start(projectId:string,operation:ShadowOperation,admission:()=>void,reviewedPrimary?:DeploymentProviderCanaryBinding,authorizeBegin?:()=>void):Promise<ShadowRecord>;
+  replay(projectId:string,keyDigest:string,bySession?:boolean):ShadowReplayView|null|undefined;
+  requestStop(projectId:string,sessionId:string,operationId:string,controllerEpoch:number,authorized:()=>void):Promise<ShadowRecord|undefined>;
+  elapsed(projectId:string,sessionId:string):number|null;
   stop(projectId:string,sessionId:string,epoch:number,authorized:()=>void):Promise<ShadowRecord>;
   recover(projectId:string):Promise<ShadowRecord|null>;
   close():Promise<void>;
 }
 /** @internal One tracked task owns the native project lease; exact stop never queues behind that task. */
 export function createShadowController(adapter:ShadowOwnerAdapter):ShadowController {
-  type Owner={abort:AbortController;record:ShadowRecord|null;current:(()=>void)|null;flight:Promise<void>};
+  type Owner={abort:AbortController;record:ShadowRecord|null;current:(()=>void)|null;flight:Promise<void>;observed:number|null};
   const owners=new Map<string,Owner>();let closed=false;
   const report=(error:unknown)=>{try{adapter.onError?.(error);}catch{/* Reporting must not detach the retained cleanup barrier. */}};
   return {
-    start(projectId,operation,admission){
+    start(projectId,input,admission,reviewedPrimary,authorizeBegin=admission){
+      // Serialize caller-owned values synchronously before lock() can suspend.
+      const operation=JSON.parse(shadowBoundedJson(input,64*1024)) as ShadowOperation;
+      const freeze=(value:unknown):void=>{if(value && typeof value==="object"){for(const item of Object.values(value))freeze(item);Object.freeze(value);}};freeze(operation);
+      const expected=reviewedPrimary===undefined?undefined:shadowBinding(reviewedPrimary);
       if(closed || owners.has(projectId))return Promise.reject(Object.assign(new Error("A shadow owner is already active or closed."),{code:"SHADOW_BUSY"}));
       let accepted!:(record:ShadowRecord)=>void,rejected!:(error:unknown)=>void;
       const ready=new Promise<ShadowRecord>((resolve,reject)=>{accepted=resolve;rejected=reject;});
-      const owner:Owner={abort:new AbortController(),record:null,current:null,flight:Promise.resolve()};owners.set(projectId,owner);
+      const owner:Owner={abort:new AbortController(),record:null,current:null,flight:Promise.resolve(),observed:null};owners.set(projectId,owner);
       owner.flight=adapter.lock(projectId,async()=>{
         const current=adapter.authority(projectId);owner.current=current;
         await adapter.scope(current,async()=>{
-          current();admission();if(closed || owner.abort.signal.aborted)throw new Error("Shadow owner closed before admission.");
-          owner.record=adapter.begin(projectId,operation,()=>{current();admission();});accepted(owner.record);
+          current();authorizeBegin();admission();if(closed || owner.abort.signal.aborted)throw new Error("Shadow owner closed before admission.");
+          owner.record=adapter.begin(projectId,operation,()=>{current();authorizeBegin();admission();});accepted(owner.record);
           let outcome:ShadowOutcome="interrupted",wall=Date.now(),started=performance.now();
           const live=()=>{
             current();admission();adapter.admit(projectId,owner.record!.operation);if(closed || owner.abort.signal.aborted || owner.record!.operation.stopRequested)throw new Error("Shadow observation was stopped.");
@@ -511,7 +520,8 @@ export function createShadowController(adapter:ShadowOwnerAdapter):ShadowControl
           };
           const change=(update:(operation:ShadowOperation)=>ShadowOperation)=>{live();owner.record=adapter.save(projectId,owner.record!,update(owner.record!.operation),current);live();};
           try{
-            live();const snapshot=await adapter.prepare(projectId,()=>owner.record!,change,live,owner.abort.signal);live();
+            live();const snapshot=await adapter.prepare(projectId,()=>owner.record!,change,live,owner.abort.signal,expected);live();
+            owner.observed=performance.now();
             change(op=>({...op,snapshot,phase:"observing",updatedAt:Math.max(Date.now(),op.updatedAt)}));
             while(true){
               live();await new Promise<void>(resolve=>{
@@ -521,13 +531,36 @@ export function createShadowController(adapter:ShadowOwnerAdapter):ShadowControl
             }
           }catch(error){
             if(owner.record!.operation.stopRequested)outcome="stopped";
-            else if((outcome as ShadowOutcome)!=="expired")outcome=closed?"interrupted":"provider-error";
+            else if((outcome as ShadowOutcome)!=="expired"){
+              const code=String((error as {code?:string})?.code??"");
+              outcome=closed?"interrupted":code==="SHADOW_AUTHORITY_REVOKED"?"authority-revoked":code==="SHADOW_PRIMARY_CHANGED"?"primary-changed":"provider-error";
+            }
             try{owner.record=await retireShadow(adapter,projectId,owner.record!,current,outcome);}
             catch(cleanup){report(cleanup);throw cleanup;}
           }
         });
       }).catch(error=>{rejected(error);report(error);}).finally(()=>{if(owners.get(projectId)===owner)owners.delete(projectId);});
       return ready;
+    },
+    replay(projectId,keyDigest,bySession=false){
+      const owner=owners.get(projectId);
+      if(closed || !owner?.record || !owner.current)return undefined;
+      if(!adapter.replay)throw new Error("The native replay reader is unavailable.");
+      owner.current();const result=adapter.replay(projectId,keyDigest,owner.current,bySession);owner.current();return result;
+    },
+    elapsed(projectId,sessionId){const owner=owners.get(projectId);return owner?.record?.operation.sessionId===sessionId && owner.observed!==null?Math.max(0,Math.floor(performance.now()-owner.observed)):null;},
+    async requestStop(projectId,sessionId,operationId,controllerEpoch,authorized){
+      const owner=owners.get(projectId);
+      if(closed || !owner?.record || !owner.current)return undefined;
+      const current=owner.current;
+      return adapter.scope(current,async()=>{
+        current();authorized();const record=adapter.read(projectId);
+        if(!record || record.operation.sessionId!==sessionId || record.operation.operationId!==operationId || record.operation.controllerEpoch!==controllerEpoch
+          || record.serialized!==owner.record!.serialized)shadowInvalid("SHADOW_SUPERSEDED");
+        if(record.operation.phase==="complete")return record;
+        if(!record.operation.stopRequested)owner.record=adapter.save(projectId,record,{...record.operation,stopRequested:true,updatedAt:Math.max(Date.now(),record.operation.updatedAt)},()=>{current();authorized();});
+        current();authorized();owner.abort.abort();return owner.record!;
+      });
     },
     async stop(projectId,sessionId,epoch,authorized){
       const owner=owners.get(projectId);
@@ -554,6 +587,85 @@ export function createShadowController(adapter:ShadowOwnerAdapter):ShadowControl
     },
     async close(){closed=true;for(const owner of owners.values())owner.abort.abort();await Promise.all([...owners.values()].map(owner=>owner.flight));},
   };
+}
+
+/** @internal Canonical, bounded review identity; this value never grants native authority. */
+export interface ShadowReviewSelection {
+  readonly pathIndices: readonly number[]; readonly methodMask: number; readonly samplePercent: number; readonly durationMs: number;
+  readonly maxAttempts: number; readonly maxConcurrent: number; readonly maxResponseBytes: number; readonly requestMs: number;
+}
+export interface ShadowReviewPayload {
+  readonly version: 1; readonly projectId: string; readonly releaseId: string; readonly artifactSha256: string;
+  readonly primaryReleaseId: string; readonly primaryGeneration: number; readonly primaryFence: number; readonly primaryIncarnation: string;
+  readonly primaryArtifactSha256: string; readonly nodeId: string; readonly providerBindingDigest: string; readonly credentialGeneration: number;
+  readonly principalBindingDigest: string; readonly policyRevision: number; readonly policyDigest: string; readonly selection: ShadowReviewSelection;
+  readonly expectedEpoch: number; readonly issuedAt: number; readonly expiresAt: number; readonly nonce: string; readonly reviewDigest: string;
+}
+const reviewFields=["version","projectId","releaseId","artifactSha256","primaryReleaseId","primaryGeneration","primaryFence","primaryIncarnation","primaryArtifactSha256",
+  "nodeId","providerBindingDigest","credentialGeneration","principalBindingDigest","policyRevision","policyDigest","selection","expectedEpoch","issuedAt","expiresAt","nonce","reviewDigest"];
+const selectionFields=["pathIndices","methodMask","samplePercent","durationMs","maxAttempts","maxConcurrent","maxResponseBytes","requestMs"];
+/** @internal Captures every scalar and array before the first admission await. */
+export function normalizeShadowReview(value:unknown):ShadowReviewPayload {
+  const code="SHADOW_REVIEW_INVALID",raw=closedShadowObject(value,reviewFields,code),selection=closedShadowObject(raw.selection,selectionFields,code);
+  if(raw.version!==1)shadowInvalid(code);
+  const indices=selection.pathIndices;
+  if(!Array.isArray(indices) || indices.length<1 || indices.length>32 || indices.some((value,index)=>!Number.isSafeInteger(value) || value<0 || value>31 || index>0 && value<=indices[index-1]))shadowInvalid(code);
+  const captured:ShadowReviewSelection=Object.freeze({pathIndices:Object.freeze([...indices]),methodMask:shadowNumber(selection.methodMask,3,code),
+    samplePercent:shadowPercentage(selection.samplePercent,100),durationMs:shadowNumber(selection.durationMs,1800000,code),maxAttempts:shadowNumber(selection.maxAttempts,10000,code),
+    maxConcurrent:shadowNumber(selection.maxConcurrent,16,code),maxResponseBytes:shadowNumber(selection.maxResponseBytes,65536,code),requestMs:shadowNumber(selection.requestMs,10000,code)});
+  const binding=shadowBinding({projectId:raw.projectId,releaseId:raw.primaryReleaseId,generation:raw.primaryGeneration,fence:raw.primaryFence,incarnation:raw.primaryIncarnation});
+  const result:ShadowReviewPayload=Object.freeze({version:1,projectId:binding.projectId,releaseId:shadowId(raw.releaseId),artifactSha256:shadowDigest(raw.artifactSha256),primaryReleaseId:binding.releaseId,
+    primaryGeneration:binding.generation,primaryFence:binding.fence,primaryIncarnation:binding.incarnation,primaryArtifactSha256:shadowDigest(raw.primaryArtifactSha256),nodeId:shadowId(raw.nodeId),
+    providerBindingDigest:shadowDigest(raw.providerBindingDigest),credentialGeneration:shadowInteger(raw.credentialGeneration),principalBindingDigest:shadowDigest(raw.principalBindingDigest),
+    policyRevision:shadowInteger(raw.policyRevision),policyDigest:shadowDigest(raw.policyDigest),selection:captured,expectedEpoch:shadowInteger(raw.expectedEpoch,Number.MAX_SAFE_INTEGER,0),
+    issuedAt:shadowInteger(raw.issuedAt),expiresAt:shadowInteger(raw.expiresAt),nonce:typeof raw.nonce==="string"?raw.nonce:"",reviewDigest:shadowDigest(raw.reviewDigest)});
+  if(result.releaseId===result.primaryReleaseId || result.credentialGeneration!==result.primaryGeneration || result.expiresAt!==result.issuedAt+120000
+    || !/^[A-Za-z0-9_-]{22}$/u.test(result.nonce) || reviewBase64(reviewBytes(result.nonce)).length!==22 || reviewBase64(reviewBytes(result.nonce))!==result.nonce)shadowInvalid(code);
+  shadowBoundedJson(result,3072);return result;
+}
+function reviewBase64(bytes:Uint8Array):string {return btoa(String.fromCharCode(...bytes)).replace(/=/gu,"").replace(/\+/gu,"-").replace(/\//gu,"_");}
+function reviewBytes(value:string):Uint8Array {
+  if(!/^[A-Za-z0-9_-]+$/u.test(value))shadowInvalid("SHADOW_REVIEW_INVALID");
+  try{return Uint8Array.from(atob(value.replace(/-/gu,"+").replace(/_/gu,"/")),char=>char.charCodeAt(0));}catch{shadowInvalid("SHADOW_REVIEW_INVALID");}
+}
+export function shadowReviewToken(payload:ShadowReviewPayload,sign:(canonical:string)=>Uint8Array):string {
+  const canonical=JSON.stringify(normalizeShadowReview(payload)),signature=sign(canonical);
+  if(!(signature instanceof Uint8Array) || signature.byteLength!==32)shadowInvalid("SHADOW_REVIEW_INVALID");
+  return "clankshr1."+reviewBase64(new TextEncoder().encode(canonical))+"."+reviewBase64(signature);
+}
+export function parseShadowReviewToken(token:unknown):Readonly<{payload:ShadowReviewPayload;canonical:string;signature:Uint8Array}> {
+  if(typeof token!=="string" || token.length>4150 || !/^clankshr1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/u.test(token))shadowInvalid("SHADOW_REVIEW_INVALID");
+  const parts=token.split("."),bytes=reviewBytes(parts[1]!),signature=reviewBytes(parts[2]!);
+  if(bytes.byteLength>3072 || signature.byteLength!==32 || reviewBase64(bytes)!==parts[1] || reviewBase64(signature)!==parts[2])shadowInvalid("SHADOW_REVIEW_INVALID");
+  let canonical:string,payload:ShadowReviewPayload;
+  try{canonical=new TextDecoder("utf-8",{fatal:true}).decode(bytes);payload=normalizeShadowReview(JSON.parse(canonical));}catch{shadowInvalid("SHADOW_REVIEW_INVALID");}
+  if(JSON.stringify(payload)!==canonical)shadowInvalid("SHADOW_REVIEW_INVALID");
+  return Object.freeze({payload,canonical,signature});
+}
+export function shadowReviewSelection(policy:PlatformShadowPolicy,effective:ShadowSessionPolicy):ShadowReviewSelection {
+  const selected=narrowShadowPolicy(policy,effective);
+  return Object.freeze({pathIndices:Object.freeze(selected.readPaths.map(path=>policy.readPaths.indexOf(path))),methodMask:(selected.methods.includes("GET")?1:0)|(selected.methods.includes("HEAD")?2:0),
+    samplePercent:selected.samplePercent,durationMs:selected.durationMs,maxAttempts:selected.maxAttempts,maxConcurrent:selected.maxConcurrent,maxResponseBytes:selected.maxResponseBytes,requestMs:selected.requestMs});
+}
+export function expandShadowReviewSelection(policy:PlatformShadowPolicy,selection:ShadowReviewSelection):ShadowSessionPolicy {
+  const paths=selection.pathIndices.map(index=>policy.readPaths[index]);
+  if(paths.some(path=>path===undefined))shadowInvalid("SHADOW_REVIEW_INVALID");
+  return narrowShadowPolicy(policy,{readPaths:paths,methods:[...(selection.methodMask&1?["GET"]:[]),...(selection.methodMask&2?["HEAD"]:[])],samplePercent:selection.samplePercent,durationMs:selection.durationMs,
+    maxAttempts:selection.maxAttempts,maxConcurrent:selection.maxConcurrent,maxResponseBytes:selection.maxResponseBytes,requestMs:selection.requestMs});
+}
+export function shadowReviewDigest(payload:ShadowReviewPayload,principalBindingDigest:string,policy:ShadowSessionPolicy,hash:ShadowHash):string {
+  return hash(JSON.stringify({version:1,action:"shadow-start",principalBindingDigest,projectId:payload.projectId,releaseId:payload.releaseId,artifactSha256:payload.artifactSha256,
+    primary:{releaseId:payload.primaryReleaseId,generation:payload.primaryGeneration,fence:payload.primaryFence,incarnation:payload.primaryIncarnation,artifactSha256:payload.primaryArtifactSha256},
+    nodeId:payload.nodeId,providerBindingDigest:payload.providerBindingDigest,credentialGeneration:payload.credentialGeneration,policyRevision:payload.policyRevision,policyDigest:payload.policyDigest,
+    effectivePolicyDigest:hash(JSON.stringify(policy)),expectedEpoch:payload.expectedEpoch,issuedAt:payload.issuedAt,expiresAt:payload.expiresAt,nonce:payload.nonce}));
+}
+/** @internal Call only after the native replay mirror and exact opaque input digest have matched. */
+export function assertShadowReviewReplay(payload:ShadowReviewPayload,identity:ShadowReplayIdentity,principalDigest:string,hash:ShadowHash):void {
+  if(payload.projectId!==identity.projectId || payload.releaseId!==identity.releaseId || payload.artifactSha256!==identity.artifactSha256
+    || payload.primaryReleaseId!==identity.primaryReleaseId || payload.primaryGeneration!==identity.primaryGeneration || payload.policyRevision!==identity.policyRevision || payload.policyDigest!==identity.policyDigest
+    || payload.expectedEpoch+1!==identity.controllerEpoch || payload.principalBindingDigest!==principalDigest
+    || identity.primary && (payload.primaryFence!==identity.primary.fence || payload.primaryIncarnation!==identity.primary.incarnation)
+    || shadowReviewDigest(payload,principalDigest,identity.policy,hash)!==identity.reviewDigest || payload.reviewDigest!==identity.reviewDigest)shadowInvalid("SHADOW_REPLAY_CONFLICT");
 }
 
 /** @internal Schema identity is separate from per-session policy and enablement. */

@@ -3,7 +3,7 @@ import type { PlatformSupervisorOptions, PlatformSupervisorStatus } from "./plat
 export type { PlatformSupervisorOptions, PlatformSupervisorStatus } from "./platform-supervisor.js";
 import type {PlatformServiceAccountOptions} from "./platform-service-accounts.js";
 import type {AuthenticatedServiceAccount} from "./service-accounts.js";
-import type { PlatformShadowPolicy } from "./managed-shadow.js";
+import type { PlatformShadowPolicy, ShadowSessionPolicy, ShadowReport, ShadowPhase, ShadowOutcome } from "./managed-shadow.js";
 import type { ManagedCanaryOptions } from "./managed-canary.js";
 import type { ReleaseAttestationPolicy } from "./release-attestation.js";
 import type { PlatformOperationsOptions } from "./operations-monitor.js";
@@ -339,6 +339,21 @@ export interface PlatformBillingOptions {
     /** Entitlement grace after first entering past_due. Defaults to 7 days. */
     pastDueGraceMs?: number;
 }
+/** Safe shadow receipt. Provider credentials, raw observations and sampled URLs are never returned. */
+export interface PlatformShadowSession {
+  readonly sessionId:string; readonly operationId:string; readonly controllerEpoch:number; readonly epoch:number;
+  readonly policyRevision:number; readonly releaseId:string; readonly artifactSha256:string; readonly primary:Readonly<{releaseId:string;generation:number}>;
+  readonly phase:ShadowPhase; readonly outcome:ShadowOutcome|null; readonly stopRequested:boolean; readonly cleanupRequired:boolean; readonly reportAvailable:boolean;
+  readonly policy:ShadowSessionPolicy;
+  readonly snapshot:Readonly<{sha256:string;bytes:number;providerStartedAt:number;providerCompletedAt:number;platformObservedAt:number;elapsedSinceObservationMs:number|null;crossHostFreshness:"unknown"}>|null;
+  readonly report:ShadowReport|null; readonly createdAt:number; readonly expiresAt:number; readonly updatedAt:number; readonly nextAction:"none"|"wait"|"stop"|"recover"|"review";
+}
+export interface PlatformShadowResponse { readonly ok:true; readonly enabled:boolean; readonly epoch:number; readonly session:PlatformShadowSession; }
+export interface PlatformShadowPreview {
+  readonly ok:true; readonly reviewToken:string; readonly expiresAt:number;
+  readonly review:Readonly<{projectId:string;releaseId:string;artifactSha256:string;primary:Readonly<{releaseId:string;generation:number}>;expectedEpoch:number;policyRevision:number;policy:ShadowSessionPolicy}>;
+}
+
 export interface ClankPlatformOptions {
     /** Same-host Linux coordinators; each occupies a dedicated process terminated after leadership loss. */
     supervisor?: PlatformSupervisorOptions;

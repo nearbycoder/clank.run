@@ -23,7 +23,7 @@ const close=async()=>{
 if(process.env.CLANK_SHADOW_NATIVE_OWNER==='1'){
   // This private lifecycle proof consumes actual platform-created artifacts and
   // rows, with genuine native supervisor/project capabilities. It does not
-  // exercise the unexposed human start or Linux host-certification admission.
+  // exercise public human start or Linux host-certification admission.
   const input=JSON.parse(process.env.CLANK_SHADOW_NATIVE_INPUT),projectId=input.projectId;
   lease=await openSupervisorLease(join(root,'control.sqlite'),options.supervisor);if(!lease.acquire())throw new Error('Owned source could not acquire actual leadership.');
   leaseTimer=setInterval(()=>lease.renew(),1000);leaseTimer.unref();guardian=await armSupervisorGuardian(root,lease);

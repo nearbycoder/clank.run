@@ -1,6 +1,7 @@
 import { openNodeEvacuations, type NodeEvacuationPlan, type EvacuationProject, type NodeEvacuationHooks } from "./node-evacuation.ts";
 import { assertProviderShadowSchema, shadowSchemaIdentity, readShadowRecord, assertShadowReplay, readShadowReplays, saveShadowRecord, retireShadow,
-  normalizeShadowPolicy, narrowShadowPolicy, createShadowController, type PlatformShadowPolicy, type ShadowRecord, type ShadowOperation, type ShadowOutcome, type ShadowLifecycleAdapter } from "./managed-shadow.ts";
+  normalizeShadowPolicy, narrowShadowPolicy, createShadowController, emptyShadowReport, normalizeShadowReview, parseShadowReviewToken, shadowReviewToken, shadowReviewSelection, expandShadowReviewSelection, shadowReviewDigest, assertShadowReviewReplay,
+  type ShadowReviewPayload, type ShadowSessionPolicy, type ShadowReplayView, type ShadowReport, type ShadowPhase, type PlatformShadowPolicy, type ShadowRecord, type ShadowOperation, type ShadowOutcome, type ShadowLifecycleAdapter } from "./managed-shadow.ts";
 import { createManagedCanary, validateManagedCanary, type ManagedCanaryOptions } from "./managed-canary.ts";
 import { decodeReleaseAttestation, verifyReleaseAttestation, type ReleaseAttestation, type ReleaseAttestationPolicy } from "./release-attestation.ts";
 import { createOperationalMonitor, type OperationalSignal, type PlatformOperationsOptions } from "./operations-monitor.ts";
@@ -604,6 +605,21 @@ const PLATFORM_QUOTA_DEFINITIONS = Object.freeze({
   unit: string;
   label: string;
 }>);
+
+/** Safe shadow receipt. Provider credentials, raw observations and sampled URLs are never returned. */
+export interface PlatformShadowSession {
+  readonly sessionId:string; readonly operationId:string; readonly controllerEpoch:number; readonly epoch:number;
+  readonly policyRevision:number; readonly releaseId:string; readonly artifactSha256:string; readonly primary:Readonly<{releaseId:string;generation:number}>;
+  readonly phase:ShadowPhase; readonly outcome:ShadowOutcome|null; readonly stopRequested:boolean; readonly cleanupRequired:boolean; readonly reportAvailable:boolean;
+  readonly policy:ShadowSessionPolicy;
+  readonly snapshot:Readonly<{sha256:string;bytes:number;providerStartedAt:number;providerCompletedAt:number;platformObservedAt:number;elapsedSinceObservationMs:number|null;crossHostFreshness:"unknown"}>|null;
+  readonly report:ShadowReport|null; readonly createdAt:number; readonly expiresAt:number; readonly updatedAt:number; readonly nextAction:"none"|"wait"|"stop"|"recover"|"review";
+}
+export interface PlatformShadowResponse { readonly ok:true; readonly enabled:boolean; readonly epoch:number; readonly session:PlatformShadowSession; }
+export interface PlatformShadowPreview {
+  readonly ok:true; readonly reviewToken:string; readonly expiresAt:number;
+  readonly review:Readonly<{projectId:string;releaseId:string;artifactSha256:string;primary:Readonly<{releaseId:string;generation:number}>;expectedEpoch:number;policyRevision:number;policy:ShadowSessionPolicy}>;
+}
 
 export interface ClankPlatformOptions {
   /** Same-host Linux coordinators; each must occupy a dedicated process. Lost leadership terminates that process. */
@@ -3732,7 +3748,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     return record;
   };
   const nextCanaryEpoch = (record: PlatformProviderCandidateRecord | null) => canaryInteger((record?.epoch ?? 0) + 1);
-  const canaryControlRequest = async (projectId: string, record: PlatformProviderCandidateRecord, action: "binding" | "prepare" | "inspect" | "retire", input: unknown, assertCurrent: () => void, capsule?: Uint8Array, signal?:AbortSignal): Promise<unknown> => {
+  const canaryControlRequest = async (projectId: string, record: {readonly operation: Pick<ShadowOperation,"origin"|"credentialGeneration">}, action: "binding" | "prepare" | "inspect" | "retire", input: unknown, assertCurrent: () => void, capsule?: Uint8Array, signal?:AbortSignal): Promise<unknown> => {
     assertCurrent();
     if (!providerPlacement || providerIngressOrigin(record.operation.origin, providerPlacement.allowedProviderHosts) !== record.operation.origin) throw new Error("The retained provider origin is unavailable.");
     const url = new URL(deploymentProviderCanaryPath(projectId, action), record.operation.origin).href;
@@ -3832,7 +3848,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       if(JSON.stringify(narrowShadowPolicy(shadowPolicy,operation.policy))!==JSON.stringify(operation.policy))throw new Error("Shadow session policy differs from its approved bounds.");
       if(storage.internal.prepare("SELECT 1 FROM clank_deployment_operations WHERE project_id=? AND state IN ('queued','retry','leased') LIMIT 1").get(projectId))throw new Error("The primary still has a pending operation.");
       const project=projectById(storage.internal,projectId),candidate=releaseById(storage.internal,operation.releaseId);
-      if(!project || !candidate || candidate.projectId!==projectId || candidate.purpose!=="shadow-upload" || candidate.status!=="staged" || !candidate.artifactAvailable
+      if(!project || !candidate || candidate.projectId!==projectId || !shadowCandidateEligible(candidate) || !candidate.artifactAvailable
         || candidate.digest!==operation.artifactSha256 || project.activeReleaseId!==operation.primaryReleaseId || project.activeGeneration!==operation.credentialGeneration)throw new Error("The shadow candidate or primary changed.");
       const primary=releaseById(storage.internal,operation.primaryReleaseId);if(!primary)throw new Error("The shadow primary is absent.");requireDeploymentRelease(primary);
       const runtime=exactProviderRuntime(project,primary);
@@ -3852,7 +3868,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       if(operation.controllerEpoch!==nextCanaryEpoch(prior))throw new Error("Shadow controller epoch is not current.");
       return saveShadowRecord(storage.internal,projectId,prior,operation,admit,value=>syncHash(value,"hex"));
     },
-    async prepare(projectId,record,change,current,signal){
+    replay:(projectId,key,current,bySession=false)=>readShadowReplayView(projectId,key,current,bySession),
+    async prepare(projectId,record,change,current,signal,reviewedPrimary){
       const op=record().operation,project=projectById(storage.internal,projectId),candidate=releaseById(storage.internal,op.releaseId),primary=releaseById(storage.internal,op.primaryReleaseId);
       if(!project || !candidate || !primary || candidate.config.jobs || !op.policy.readPaths.includes(candidate.config.health.path))throw new Error("Shadow candidates require an approved public health path and no declared jobs.");
       current();await providerPromotionCertificate(project,op.nodeId);current();
@@ -3867,7 +3884,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         {maxArtifactBytes:runnerArtifactLimit,maxDatabaseBytes:providerPlacement!.maxDatabaseBytes,maxCapsuleBytes:providerPlacement!.maxRuntimeBytes});current();
       change(value=>({...value,capsuleSha256:capsule.sha256,updatedAt:Math.max(Date.now(),value.updatedAt)}));
       const primaryBinding=canaryBinding(await canaryControlRequest(projectId,record(),"binding",null,current,undefined,signal));current();
-      if(primaryBinding.projectId!==projectId || primaryBinding.releaseId!==op.primaryReleaseId || primaryBinding.generation!==op.credentialGeneration || primaryBinding.fence!==op.primaryFence)throw new Error("Shadow primary binding differs.");
+      if(primaryBinding.projectId!==projectId || primaryBinding.releaseId!==op.primaryReleaseId || primaryBinding.generation!==op.credentialGeneration || primaryBinding.fence!==op.primaryFence || reviewedPrimary && !samePlatformCanaryBinding(primaryBinding,reviewedPrimary))throw new Error("Shadow primary binding differs.");
       change(value=>({...value,primary:primaryBinding,phase:"preparing",updatedAt:Math.max(Date.now(),value.updatedAt)}));
       const raw=canaryObject(await canaryControlRequest(projectId,record(),"prepare",{primary:primaryBinding,operationId:op.operationId,controllerEpoch:op.controllerEpoch,releaseId:op.releaseId,
         capsuleSha256:capsule.sha256,purpose:"shadow",stateProtocol:"clank-provider-canary/2"},current,capsule.bytes,signal),
@@ -5426,6 +5443,148 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     });
     // The supervisor uses its own native connection: never enroll inside the storage transaction.
     current(); leadership.enrollProviderShadow(); current();
+  };
+  const shadowHash=(value:string)=>syncHash(value,"hex");
+  const shadowCandidateEligible=(release:ReleaseRow)=>release.purpose==="shadow-upload" && release.status==="staged" || release.purpose==="deployment" && release.status==="inactive";
+  const shadowRequestId=(value:unknown)=>{if(typeof value!=="string" || !/^[A-Za-z0-9_-]{1,128}$/u.test(value))throw new PlatformError(422,"SHADOW_INPUT_INVALID","Shadow identity must be bounded ASCII.");return value;};
+  const shadowPrincipalDigest=(principal:TokenPrincipal,projectId:string)=>shadowHash(JSON.stringify({version:1,domain:"clank-shadow-principal",projectId,userId:principal.userId,sessionId:principal.sessionId}));
+  const requireShadowHuman=(principal:TokenPrincipal,projectId:string,fresh=true)=>{
+    requireCurrentPlatformPrincipal(storage,principal);
+    if(principal.machine || principal.tokenId || !principal.sessionId || principal.impersonation)throw new PlatformError(403,"HUMAN_AUTH_REQUIRED","Shadow control requires a current human browser session.");
+    accessibleProject(storage.internal,projectId,principal,"deploy");requireNoEvacuation(projectId);
+    if(fresh)requireFreshUploadAuthority(principal,projectId);
+  };
+  const shadowSignature=(canonical:string)=>process.getBuiltinModule("node:crypto").createHmac("sha256",masterKey).update("clank-shadow-review/1\n").update(canonical).digest();
+  const requireShadowPolicy=()=>{if(!shadowPolicy)throw new PlatformError(409,"SHADOW_DISABLED","Shadow observation is disabled.");return shadowPolicy;};
+  const readShadowReplayView=(projectId:string,key:string,current:()=>void,bySession=false):ShadowReplayView|null=>providerWriterScope.run(current,()=>storage.internal.transaction(()=>{
+    current();const record=providerCandidateRecord(projectId);
+    // No schema is created by a read-only replay. Ordinary catalogs remain ordinary.
+    if(!storage.internal.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_platform_shadow_reports' AND type='table'").get()){current();return null;}
+    const rows=readShadowReplays(storage.internal,projectId,shadowHash),replay=rows.find(row=>bySession?row.receipt.identity.sessionId===key:row.receipt.identity.idempotencyKeyDigest===key);
+    current();return replay?Object.freeze({replay,current:record?.protocol===2 && record.operation.sessionId===replay.receipt.identity.sessionId?record:null,epoch:record?.epoch??0}):null;
+  }));
+  const shadowSessionPayload=(view:ShadowReplayView):PlatformShadowSession=>{
+    const retained=view.replay.receipt.identity,op=view.current?.operation,identity=op??retained,snapshot=identity.snapshot;
+    return {sessionId:identity.sessionId,operationId:identity.operationId,controllerEpoch:identity.controllerEpoch,epoch:view.current?.epoch??retained.epoch,
+      policyRevision:identity.policyRevision,releaseId:identity.releaseId,artifactSha256:identity.artifactSha256,primary:{releaseId:identity.primaryReleaseId,generation:op?.credentialGeneration??retained.primaryGeneration},
+      phase:identity.phase,outcome:identity.outcome,stopRequested:identity.stopRequested,cleanupRequired:identity.phase!=="complete",reportAvailable:view.current!==null || view.replay.report!==null,
+      policy:identity.policy,snapshot:snapshot?{...snapshot,elapsedSinceObservationMs:shadowController.elapsed(retained.projectId,identity.sessionId),crossHostFreshness:"unknown" as const}:null,
+      report:op?.report??view.replay.report,createdAt:identity.createdAt,expiresAt:identity.expiresAt,updatedAt:identity.updatedAt,
+      nextAction:identity.phase==="complete"?"none":identity.phase==="retiring" || identity.phase==="retired"?"recover":identity.stopRequested?"wait":"stop"};
+  };
+  const shadowResponse=(view:ShadowReplayView):PlatformShadowResponse=>({ok:true,enabled:Boolean(shadowPolicy),epoch:view.epoch,session:shadowSessionPayload(view)});
+  const shadowReviewedArtifacts=async(project:ProjectRow,candidate:ReleaseRow,primary:ReleaseRow,policy:ShadowSessionPolicy,nodeId:string,current:()=>void)=>{
+    current();if(candidate.config.jobs || !policy.readPaths.includes(candidate.config.health.path))throw new PlatformError(409,"SHADOW_CANDIDATE_INELIGIBLE","Shadow requires a reviewed public health path and no declared jobs.");
+    await providerPromotionCertificate(project,nodeId);current();
+    const signal=AbortSignal.timeout(providerPlacement!.activationTimeoutMs);
+    const artifact=await readRunnerReleaseArtifact(paths.projects,candidate,signal,runnerArtifactObjects);current();signal.throwIfAborted();
+    const previous=await readRunnerReleaseArtifact(paths.projects,primary,signal,runnerArtifactObjects);current();signal.throwIfAborted();
+    if(!artifact || !previous || artifact.sha256!==candidate.digest || previous.sha256!==primary.digest)throw new PlatformError(409,"SHADOW_ARTIFACT_UNAVAILABLE","The exact candidate or primary artifact is unavailable.");
+    const candidateBundle=await decodeDeploymentBundle(artifact.bytes);current();const primaryBundle=await decodeDeploymentBundle(previous.bytes);current();
+    if(!samePromotionMigrations(candidateBundle,primaryBundle))throw new PlatformError(409,"SHADOW_CANDIDATE_INELIGIBLE","Shadow requires identical database paths and migrations.");
+  };
+  const inspectShadowReview=async(principal:TokenPrincipal,projectId:string,releaseId:string,expectedEpoch:number,policy:ShadowSessionPolicy,current:()=>void)=>{
+    const configured=requireShadowPolicy(),project=projectById(storage.internal,projectId),candidate=releaseById(storage.internal,releaseId),prior=providerCandidateRecord(projectId);
+    current();requireNoProviderCanary(projectId);requireNoInterruptedPromotion(projectId);
+    if((prior?.epoch??0)!==expectedEpoch)throw new PlatformError(409,"SHADOW_SUPERSEDED","The candidate slot changed; review it again.");
+    if(!project || project.placement!=="provider" || !project.activeReleaseId || !project.activeGeneration || !candidate || candidate.projectId!==projectId
+      || !shadowCandidateEligible(candidate) || !candidate.artifactAvailable || candidate.id===project.activeReleaseId)throw new PlatformError(409,"SHADOW_CANDIDATE_INELIGIBLE","Select an available staged upload or inactive deployment from this project.");
+    const primary=releaseById(storage.internal,project.activeReleaseId);if(!primary)throw new PlatformError(409,"SHADOW_PRIMARY_UNAVAILABLE","The active primary is unavailable.");requireDeploymentRelease(primary);
+    const runtime=exactProviderRuntime(project,primary),origin=exactProviderOrigin(project,runtime.nodeId),fence=canaryInteger(storage.internal.prepare("SELECT fence FROM clank_deployment_project_fences WHERE project_id=?").get(projectId)?.fence);
+    const captured={projectId,releaseId:candidate.id,artifactSha256:candidate.digest,primaryReleaseId:primary.id,primaryGeneration:project.activeGeneration,primaryArtifactSha256:primary.digest,
+      nodeId:runtime.nodeId,origin,credentialGeneration:project.activeGeneration,primaryFence:fence};
+    const stable=()=>{
+      current();requireShadowHuman(principal,projectId);const projectNow=projectById(storage.internal,projectId),candidateNow=releaseById(storage.internal,releaseId),primaryNow=releaseById(storage.internal,primary.id),now=providerCandidateRecord(projectId);
+      if(!projectNow || !candidateNow || !primaryNow || !shadowCandidateEligible(candidateNow) || !candidateNow.artifactAvailable || candidateNow.digest!==candidate.digest
+        || projectNow.activeReleaseId!==primary.id || projectNow.activeGeneration!==captured.primaryGeneration || primaryNow.digest!==primary.digest || (now?.epoch??0)!==expectedEpoch
+        || exactProviderRuntime(projectNow,primaryNow).nodeId!==captured.nodeId || exactProviderOrigin(projectNow,captured.nodeId)!==origin
+        || storage.internal.prepare("SELECT fence FROM clank_deployment_project_fences WHERE project_id=?").get(projectId)?.fence!==fence
+        || storage.internal.prepare("SELECT 1 FROM clank_deployment_operations WHERE project_id=? AND state IN ('queued','retry','leased') LIMIT 1").get(projectId))throw new PlatformError(409,"SHADOW_PRIMARY_CHANGED","The reviewed primary or candidate changed.");
+      requireNoProviderCanary(projectId);requireNoInterruptedPromotion(projectId);
+    };
+    stable();await shadowReviewedArtifacts(project,candidate,primary,policy,runtime.nodeId,stable);stable();
+    const binding=canaryBinding(await canaryControlRequest(projectId,{operation:captured},"binding",null,stable));stable();
+    if(binding.projectId!==projectId || binding.releaseId!==primary.id || binding.generation!==captured.primaryGeneration || binding.fence!==fence)throw new PlatformError(409,"SHADOW_PRIMARY_CHANGED","The provider primary differs from the reviewed runtime.");
+    return {...captured,binding,configured,providerBindingDigest:shadowHash(JSON.stringify({version:1,domain:"clank-shadow-provider-binding",nodeId:captured.nodeId,origin,credentialGeneration:captured.credentialGeneration,primary:binding,primaryArtifactSha256:primary.digest}))};
+  };
+  const previewShadow=async(principal:TokenPrincipal,projectId:string,input:Record<string,unknown>)=>{
+    requireShadowHuman(principal,projectId);exact(input,["releaseId","expectedEpoch","policy"]);
+    const configured=requireShadowPolicy(),releaseId=shadowRequestId(input.releaseId),expectedEpoch=integerInRange(input.expectedEpoch,"expectedEpoch",0,Number.MAX_SAFE_INTEGER),policy=narrowShadowPolicy(configured,input.policy);
+    return withProjectLock(projectId,async()=>{
+      const native=captureProjectAuthority(projectId,true),current=()=>{native();requireShadowHuman(principal,projectId);};
+      return providerWriterScope.run(current,async()=>{
+        const reviewed=await inspectShadowReview(principal,projectId,releaseId,expectedEpoch,policy,current);current();
+        const issuedAt=Date.now(),payload=normalizeShadowReview({version:1,projectId,releaseId,artifactSha256:reviewed.artifactSha256,primaryReleaseId:reviewed.primaryReleaseId,primaryGeneration:reviewed.primaryGeneration,
+          primaryFence:reviewed.primaryFence,primaryIncarnation:reviewed.binding.incarnation,primaryArtifactSha256:reviewed.primaryArtifactSha256,nodeId:reviewed.nodeId,providerBindingDigest:reviewed.providerBindingDigest,
+          credentialGeneration:reviewed.credentialGeneration,principalBindingDigest:shadowPrincipalDigest(principal,projectId),policyRevision:configured.revision,policyDigest:shadowHash(JSON.stringify(configured)),
+          selection:shadowReviewSelection(configured,policy),expectedEpoch,issuedAt,expiresAt:issuedAt+120000,nonce:base64Url(crypto.getRandomValues(new Uint8Array(16))),reviewDigest:"0".repeat(64)});
+        const signed=normalizeShadowReview({...payload,reviewDigest:shadowReviewDigest(payload,payload.principalBindingDigest,policy,shadowHash)}),reviewToken=shadowReviewToken(signed,shadowSignature);current();
+        return {ok:true,reviewToken,expiresAt:signed.expiresAt,review:{projectId,releaseId,artifactSha256:reviewed.artifactSha256,primary:{releaseId:reviewed.primaryReleaseId,generation:reviewed.primaryGeneration},expectedEpoch,policyRevision:configured.revision,policy}};
+      });
+    });
+  };
+  const startShadow=async(principal:TokenPrincipal,projectId:string,input:Record<string,unknown>)=>{
+    requireShadowHuman(principal,projectId);exact(input,["reviewToken","idempotencyKey"]);
+    const token=input.reviewToken,key=input.idempotencyKey;
+    if(typeof token!=="string" || token.length>4150 || typeof key!=="string" || !/^[A-Za-z0-9_-]{16,128}$/u.test(key))throw new PlatformError(422,"SHADOW_INPUT_INVALID","Use the exact bounded review token and ASCII idempotency key.");
+    const inputDigest=shadowHash(JSON.stringify({version:1,action:"shadow-start",projectId,reviewToken:token})),keyDigest=shadowHash(JSON.stringify({version:1,action:"shadow-start",projectId,idempotencyKey:key}));
+    const replay=(view:ShadowReplayView)=>{
+      requireShadowHuman(principal,projectId);
+      if(view.replay.receipt.identity.inputDigest!==inputDigest)throw new PlatformError(409,"SHADOW_REPLAY_CONFLICT","The original key has different reviewed input.");
+      const {payload}=parseShadowReviewToken(token);assertShadowReviewReplay(payload,view.replay.receipt.identity,shadowPrincipalDigest(principal,projectId),shadowHash);
+      return shadowResponse(view);
+    };
+    const owned=shadowController.replay(projectId,keyDigest);
+    if(owned!==undefined){if(owned)return replay(owned);throw new PlatformError(409,"SHADOW_BUSY","Another shadow session owns this project.");}
+    const admission=await withProjectLock(projectId,async()=>{
+      const native=captureProjectAuthority(projectId,true),current=()=>{native();requireShadowHuman(principal,projectId);};
+      return providerWriterScope.run(current,async()=>{
+        const retained=readShadowReplayView(projectId,keyDigest,current);if(retained)return {replayed:replay(retained)};
+        const configured=requireShadowPolicy(),parsed=parseShadowReviewToken(token),payload=parsed.payload,signature=shadowSignature(parsed.canonical),now=Date.now();current();
+        if(!process.getBuiltinModule("node:crypto").timingSafeEqual(signature,parsed.signature) || payload.projectId!==projectId || payload.principalBindingDigest!==shadowPrincipalDigest(principal,projectId)
+          || now<payload.issuedAt || now>=payload.expiresAt || payload.policyRevision!==configured.revision || payload.policyDigest!==shadowHash(JSON.stringify(configured)))throw new PlatformError(409,"SHADOW_REVIEW_EXPIRED","Refresh the exact shadow review.");
+        const policy=expandShadowReviewSelection(configured,payload.selection);
+        if(shadowReviewDigest(payload,shadowPrincipalDigest(principal,projectId),policy,shadowHash)!==payload.reviewDigest)throw new PlatformError(409,"SHADOW_REVIEW_INVALID","The reviewed identity differs.");
+        const reviewed=await inspectShadowReview(principal,projectId,payload.releaseId,payload.expectedEpoch,policy,current);current();
+        if(reviewed.artifactSha256!==payload.artifactSha256 || reviewed.primaryArtifactSha256!==payload.primaryArtifactSha256 || reviewed.providerBindingDigest!==payload.providerBindingDigest
+          || reviewed.binding.incarnation!==payload.primaryIncarnation || reviewed.primaryFence!==payload.primaryFence || reviewed.primaryReleaseId!==payload.primaryReleaseId
+          || reviewed.primaryGeneration!==payload.primaryGeneration || reviewed.nodeId!==payload.nodeId)throw new PlatformError(409,"SHADOW_PRIMARY_CHANGED","The reviewed provider binding changed.");
+        const createdAt=Date.now(),epoch=canaryInteger(payload.expectedEpoch+1),operation:ShadowOperation={kind:"shadow",sessionId:"shadow_"+crypto.randomUUID(),operationId:"shadowop_"+crypto.randomUUID(),idempotencyKeyDigest:keyDigest,inputDigest,reviewDigest:payload.reviewDigest,
+          releaseId:payload.releaseId,artifactSha256:payload.artifactSha256,capsuleSha256:null,controllerEpoch:epoch,retirementEpoch:epoch,primary:null,primaryReleaseId:payload.primaryReleaseId,primaryFence:payload.primaryFence,
+          nodeId:payload.nodeId,origin:reviewed.origin,credentialGeneration:payload.credentialGeneration,policyRevision:payload.policyRevision,policyDigest:payload.policyDigest,policy,maxReports:configured.maxReports,
+          phase:"binding",outcome:null,stopRequested:false,snapshot:null,report:emptyShadowReport(),reservations:[],retirement:null,createdAt,expiresAt:createdAt+policy.durationMs,updatedAt:createdAt};
+        return {operation,primary:reviewed.binding,primaryArtifactSha256:reviewed.primaryArtifactSha256,reviewIssuedAt:payload.issuedAt,reviewExpiresAt:payload.expiresAt};
+      });
+    });
+    if(admission.replayed)return admission.replayed;
+    requireShadowHuman(principal,projectId);
+    const ongoing=()=>{try{requireShadowHuman(principal,projectId,false);}catch{throw new PlatformError(403,"SHADOW_AUTHORITY_REVOKED","The initiating shadow principal is no longer current.");}const primary=releaseById(storage.internal,admission.operation!.primaryReleaseId);
+      if(!primary || primary.digest!==admission.primaryArtifactSha256)throw new PlatformError(409,"SHADOW_PRIMARY_CHANGED","The reviewed primary artifact changed.");};
+    await shadowController.start(projectId,admission.operation!,ongoing,admission.primary,()=>{requireShadowHuman(principal,projectId);if(Date.now()<admission.reviewIssuedAt! || Date.now()>=admission.reviewExpiresAt!)throw new PlatformError(409,"SHADOW_REVIEW_EXPIRED","Refresh the expired shadow review.");});
+    const accepted=shadowController.replay(projectId,keyDigest);
+    if(!accepted)throw new PlatformError(409,"SHADOW_ACCEPTANCE_UNCERTAIN","The durable intent is retained; retry this exact key.");
+    return replay(accepted);
+  };
+  const stopShadow=async(principal:TokenPrincipal,projectId:string,sessionId:string,input:Record<string,unknown>)=>{
+    requireShadowHuman(principal,projectId);exact(input,["operationId","controllerEpoch"]);
+    const operationId=shadowRequestId(input.operationId),controllerEpoch=integerInRange(input.controllerEpoch,"controllerEpoch",1,Number.MAX_SAFE_INTEGER),authorized=()=>requireShadowHuman(principal,projectId);
+    const matching=(view:ShadowReplayView|null)=>{
+      authorized();if(!view || view.replay.receipt.identity.operationId!==operationId || view.replay.receipt.identity.controllerEpoch!==controllerEpoch)throw new PlatformError(409,"SHADOW_SUPERSEDED","The exact shadow session differs.");return view;
+    };
+    const owned=shadowController.replay(projectId,sessionId,true);
+    if(owned!==undefined){const view=matching(owned);if(view.replay.receipt.identity.phase==="complete")return shadowResponse(view);
+      await shadowController.requestStop(projectId,sessionId,operationId,controllerEpoch,authorized);
+      const after=shadowController.replay(projectId,sessionId,true);if(after)return shadowResponse(matching(after));
+    }
+    return withProjectLock(projectId,async()=>{
+      const native=captureProjectAuthority(projectId,true),current=()=>{native();authorized();};
+      return providerWriterScope.run(native,async()=>{
+        const view=matching(readShadowReplayView(projectId,sessionId,current,true));if(view.replay.receipt.identity.phase==="complete")return shadowResponse(view);
+        const record=view.current;if(!record)throw new PlatformError(409,"SHADOW_CLEANUP_REQUIRED","The exact retained cleanup is unavailable.");
+        const stopped=shadowLifecycle.save(projectId,record,{...record.operation,stopRequested:true,updatedAt:Math.max(Date.now(),record.operation.updatedAt)},current);
+        await retireShadow(shadowLifecycle,projectId,stopped,native,"stopped");current();return shadowResponse(matching(readShadowReplayView(projectId,sessionId,current,true)));
+      });
+    });
   };
   const stagingProjects = new Set<string>();
   const stagingIntakes = new Set<ReturnType<typeof releaseUploadDeadline>>();
@@ -9605,6 +9764,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           ? "tokens"
         : operation.startsWith("dependencies")
           ? operation === "dependencies" && request.method === "PUT" ? "tokens" : operation.startsWith("dependencies/activations/") && request.method === "POST" ? "rollback" : "read"
+        : operation.startsWith("shadow/")
+          ? "deploy"
         : operation.startsWith("environments") || operation.startsWith("channels")
           ? request.method === "GET" ? "read" : "deploy"
         : operation.startsWith("previews")
@@ -9647,6 +9808,21 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         accessibleProject(storage.internal, project.id, principal, requiredPermission);
         if (/^backups\/[^/]+\/restore$/u.test(operation) || (!operation && request.method === "DELETE")) requireFreshPlatformAuthentication(principal);
       };
+      const shadowStop=/^shadow\/([A-Za-z0-9_-]{1,128})\/stop$/u.exec(operation);
+      if(request.method==="POST" && (operation==="shadow/preview" || operation==="shadow/start" || shadowStop)) {
+        requireShadowHuman(principal,project.id);
+        if(url.searchParams.size)throw new PlatformError(422,"SHADOW_INPUT_INVALID","Shadow mutations do not accept query fields.");
+        const input=plainObject(await readJsonRequest(request,8192));requireShadowHuman(principal,project.id);
+        try{
+          const result=operation==="shadow/preview"?await previewShadow(principal,project.id,input):operation==="shadow/start"?await startShadow(principal,project.id,input):await stopShadow(principal,project.id,shadowStop![1]!,input);
+          requireShadowHuman(principal,project.id);return api(result,operation==="shadow/preview"?200:202);
+        }catch(error){
+          if(error instanceof PlatformError)throw error;
+          const code=String((error as {code?:string})?.code??"");
+          if(code.startsWith("SHADOW_"))throw new PlatformError(code==="SHADOW_POLICY_INVALID" || code==="SHADOW_REVIEW_INVALID"?422:409,code,"Shadow control refused the current input or retained state.");
+          throw error;
+        }
+      }
       if (operation === "dependencies" && request.method === "GET") {
         requireCurrentProjectAuthority();
         const configuration = dependencyConfiguration(project.id);

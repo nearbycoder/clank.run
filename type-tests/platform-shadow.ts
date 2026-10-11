@@ -13,3 +13,17 @@ const alias: Pick<ClankPlatformOptions, 'shadowTraffic'> = { shadow: shadowTraff
 // @ts-expect-error A platform maximum is required; session limits cannot implicitly enable it.
 const missing: typeof shadowTraffic = { revision: 1, readPaths: ['/'], methods: ['GET'] };
 void [configured, write, alias, missing];
+
+import type { PlatformShadowSession, PlatformShadowPreview, PlatformShadowResponse } from '../src/platform.ts';
+declare const response: PlatformShadowResponse;
+const receipt: PlatformShadowSession = response.session;
+const localElapsed: number | null = receipt.snapshot?.elapsedSinceObservationMs ?? null;
+declare const preview: PlatformShadowPreview;
+const primary: number = preview.review.primary.generation;
+// @ts-expect-error Safe shadow receipts contain no provider route credential.
+const secret = receipt.token;
+// @ts-expect-error The protocol does not claim cross-host wall-clock freshness.
+const crossHost: 'verified' = receipt.snapshot!.crossHostFreshness;
+// @ts-expect-error The public stop uses a retained original integer epoch, never a string timestamp.
+const epoch: string = receipt.controllerEpoch;
+void [localElapsed, primary, secret, crossHost, epoch];

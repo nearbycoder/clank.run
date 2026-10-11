@@ -30,7 +30,8 @@ async function fixture(t){
   const save=(project,prior,op,authority=()=>current(project))=>shadow.saveShadowRecord(internal,project,prior,op,authority,hash);
   const retirement=record=>{const op=record.operation;return{protocol:'clank-provider-canary-retirement/1',primary:op.primary,operationId:op.operationId,controllerEpoch:op.controllerEpoch,releaseId:op.releaseId,capsuleSha256:op.capsuleSha256,candidateProjectId:shadow.shadowCandidateProjectId(op,hash),retirementEpoch:op.retirementEpoch,phase:'retired'}};
   const adapter={read,save,retire:async(project,record,guard)=>{guard();return retirement(record)}};
-  const controller=prepare=>{const value=shadow.createShadowController({...adapter,lock:async(project,work)=>{assert.equal(held.has(project),false);const authority=await acquire(project);try{return await work()}finally{const capability=held.get(project);held.delete(project);await orchestrator.releaseLease(capability)}},authority:project=>{const captured=held.get(project);return()=>{assert.equal(held.get(project),captured);current(project)}},scope:async(current,work)=>{current();return work()},admit(){},begin:(project,op,guard)=>save(project,read(project),op,guard),prepare,onError(){}});controllers.push(value);return value};
+  const controller=prepare=>{const value=shadow.createShadowController({...adapter,lock:async(project,work)=>{assert.equal(held.has(project),false);const authority=await acquire(project);try{return await work()}finally{const capability=held.get(project);held.delete(project);await orchestrator.releaseLease(capability)}},authority:project=>{const captured=held.get(project);return()=>{assert.equal(held.get(project),captured);current(project)}},scope:async(current,work)=>{current();return work()},admit(){},begin:(project,op,guard)=>save(project,read(project),op,guard),
+    replay(project,key,guard,bySession=false){return internal.transaction(()=>{guard();const record=read(project),replay=shadow.readShadowReplays(internal,project,hash).find(row=>bySession?row.receipt.identity.sessionId===key:row.receipt.identity.idempotencyKeyDigest===key);guard();return replay?Object.freeze({replay,current:record?.operation.sessionId===replay.receipt.identity.sessionId?record:null,epoch:record?.epoch??0}):null})},prepare,onError(){}});controllers.push(value);return value};
   t.after(async()=>{for(const value of controllers)await value.close();for(const value of held.values())await orchestrator.releaseLease(value).catch(()=>{});orchestrator.close();database.close();sql.close();lease.close();await rm(root,{recursive:true,force:true})});
   return{root,sql,internal,lease,orchestrator,held,acquire,current,read,operation,save,retirement,adapter,controller};
 }
@@ -151,4 +152,49 @@ test('terminal retirement classifies every retained unresolved reservation as in
   record=await shadow.retireShadow(f.adapter,'project',record,current,'interrupted');assert.equal(record.operation.report.counters.settled,2);assert.equal(record.operation.report.counters.comparable,0);assert.equal(record.operation.report.counters.unknown.interrupted,2);
   assert.deepEqual(record.operation.reservations,[]);assert.equal(record.operation.report.latency.primary.unknown,2);assert.equal(record.operation.report.latency.candidate.unknown,2);
   const receipt=shadow.readShadowReplays(f.internal,'project',hash)[0];assert.deepEqual(receipt.receipt.identity.snapshot,snapshot);assert.equal(receipt.report.counters.comparable,0);
+});
+
+
+test('public owner start captures caller input before the actual native project lock await',async t=>{
+  const f=await fixture(t),entered=gate(),controller=f.controller(async(id,read,change,current,signal)=>{entered.resolve();await new Promise(resolve=>signal.addEventListener('abort',resolve,{once:true}));current();throw new Error('Stopped')});
+  const input=f.operation(),expected=structuredClone(input),pending=controller.start('project',input,()=>{});input.releaseId='changed';input.policy={...input.policy,readPaths:['/changed']};input.reservations.push(999);
+  const record=await pending;await entered.promise;assert.equal(record.operation.releaseId,expected.releaseId);assert.deepEqual(record.operation.policy,expected.policy);assert.deepEqual(record.operation.reservations,[]);
+  await controller.requestStop('project',record.operation.sessionId,record.operation.operationId,record.operation.controllerEpoch,()=>{});await until(()=>f.read()?.operation.phase==='complete','exact owned stop');
+});
+
+test('read-only live-owner replay returns retained history without new owner, writes, provider calls or reservation',async t=>{
+  const f=await fixture(t),entered=[],controller=f.controller(async(id,read,change,current,signal)=>{entered.push(read().operation.sessionId);await new Promise(resolve=>signal.addEventListener('abort',resolve,{once:true}));current();throw new Error('Stopped')});
+  const first=await controller.start('project',f.operation(),()=>{});await until(()=>entered.length===1,'first preparation');
+  const before=f.read().serialized,live=controller.replay('project',first.operation.idempotencyKeyDigest);assert.equal(live.current.serialized,before);assert.equal(f.read().serialized,before);assert.equal(entered.length,1);
+  await controller.requestStop('project',first.operation.sessionId,first.operation.operationId,first.operation.controllerEpoch,()=>{});await until(()=>f.held.size===0,'first exact owner released');
+  const second=await controller.start('project',f.operation(),()=>{});await until(()=>entered.length===2,'newer owner');
+  const latest=f.read().serialized,old=controller.replay('project',first.operation.idempotencyKeyDigest);assert.equal(old.replay.receipt.identity.sessionId,first.operation.sessionId);assert.equal(old.replay.receipt.identity.phase,'complete');assert.equal(old.current,null);assert.equal(old.epoch,second.epoch);assert.equal(f.read().serialized,latest);assert.equal(entered.length,2);assert.equal(f.read().operation.report.counters.reserved,0);
+  await assert.rejects(controller.requestStop('project',first.operation.sessionId,first.operation.operationId,first.operation.controllerEpoch,()=>{}),{code:'SHADOW_SUPERSEDED'});assert.equal(f.read().serialized,latest);
+  f.sql.exec('DELETE FROM clank_distributed_leases');assert.throws(()=>controller.replay('project',first.operation.idempotencyKeyDigest));assert.equal(f.read().serialized,latest);
+});
+
+test('original stop identity follows actual status floor while ignored native CAS never aborts the owner',async t=>{
+  const f=await fixture(t),entered=gate();let activeSignal;
+  const controller=f.controller(async(id,read,change,current,signal)=>{activeSignal=signal;change(op=>({...op,capsuleSha256:hash('capsule'),primary:{projectId:id,releaseId:op.primaryReleaseId,generation:op.credentialGeneration,fence:op.primaryFence,incarnation:randomUUID()},phase:'preparing',updatedAt:Date.now()}));entered.resolve();await new Promise(resolve=>signal.addEventListener('abort',resolve,{once:true}));current();throw new Error('Stopped')});
+  const accepted=await controller.start('project',f.operation(),()=>{});await entered.promise;assert.ok(f.read().epoch>accepted.epoch);
+  f.sql.exec("CREATE TRIGGER ignore_stop BEFORE UPDATE ON clank_platform_provider_canaries WHEN json_extract(NEW.operation,'$.stopRequested')=1 BEGIN SELECT RAISE(IGNORE); END");
+  await assert.rejects(controller.requestStop('project',accepted.operation.sessionId,accepted.operation.operationId,accepted.operation.controllerEpoch,()=>{}));assert.equal(activeSignal.aborted,false);assert.equal(f.read().operation.stopRequested,false);
+  f.sql.exec('DROP TRIGGER ignore_stop');const stopped=await controller.requestStop('project',accepted.operation.sessionId,accepted.operation.operationId,accepted.operation.controllerEpoch,()=>{});assert.equal(stopped.operation.stopRequested,true);assert.equal(activeSignal.aborted,true);await until(()=>f.read().operation.phase==='complete','bounded exact cleanup');
+});
+
+test('native compact replay round trip retains maximum safe identities, snapshot and policy within byte ceilings',async t=>{
+  const f=await fixture(t),project='p'.repeat(128),maximum=Number.MAX_SAFE_INTEGER,configured={...policy(),revision:maximum,readPaths:Array.from({length:32},(_,i)=>'/'+String(i).padStart(3,'0')+'x'.repeat(252)),methods:['GET','HEAD'],maxSamplePercent:100,maxDurationMs:1800000,maxAttempts:10000,maxConcurrent:16,maxResponseBytes:65536,maxRequestMs:10000,maxReports:100};
+  f.sql.prepare('INSERT INTO clank_platform_projects(id) VALUES(?)').run(project);const current=await f.acquire(project);
+  const base=f.operation(project,configured),operation={...base,sessionId:'s'.repeat(128),operationId:'o'.repeat(128),releaseId:'c'.repeat(128),primaryReleaseId:'r'.repeat(128),nodeId:'n'.repeat(128),controllerEpoch:maximum-4,retirementEpoch:maximum-4,primaryFence:maximum,credentialGeneration:maximum,capsuleSha256:hash('capsule'),phase:'complete',outcome:'authority-revoked',createdAt:maximum-1800000,expiresAt:maximum,updatedAt:maximum,
+    primary:{projectId:project,releaseId:'r'.repeat(128),generation:maximum,fence:maximum,incarnation:randomUUID()},snapshot:{sha256:hash('snapshot'),bytes:2*1024*1024*1024-2*1024*1024-100*1024*1024-32,providerStartedAt:maximum,providerCompletedAt:maximum,platformObservedAt:maximum}};
+  operation.retirement=f.retirement({operation});const serialized=JSON.stringify(operation),record=shadow.readShadowRecord({project_id:project,protocol:2,epoch:maximum,operation:serialized,updated_at:maximum},project,hash);
+  // This is native receipt validation/roundtrip, not a claim that billions of
+  // real sessions or a host clock near MAX_SAFE_INTEGER were executed.
+  const admissionOperation={...operation,capsuleSha256:null,primary:null,phase:'binding',outcome:null,snapshot:null,retirement:null,updatedAt:operation.createdAt};
+  const admission=shadow.readShadowRecord({project_id:project,protocol:2,epoch:operation.controllerEpoch,operation:JSON.stringify(admissionOperation),updated_at:admissionOperation.updatedAt},project,hash);
+  f.internal.transaction(()=>{current();shadow.writeShadowReplay(f.internal,project,admission,[],hash);current()});
+  const admitted=shadow.readShadowReplays(f.internal,project,hash);
+  f.internal.transaction(()=>{current();shadow.writeShadowReplay(f.internal,project,record,admitted,hash);current()});
+  const [roundtrip]=shadow.readShadowReplays(f.internal,project,hash),bytes=Buffer.byteLength(JSON.stringify(roundtrip.receipt)),full=Buffer.byteLength(JSON.stringify({identity:roundtrip.receipt.identity,report:roundtrip.report}));
+  assert.equal(roundtrip.receipt.identity.primary.incarnation,operation.primary.incarnation);assert.deepEqual(roundtrip.receipt.identity.snapshot,operation.snapshot);assert.deepEqual(roundtrip.receipt.identity.policy,operation.policy);assert.equal(roundtrip.receipt.identity.epoch,maximum);assert.ok(bytes<=16384);assert.ok(full<=32768);assert.ok(bytes>10000);t.diagnostic(JSON.stringify({receiptBytes:bytes,identityAndReportBytes:full}));
 });

@@ -127,16 +127,41 @@ export interface ShadowOwnerAdapter extends ShadowLifecycleAdapter {
   scope<Value>(current:()=>void,work:()=>Promise<Value>):Promise<Value>;
   admit(projectId:string,operation:ShadowOperation):void;
   begin(projectId:string,operation:ShadowOperation,current:()=>void):ShadowRecord;
-  prepare(projectId:string,record:()=>ShadowRecord,change:(update:(operation:ShadowOperation)=>ShadowOperation)=>void,current:()=>void,signal:AbortSignal):Promise<ShadowCheckpoint>;
+  prepare(projectId:string,record:()=>ShadowRecord,change:(update:(operation:ShadowOperation)=>ShadowOperation)=>void,current:()=>void,signal:AbortSignal,reviewedPrimary?:DeploymentProviderCanaryBinding):Promise<ShadowCheckpoint>;
+  replay?(projectId:string,keyDigest:string,current:()=>void,bySession?:boolean):ShadowReplayView|null;
   onError?(error:unknown):void;
 }
+export interface ShadowReplayView { readonly replay:ShadowReplay; readonly current:ShadowRecord|null; readonly epoch:number; }
 export interface ShadowController {
-  start(projectId:string,operation:ShadowOperation,admission:()=>void):Promise<ShadowRecord>;
+  start(projectId:string,operation:ShadowOperation,admission:()=>void,reviewedPrimary?:DeploymentProviderCanaryBinding,authorizeBegin?:()=>void):Promise<ShadowRecord>;
+  replay(projectId:string,keyDigest:string,bySession?:boolean):ShadowReplayView|null|undefined;
+  requestStop(projectId:string,sessionId:string,operationId:string,controllerEpoch:number,authorized:()=>void):Promise<ShadowRecord|undefined>;
+  elapsed(projectId:string,sessionId:string):number|null;
   stop(projectId:string,sessionId:string,epoch:number,authorized:()=>void):Promise<ShadowRecord>;
   recover(projectId:string):Promise<ShadowRecord|null>;
   close():Promise<void>;
 }
 export declare function createShadowController(adapter:ShadowOwnerAdapter):ShadowController;
+
+/** @internal Canonical, bounded review identity; this value never grants native authority. */
+export interface ShadowReviewSelection {
+  readonly pathIndices: readonly number[]; readonly methodMask: number; readonly samplePercent: number; readonly durationMs: number;
+  readonly maxAttempts: number; readonly maxConcurrent: number; readonly maxResponseBytes: number; readonly requestMs: number;
+}
+export interface ShadowReviewPayload {
+  readonly version: 1; readonly projectId: string; readonly releaseId: string; readonly artifactSha256: string;
+  readonly primaryReleaseId: string; readonly primaryGeneration: number; readonly primaryFence: number; readonly primaryIncarnation: string;
+  readonly primaryArtifactSha256: string; readonly nodeId: string; readonly providerBindingDigest: string; readonly credentialGeneration: number;
+  readonly principalBindingDigest: string; readonly policyRevision: number; readonly policyDigest: string; readonly selection: ShadowReviewSelection;
+  readonly expectedEpoch: number; readonly issuedAt: number; readonly expiresAt: number; readonly nonce: string; readonly reviewDigest: string;
+}
+export declare function normalizeShadowReview(value:unknown):ShadowReviewPayload;
+export declare function shadowReviewToken(payload:ShadowReviewPayload,sign:(canonical:string)=>Uint8Array):string;
+export declare function parseShadowReviewToken(token:unknown):Readonly<{payload:ShadowReviewPayload;canonical:string;signature:Uint8Array}>;
+export declare function shadowReviewSelection(policy:PlatformShadowPolicy,effective:ShadowSessionPolicy):ShadowReviewSelection;
+export declare function expandShadowReviewSelection(policy:PlatformShadowPolicy,selection:ShadowReviewSelection):ShadowSessionPolicy;
+export declare function shadowReviewDigest(payload:ShadowReviewPayload,principalBindingDigest:string,policy:ShadowSessionPolicy,hash:(value:string)=>string):string;
+export declare function assertShadowReviewReplay(payload:ShadowReviewPayload,identity:ShadowReplayIdentity,principalDigest:string,hash:(value:string)=>string):void;
 
 /** @internal Schema identity is separate from per-session policy and enablement. */
 export declare const shadowSchemaIdentity = "clank-platform-shadow/2";
