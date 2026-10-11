@@ -34,7 +34,7 @@ async function artifact(root,label,status=200){
 }
 async function deploy(f,bytes,key){const response=await f.platform.handle(new Request(origin+`/api/projects/${f.project.id}/releases`,{method:'POST',headers:{authorization:`Bearer ${f.owner.accessToken}`,'content-type':'application/vnd.clank.deploy+gzip','content-length':String(bytes.byteLength),'x-clank-content-sha256':await deploymentDigest(bytes),'x-clank-idempotency-key':key},body:bytes}));return {status:response.status,body:await response.json()}}
 
-async function fixture(t,policy={stages:[{trafficPercent:50,durationMs:350,minimumSamples:2},{trafficPercent:100,durationMs:250,minimumSamples:2}],maximumErrorRate:0.2,maximumP95Ms:1500}, fixedProjectId){
+async function fixture(t,policy={stages:[{trafficPercent:50,durationMs:2000,minimumSamples:2},{trafficPercent:100,durationMs:1000,minimumSamples:2}],maximumErrorRate:0.2,maximumP95Ms:1500}, fixedProjectId){
   const root=await mkdtemp(join(tmpdir(),'clank-platform-provider-canary-')),ports=await reservePlatformTestPorts(),children=[],runtimes=new Map(),events=[],errors=[];
   let service,agent,server,platform,sequence=0,heldPrepare=null,heldRetire=null,heldBinding=null,heldRetireResponse=null;
   t.after(async()=>{heldPrepare?.release.resolve();heldRetire?.release.resolve();heldBinding?.release.resolve();heldRetireResponse?.release.resolve();await agent?.close();for(const child of children)if(child.exitCode===null&&child.signalCode===null){child.kill('SIGKILL');await once(child,'exit')}await service?.close();if(server){server.closeAllConnections();await new Promise(resolve=>server.close(resolve))}await ports.release();await rm(root,{recursive:true,force:true})});
@@ -99,7 +99,23 @@ async function fixture(t,policy={stages:[{trafficPercent:50,durationMs:350,minim
     hold(action){const held={entered:gate(),release:gate()};if(action==='prepare')heldPrepare=held;if(action==='retire')heldRetire=held;if(action==='binding')heldBinding=held;if(action==='retire-response')heldRetireResponse=held;return held},
     async traffic(method='GET',path='/',headers={}){return platform.handle(new Request('http://native-canary.apps.example.test'+path,{method,headers,...(method==='POST'?{body:'write'}:{})}))},
     async state(){return json(platform,`/api/projects/${project.id}/canary`,{token:owner.accessToken})},
-    async drive(bytes,key){let done=false;const pending=deploy(f,bytes,key).finally(()=>done=true);while(!done){await Promise.all(Array.from({length:8},async()=>{const response=await f.traffic();await response.arrayBuffer()}));await pause(10)}return pending},
+    reports(){return control.prepare('SELECT report FROM clank_platform_canaries WHERE project_id=? ORDER BY updated_at DESC').all(project.id).map(row=>JSON.parse(row.report))},
+    async drive(bytes,key,during){
+      let done=false;const pending=deploy(f,bytes,key).finally(()=>done=true);pending.catch(()=>{});
+      const statuses={},before=events.length;
+      // Independent clients keep supplying completed observations when another
+      // response crosses a stage boundary. The 100ms pacing stays below the
+      // unchanged default request quota, including under coverage contention.
+      const clients=Array.from({length:4},async()=>{while(!done){const response=await f.traffic();await response.arrayBuffer();statuses[response.status]=(statuses[response.status]??0)+1;await pause(100)}});
+      const settled=Promise.allSettled(clients);
+      try{await during?.();return await pending}
+      finally{
+        done=true;
+        const [deployment,traffic]=await Promise.all([Promise.allSettled([pending]),settled]);
+        t.diagnostic(JSON.stringify({deployment:deployment[0].status==='fulfilled'?deployment[0].value.status:'rejected',reports:f.reports(),traffic:statuses,candidateRequests:events.slice(before).filter(event=>event.kind==='traffic'&&event.projectId.startsWith('canary_')).length}));
+        const failed=traffic.find(client=>client.status==='rejected');if(failed)throw failed.reason;
+      }
+    },
     async stopAgent(){await agent.close()},
     raw(){const row=control.prepare('SELECT * FROM clank_platform_provider_canaries WHERE project_id=?').get(project.id);return row?{...row,operation:JSON.parse(row.operation)}:null},
     async recover(){const status=await f.state();return json(platform,`/api/projects/${project.id}/canary/recover`,{method:'POST',token:owner.accessToken,body:{operationId:status.provider.operationId,expectedEpoch:status.provider.controllerEpoch}})},
@@ -110,13 +126,13 @@ async function fixture(t,policy={stages:[{trafficPercent:50,durationMs:350,minim
 
 test('native platform provider canaries measure public reads, retire before ordinary preserve activation, and keep writes on the primary',{timeout:60000},async t=>{
   const f=await fixture(t),bytes=await artifact(f.root,'candidate');
-  let finished=false;const pending=deploy(f,bytes,'provider-canary-candidate-0002').finally(()=>finished=true);
-  await until(async()=>{const status=await f.state();return status.provider?.phase==='measuring'},'candidate measurement');
-  const write=await f.traffic('POST');assert.equal(write.status,200);assert.equal((await write.json()).label,'primary');
-  const privateRead=await f.traffic('GET','/',{authorization:'Bearer private-user'});assert.equal((await privateRead.json()).label,'primary');
-  while(!finished){await Promise.all(Array.from({length:8},async()=>{const response=await f.traffic();await response.arrayBuffer()}));await pause(10)}
-  const result=await pending;assert.equal(result.status,201,JSON.stringify(result));
+  const result=await f.drive(bytes,'provider-canary-candidate-0002',async()=>{
+    await until(async()=>{const status=await f.state();return status.provider?.phase==='measuring'},'candidate measurement');
+    const write=await f.traffic('POST');assert.equal(write.status,200);assert.equal((await write.json()).label,'primary');
+    const privateRead=await f.traffic('GET','/',{authorization:'Bearer private-user'});assert.equal((await privateRead.json()).label,'primary');
+  });assert.equal(result.status,201,JSON.stringify({result,reports:f.reports()}));
   const status=await f.state();assert.equal(status.provider.phase,'complete');assert.equal(status.provider.outcome,'passed');assert.equal(status.canaries[0].state,'passed');
+  assert.equal(status.canaries[0].stage,1);assert.ok(status.canaries[0].samples>=2);assert.equal(status.canaries[0].errorRate,0);assert.ok(status.canaries[0].p95Ms<=1500);
   const ordinary=f.events.filter(event=>event.kind==='reconcile');assert.equal(ordinary.length,2);assert.equal(ordinary[1].mode,'preserve');assert.deepEqual(ordinary[1].candidates,[]);
   const final=await f.traffic();const finalBody=await final.json();assert.equal(finalBody.label,'candidate');assert.deepEqual(finalBody.rows,[{label:'primary'}]);
   assert.ok(f.events.some(event=>event.kind==='traffic'&&event.projectId.startsWith('canary_')));
@@ -126,10 +142,13 @@ test('native platform provider canaries measure public reads, retire before ordi
 });
 
 for(const mode of ['undersampled','failed'])test(`native platform provider canary ${mode} evidence retires the candidate without advancing the primary`,{timeout:60000},async t=>{
-  const f=await fixture(t,{stages:[{trafficPercent:100,durationMs:250,minimumSamples:2}],maximumErrorRate:0.2,maximumP95Ms:1500});
+  const f=await fixture(t,{stages:[{trafficPercent:100,durationMs:mode==='failed'?1000:250,minimumSamples:2}],maximumErrorRate:0.2,maximumP95Ms:1500});
   const bytes=await artifact(f.root,mode,mode==='failed'?500:200);
   const result=mode==='failed'?await f.drive(bytes,'provider-canary-failure-0001'):await deploy(f,bytes,'provider-canary-failure-0001');
   assert.equal(result.status,409,JSON.stringify(result));assert.equal(result.body.error.code,'PROVIDER_CANARY_FAILED');
+  const report=f.reports()[0];assert.equal(report.state,'failed');
+  if(mode==='failed'){assert.ok(report.samples>=2,JSON.stringify(report));assert.ok(report.errorRate>0.2);assert.match(report.reason,/Canary guardrail failed:.*Error rate/u);assert.ok(f.events.filter(event=>event.kind==='traffic'&&event.projectId.startsWith('canary_')&&event.label==='failed').length>=2)}
+  else{assert.equal(report.samples,0);assert.match(report.reason,/Canary stage lacked required evidence:.*Waiting for 2 more samples/u)}
   const row=f.raw();assert.equal(row.operation.phase,'complete');assert.equal(row.operation.outcome,'failed');assert.equal(row.operation.retirement.phase,'retired');
   assert.equal(f.events.filter(event=>event.kind==='reconcile').length,1);assert.equal((await (await f.traffic()).json()).label,'primary');
   assert.equal(f.runtimes.size,1);assert.ok(row.epoch>row.operation.controllerEpoch);
