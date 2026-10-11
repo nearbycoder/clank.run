@@ -543,6 +543,21 @@ later publication; uncertain owned files remain for recovery. A killed initializ
 adopt its retained capture on restart. These private tests do not establish Docker runtime
 mounts, provider-wide stop, target activation or the online interruption bound.
 
+The private host catalog also records exact `issued → created → started` container
+observations through its retained owner and original Docker client. These operations
+do not create or start containers. They compare the complete grant, index and catalog
+state, retain native file identities across inspection waits, and commit the grant
+and its mirror together before file/directory synchronization and final inspection.
+Exact retries preserve the version, including a committed maximum version; changed
+identity, uncertain inspection or failed synchronization never grants permission.
+Restart with any retained grant remains cleanup-only. Created/started rows are
+historical observations, not liveness, readiness, writer admission or stop proof.
+The conservative inspection parser also refuses native JSON escaping and integer-like
+label-key ordering that differ from its exact re-encoding, including otherwise valid
+unrelated labels. Scripted transport tests exercise this boundary without establishing
+native Docker lifecycle or reference-profile eligibility. No launch or readiness path
+uses these operations, and the current reference profile remains source-ineligible.
+
 Continue with [Provider data lifecycle](provider-data-lifecycle.md),
 [Provider Docker runtime](provider-docker-runtime.md),
 [Provider runtime ingress](provider-runtime-ingress.md),
