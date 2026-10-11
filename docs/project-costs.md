@@ -47,7 +47,7 @@ Each rate specifies integer `amountMinor` per positive integer `perUnits`. Calcu
 
 ## Immutable prices and reconciliation
 
-Rate cards start at a UTC month boundary. IDs, revisions and effective dates are immutable after registration. A newly reconciled month selects its applicable card; subsequent corrections retain that month’s accepted card even when a later card is configured. Historical months are bounded to the latest 24 UTC months. Unknown prices, altered stored cards, corrupt observations and unsupported storage protocols fail closed.
+Rate cards start at a UTC month boundary. IDs, revisions and effective dates are immutable after registration. A newly reconciled month selects its applicable card; subsequent corrections retain that month’s accepted card even when a later card is configured. Historical months are bounded to the latest 24 UTC months. Unknown prices, altered stored cards, corrupt observations and unsupported storage protocols fail closed. A partially retained or structurally altered cost catalog is refused before bootstrap; startup never recreates missing policy, observation or receipt tables. Preserve the remaining control store for recovery.
 
 Use the public client with the current native authentication headers:
 

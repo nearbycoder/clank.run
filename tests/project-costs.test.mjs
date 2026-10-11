@@ -94,3 +94,21 @@ test('unknown rate period and altered stored effective dates cannot fabricate a 
   const f=await fixture(t);f.sql.exec('UPDATE clank_project_cost_rates SET effective_from=effective_from+1');await assert.rejects(f.reconcile(),code('COST_RATE_UNAVAILABLE'));
   f.sql.exec('UPDATE clank_project_cost_rates SET effective_from=effective_from-2');await assert.rejects(f.reconcile(),code('COST_RATE_CHANGED'));assert.equal(f.sql.prepare('SELECT count(*) AS n FROM clank_project_cost_observations').get().n,0);
 });
+
+for (const missing of ['state','rates','observations','policies','overrides','receipts']) test('native reopen refuses missing retained cost '+missing+' before bootstrap',async t=>{
+  const f=await fixture(t);f.policy();assert.equal(f.costs.admission(project).allowed,false);
+  f.sql.exec('DROP TABLE clank_project_cost_'+missing);
+  const before=f.sql.prepare("SELECT name,sql FROM sqlite_schema WHERE name LIKE 'clank_project_cost_%' ORDER BY name").all();
+  await assert.rejects(f.reopen(),code('COST_STORAGE_INVALID'));
+  assert.deepEqual(f.sql.prepare("SELECT name,sql FROM sqlite_schema WHERE name LIKE 'clank_project_cost_%' ORDER BY name").all(),before);
+  assert.equal(f.sql.prepare("SELECT 1 FROM sqlite_schema WHERE name=?").get('clank_project_cost_'+missing),undefined);
+  if(missing!=='receipts')assert.equal(f.sql.prepare('SELECT count(*) AS n FROM clank_project_cost_receipts').get().n,1);
+});
+test('disabled collector refuses orphaned cost state and altered retained policy schema',async t=>{
+  const f=await fixture(t);f.policy();f.sql.exec('DROP TABLE clank_project_cost_state');f.costs.close();
+  assert.throws(()=>openPlatformProjectCosts(f.sql),code('COST_STORAGE_INVALID'));
+  assert.equal(f.sql.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_project_cost_state'").get(),undefined);
+  const g=await fixture(t);g.policy();g.sql.exec('ALTER TABLE clank_project_cost_policies RENAME COLUMN policy TO changed_policy');
+  await assert.rejects(g.reopen(),code('COST_STORAGE_INVALID'));
+  assert.equal(g.sql.prepare('SELECT count(*) AS n FROM clank_project_cost_receipts').get().n,1);
+});

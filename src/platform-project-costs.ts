@@ -93,7 +93,27 @@ function arithmetic(value: ProjectCostMeasurement, rateCard: ProjectCostRateCard
 
 /** Retained admission policies remain active even when the collector is disabled. */
 export function openPlatformProjectCosts(sql: SQLiteInternal, options?: PlatformProjectCostOptions, clock = Date.now) {
-  const exists = !!sql.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_project_cost_state'").get();
+  // Retained admission must never turn into a fresh empty catalog after partial schema loss.
+  const costSchema: Readonly<Record<string, readonly string[]>> = {
+    clank_project_cost_state: ["singleton:INTEGER:0:1", "protocol:INTEGER:1:0"],
+    clank_project_cost_rates: ["id:TEXT:1:1", "revision:INTEGER:1:2", "effective_from:INTEGER:1:0", "card:TEXT:1:0"],
+    clank_project_cost_observations: ["project_id:TEXT:1:1", "month:TEXT:1:2", "version:INTEGER:1:3", "snapshot:TEXT:1:0"],
+    clank_project_cost_policies: ["project_id:TEXT:0:1", "version:INTEGER:1:0", "policy:TEXT:1:0"],
+    clank_project_cost_overrides: ["project_id:TEXT:0:1", "version:INTEGER:1:0", "override:TEXT:1:0"],
+    clank_project_cost_receipts: ["project_id:TEXT:1:1", "actor_id:TEXT:1:2", "operation_id:TEXT:1:3", "request:TEXT:1:0", "result:TEXT:1:0"],
+  };
+  const retainedCostTables = () => sql.prepare("SELECT name,type FROM sqlite_schema WHERE name IN ('clank_project_cost_state','clank_project_cost_rates','clank_project_cost_observations','clank_project_cost_policies','clank_project_cost_overrides','clank_project_cost_receipts')").all();
+  const assertRetainedCostSchema = () => {
+    const tables = retainedCostTables();
+    if (tables.length !== Object.keys(costSchema).length || Object.entries(costSchema).some(([name, expected]) => {
+      if (!tables.some(row => row.name === name && row.type === "table")) return true;
+      const columns = sql.prepare(`PRAGMA main.table_info(${name})`).all();
+      return columns.length !== expected.length || columns.some((column, index) => `${column.name}:${column.type}:${column.notnull}:${column.pk}` !== expected[index]);
+    })) fail(409, "COST_STORAGE_INVALID", "Retained cost storage is incomplete or altered; preserve it for recovery.");
+  };
+  const retained = retainedCostTables();
+  const exists = retained.some(row => row.name === "clank_project_cost_state" && row.type === "table");
+  if (retained.length) assertRetainedCostSchema();
   const protocol = () => { if (sql.prepare("SELECT protocol FROM clank_project_cost_state WHERE singleton=1").get()?.protocol !== 1) fail(409, "COST_PROTOCOL_UNSUPPORTED", "Unsupported project cost storage protocol."); };
   if (!exists && !options) return undefined;
   if (exists) protocol();
@@ -104,6 +124,7 @@ export function openPlatformProjectCosts(sql: SQLiteInternal, options?: Platform
   if (options && (typeof options.measure !== "function" || !configured.length || configured.length > 100 || new Set(configured.map(value => value.effectiveFrom)).size !== configured.length)) fail(422, "COST_INPUT", "Declare bounded, uniquely effective rate cards and a trusted collector.");
   const collect = options?.measure;
   sql.transaction(() => {
+    if (retainedCostTables().length) { assertRetainedCostSchema(); protocol(); }
     sql.exec(`CREATE TABLE IF NOT EXISTS clank_project_cost_state(singleton INTEGER PRIMARY KEY CHECK(singleton=1),protocol INTEGER NOT NULL);
       INSERT OR IGNORE INTO clank_project_cost_state VALUES(1,1);
       CREATE TABLE IF NOT EXISTS clank_project_cost_rates(id TEXT NOT NULL,revision INTEGER NOT NULL,effective_from INTEGER NOT NULL UNIQUE,card TEXT NOT NULL CHECK(json_valid(card)),PRIMARY KEY(id,revision));
