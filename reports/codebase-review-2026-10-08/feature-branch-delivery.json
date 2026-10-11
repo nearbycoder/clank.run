@@ -399,5 +399,80 @@
       "path": "/tmp/clank-review-2026-10-08/shadow-capacity-fresh-connection-01/publication-boundary-06.json",
       "sha256": "03f1854384ecfd3229071ae807c52a9a28e3e61733691b26ab424b2c486a087f"
     }
+  },
+  "peerCleanupLifetimeFollowup": {
+    "priorHead": "43057fcb2350b187baf88c6fd47c06fe9f94db98",
+    "testPath": "tests/managed-shadow-observer.test.mjs",
+    "testSHA256": "1930b722e6cef93ad4489c51cf181e0de7397966629bd28a0e51b5d21d02ec9d",
+    "unchangedAssertionExpressions": 178,
+    "unchangedEmittedOutputs": 320,
+    "changedProductionSource": false,
+    "hostedBefore": {
+      "successfulChecks": 7,
+      "runtimeChecks": "Node22.16 and Node24 successful; bounded terminal logs retained without inferring missing counts.",
+      "package": {
+        "reported": 3469,
+        "passed": 3430,
+        "failed": 2,
+        "cancelled": 0,
+        "existingSkips": 37,
+        "failure": "Both independent native reader/cancel completion cases time out waiting for the second capacity skip."
+      }
+    },
+    "controlledFaultEachRuntime": {
+      "delayMs": 11000,
+      "peerRequestDeadlineMs": 10000,
+      "before": {
+        "reported": 2,
+        "passed": 0,
+        "failed": 2,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "after": {
+        "reported": 2,
+        "passed": 2,
+        "failed": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "qualification": "Real delay inserted after initial peer admission, before releasing the first focal outcome. Exact hosted phase timing is not recorded; this proves the fixture assumption under declared delay."
+    },
+    "fullObserverEachRuntime": {
+      "reported": 40,
+      "passed": 40,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "experimentalCoverage": true
+    },
+    "fix": "Only two independent reader/cancel cases opt into120s native leases/session and hold actual peer request/cancellation outcomes through capacity inspection. Native cancel runs before the gate; original result/rejection retained. Focal2s and peer10s deadlines unchanged. Completed fixture responses close connections. Strict15peer+1focal capacity, independent read/cancel delivery, tombstone recovery and actual fresh17th server event asserted.",
+    "remainingAcceptance": {
+      "accepted": 29,
+      "remaining": 11
+    },
+    "evidence": {
+      "assertion-parity-04.json": {
+        "path": "/tmp/clank-review-2026-10-08/shadow-peer-cleanup-lifetime-01/assertion-parity-04.json",
+        "sha256": "edbe272165ae79396ec66273de8954e9c38b48686db5e78f8a1a5d2fd5896e39"
+      },
+      "deadline-fault-results-02.json": {
+        "path": "/tmp/clank-review-2026-10-08/shadow-peer-cleanup-lifetime-01/deadline-fault-results-02.json",
+        "sha256": "3e5011e7cca08dfb01574139c2e490c6a09a46e50967fa95a3aa61ce6da7c2e3"
+      },
+      "full-observer-results-03.json": {
+        "path": "/tmp/clank-review-2026-10-08/shadow-peer-cleanup-lifetime-01/full-observer-results-03.json",
+        "sha256": "710139c5295309fe24274ab3e7011d457ed3df9ca3a1305ba5a19cc2d38a6c72"
+      },
+      "full-observer-qualified-05.json": {
+        "path": "/tmp/clank-review-2026-10-08/shadow-peer-cleanup-lifetime-01/full-observer-qualified-05.json",
+        "sha256": "88dfc3b7d3d018ad04d963b8c7568a94fdb95fba782022c14036fde5908599ff"
+      }
+    },
+    "qualification": "Fixture-only follow-up. Current production cost repair, source/public API/dependencies,320built outputs, production quotas/profiles, CI windows and main protection unchanged. Fresh exact-head hosted checks and protected merge required.",
+    "immutableBoundary": {
+      "path": "/tmp/clank-review-2026-10-08/shadow-peer-cleanup-lifetime-01/publication-boundary-07.json",
+      "sha256": "f7e54c01221a61c499094a4c80101dfef18035e8842d6bb9b299ccbc80f866a2"
+    }
   }
 }

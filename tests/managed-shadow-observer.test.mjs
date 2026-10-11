@@ -20,14 +20,23 @@ const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const testGates=new Set();
 const gate=()=>{let resolve;const promise=new Promise(done=>resolve=done);const item={promise,settled:false,resolve:()=>{item.settled=true;testGates.delete(item);resolve()}};testGates.add(item);return item};
 async function until(check,label,ms=10000){const end=performance.now()+ms;while(performance.now()<end){const result=check();if(result)return result;await delay(5)}throw new Error('Timed out: '+label)}
+// Keep actual peer cleanup outcomes pending through the capacity inspection.
+// Peer request deadlines still run; releasing this gate never fabricates EOF.
+function retainNativeCleanup(response,held){
+ if(!held||!response.body)return response;
+ const body=response.body,cancel=body.cancel.bind(body),getReader=body.getReader.bind(body);
+ body.cancel=async(...args)=>{try{return await cancel(...args)}finally{await held.promise}};
+ body.getReader=(...args)=>{const reader=getReader(...args),cancel=reader.cancel.bind(reader);reader.cancel=async(...values)=>{try{return await cancel(...values)}finally{await held.promise}};return reader};
+ return response;
+}
 async function fixture(t,options={}){
- const root=await mkdtemp(join(tmpdir(),'clank-shadow-observer-')),path=join(root,'control.sqlite');
- const lease=await openSupervisorLease(path,{configurationId:'shadow-observer',configurationRevision:1,leaseMs:30000,pollIntervalMs:50});assert.equal(lease.acquire(),true);
+ const root=await mkdtemp(join(tmpdir(),'clank-shadow-observer-')),path=join(root,'control.sqlite'),leaseMs=options.leaseMs??30000;
+ const lease=await openSupervisorLease(path,{configurationId:'shadow-observer',configurationRevision:1,leaseMs,pollIntervalMs:50});assert.equal(lease.acquire(),true);
  const database=await openSQLite(defineDatabase({}),{path}),internal=database[SQLITE_INTERNAL],sql=new DatabaseSync(path),scope=new AsyncLocalStorage(),held=new Map(),events=[],errors=[],gates=[];
  prepareShadowSchema(sql);sql.exec("ALTER TABLE clank_platform_releases ADD COLUMN upload_publication_receipt TEXT;UPDATE clank_platform_shadow_state SET schema_id='clank-platform-shadow/2';INSERT INTO clank_platform_projects(id) VALUES('projecttest')");
  lease.enrollProviderShadow();const schema={prepare:query=>internal.prepare(query==='PRAGMA table_list'?'SELECT * FROM pragma_table_list':query)};
  internal.guardWrites(()=>{lease.assertCurrent(schema);scope.getStore()?.()});
- const orchestrator=openDeploymentOrchestrator(database,{distributedLeaseMs:30000});
+ const orchestrator=openDeploymentOrchestrator(database,{distributedLeaseMs:leaseMs});
  const current=project=>{lease.assertCurrent(schema);const cap=held.get(project);assert.ok(cap);assert.ok(internal.prepare('SELECT 1 FROM clank_distributed_leases WHERE resource=? AND owner=? AND token_hash=? AND fence=? AND expires_at>?').get(cap.resource,cap.owner,hashToken(cap.token),cap.fence,Date.now()))};
  const read=(project='projecttest')=>{const row=internal.prepare('SELECT * FROM clank_platform_provider_canaries WHERE project_id=?').get(project);if(!row)return null;const record=shadow.readShadowRecord(row,project,hash);assert.equal(sql.prepare('SELECT provider_canary_epoch FROM clank_platform_projects WHERE id=?').get(project).provider_canary_epoch,record.epoch);shadow.assertShadowReplay(internal,project,record,hash);return record};
  const primary=createServer((req,res)=>{if(options.primary)return options.primary(req,res);res.setHeader('content-type','application/json');res.end('primary')});
@@ -44,7 +53,9 @@ async function fixture(t,options={}){
   prepare:async(project,record,change,current)=>{
    current();change(op=>({...op,capsuleSha256:hash('capsule'),primary:{projectId:project,releaseId:'release_primary',generation:1,fence:1,incarnation:randomUUID()},phase:'preparing',updatedAt:Math.max(Date.now(),op.updatedAt)}));
    const snapshot={sha256:hash('checkpoint'),bytes:4096,providerStartedAt:Date.now(),providerCompletedAt:Date.now(),platformObservedAt:Date.now()};
-   return{snapshot,observation:Object.freeze({primary:route(project),request:options.productionRequest?shadow.createShadowCandidateRequest({origin:target,projectId:project,path:'/candidate',token:'private-fixture-token',protocol:'clank-runtime/1',generation:1,readPaths:['/catalog'],methods:['GET','HEAD']}):async(exact,signal,guard)=>{guard();const url=target+'/candidate'+exact.path;const response=await fetch(url,{method:exact.method,headers:{...(exact.accept===null?{}:{accept:exact.accept}),'accept-encoding':'identity','cache-control':'no-store'},signal,redirect:'error'});guard();return response}})};
+   const request=options.productionRequest?shadow.createShadowCandidateRequest({origin:target,projectId:project,path:'/candidate',token:'private-fixture-token',protocol:'clank-runtime/1',generation:1,readPaths:['/catalog'],methods:['GET','HEAD']}):async(exact,signal,guard)=>{guard();const url=target+'/candidate'+exact.path;const response=await fetch(url,{method:exact.method,headers:{...(exact.accept===null?{}:{accept:exact.accept}),'accept-encoding':'identity','cache-control':'no-store'},signal,redirect:'error'});guard();return response};
+   const held=project==='projecttest1'?options.heldPeerCleanup:undefined;
+   return{snapshot,observation:Object.freeze({primary:route(project),request:async(...args)=>{try{return retainNativeCleanup(await request(...args),held)}catch(error){if(held)await held.promise;throw error}}})};
   },
   retire:async(project,record,guard)=>{guard();const op=record.operation;return{protocol:'clank-provider-canary-retirement/1',primary:op.primary,operationId:op.operationId,controllerEpoch:op.controllerEpoch,releaseId:op.releaseId,capsuleSha256:op.capsuleSha256,candidateProjectId:shadow.shadowCandidateProjectId(op,hash),retirementEpoch:op.retirementEpoch,phase:'retired'}},onError:error=>errors.push(error)});
  const observer=controller.observer&&{observe(...args){callbackDepth++;try{const tap=controller.observer.observe(...args);if(!tap)return undefined;return{chunk(n){callbackDepth++;try{return tap.chunk(n)}finally{callbackDepth--}},finish(...values){callbackDepth++;try{return tap.finish(...values)}finally{callbackDepth--}}}}finally{callbackDepth--}}};
@@ -225,7 +236,7 @@ test('rejected native response without a reader retains cancellation occupancy a
 for(const firstReleased of ['read','cancel'])test('deadline independently cancels native reader and retains both observed completions: '+firstReleased+' first',async t=>{
  const body=gate(),readRelease=gate(),cancelRelease=gate(),nativeFetch=globalThis.fetch;
  let intercepted=false,readStarted=false,readDelivered=false,cancelStarted=false,cancelDelivered=false,nativeReadSettled=false,nativeCancelSettled=false;
- const f=await fixture(t,{productionRequest:true,policy:{maxRequestMs:2000,maxConcurrent:16,maxDurationMs:30000},candidate:async(req,res)=>{res.setHeader('content-type','application/json');res.write('prefix');await body.promise;res.end('suffix')}});
+ const f=await fixture(t,{productionRequest:true,leaseMs:120000,heldPeerCleanup:body,policy:{maxRequestMs:2000,maxConcurrent:16,maxDurationMs:120000},candidate:async(req,res)=>{res.setHeader('connection','close');res.setHeader('content-type','application/json');res.write('prefix');await body.promise;res.end('suffix')}});
  t.after(()=>{globalThis.fetch=nativeFetch});
  globalThis.fetch=async(...args)=>{
   const response=await nativeFetch(...args);
