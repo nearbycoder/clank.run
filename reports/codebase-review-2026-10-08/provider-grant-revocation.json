@@ -70,11 +70,44 @@
     "evidence": {
       "path": "/tmp/clank-review-2026-10-08/handoff-grant-revocation-review-01/adopted-audits-08.json",
       "sha256": "b5643854577bead816f14246b6c50787702ac7fada81a84cef5dbd0db9d76712"
-    }
+    },
+    "headScope": "Original adopted source based on e0515ed; current rebased validation is recorded separately."
   },
   "sourceSHA256": "3561130508f5a50547d2b0318c8aceebce443fea99fffa4966d995427c545e25",
   "featureAcceptance": {
     "accepted": 29,
     "pending": 11
+  },
+  "rebasedValidation": {
+    "baseHead": "856ded41d8817b72d159b70106a87b102a4422b0",
+    "reviewedHandoffSourceTestsAndCompiledModuleUnchanged": true,
+    "pairedBuild": {
+      "identicalFiles": 320,
+      "runtimes": [
+        "22.16",
+        "26.10"
+      ],
+      "changedFromPriorBuild": [
+        "dist/offline-attachments.js"
+      ],
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/handoff-grant-revocation-review-01/rebased-paired-build-11.json",
+        "sha256": "54f48140cc21e4d4eacdbf07c0cba67cfaac1bc5c11c648a5467477deb746d9a"
+      }
+    },
+    "types": "54packed fixtures;149inherited/0new source diagnostics against baseline154",
+    "docs": "109Markdown/375links/104guides/146declarations/162exports",
+    "security": "passed",
+    "package": {
+      "files": 449,
+      "unpackedBytes": 6947193,
+      "ceilingBytes": 8388608,
+      "dependencies": 0
+    },
+    "evidence": {
+      "path": "/tmp/clank-review-2026-10-08/handoff-grant-revocation-review-01/rebased-audits-12.json",
+      "sha256": "681408aac49caa6e1633881c8c0b26a6d473dd9f97c05e0c58557ebc8279e2a8"
+    },
+    "delivery": "PR370 requires fresh final hosted checks and protected merge before publishing this prerequisite. Neither initial PR370failure nor inherited checks establish delivery of this new handoff source."
   }
 }
