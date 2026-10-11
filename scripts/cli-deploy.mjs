@@ -192,7 +192,7 @@ const COMMANDS = Object.freeze({
     summary: "Deploy isolated previews with empty or policy-sanitized data, manually or through GitHub OIDC.",
   },
   environment: {
-    usage: "clank environment <list|bind|unbind|promote|history|recover> [name] [project-or-key] [directory] [--expected-version <n>] [--migration-policy <apply-safe|code-only>] [--from <name>] [--release <id>] [--digest <sha256>] [--expected-active <id|none>] [--key <id>] [--attestation <file>] [--confirm <phrase>] [--dependency-version <n>] [--dependency-check <id>] [--json]",
+    usage: "clank environment <list|bind|unbind|promote|history|recover> [name] [project-or-key] [directory] [--expected-version <n>] [--migration-policy <apply-safe|code-only>] [--from <name>] [--release=<id>] [--digest <sha256>] [--expected-active=<id|none>] [--key <id>] [--attestation <file>] [--confirm <phrase>] [--dependency-version <n>] [--dependency-check <id>] [--json]",
     summary: "Configure independent persistent targets and promote an exact retained upload without rebuilding.",
   },
   "release-window": {
@@ -204,7 +204,7 @@ const COMMANDS = Object.freeze({
     summary: "Configure versioned service readiness and inspect or recover gated activations.",
   },
   channel: {
-    usage: "clank channel <list|get|pin|history|actions|promote|rollback|retire> [name] [directory] [--expected-version <n>] [--from <environment>] [--release <id>] [--digest <sha256>] [--to <environment>] [--environment-version <n>] [--expected-active <id|none>] [--from-version <n>] [--key <id>] [--attestation <file>] [--confirm <phrase>] [--version <n>] [--dependency-version <n>] [--dependency-check <id>] [--json]",
+    usage: "clank channel <list|get|pin|history|actions|promote|rollback|retire> [name] [directory] [--expected-version <n>] [--from <environment>] [--release=<id>] [--digest <sha256>] [--to <environment>] [--environment-version <n>] [--expected-active=<id|none>] [--from-version <n>] [--key <id>] [--attestation <file>] [--confirm <phrase>] [--version <n>] [--dependency-version <n>] [--dependency-check <id>] [--json]",
     summary: "Pin immutable channel history and explicitly promote or roll back an exact retained artifact.",
   },
   canary: {
@@ -224,7 +224,7 @@ const COMMANDS = Object.freeze({
     summary: "Read bounded application logs.",
   },
   rollback: {
-    usage: "clank rollback <release-id> [--restore-data --confirm <phrase>] [--key <id> --expected-active <id> --expected-activation <n>] [--dependency-version <n>] [--dependency-check <id>] [--json]",
+    usage: "clank rollback [--restore-data --confirm <phrase>] [--key <id> --expected-active=<id> --expected-activation <n>] [--dependency-version <n>] [--dependency-check <id>] [--json] -- <release-id>",
     summary: "Health-check and activate an earlier release.",
   },
   backup: {
