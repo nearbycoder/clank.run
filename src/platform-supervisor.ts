@@ -45,6 +45,8 @@ export interface SupervisorLease {
   acquire():boolean;
   renew():void;
   assertCurrent(connection?:Connection):undefined;
+  /** Irreversibly require provider-canary-aware coordinators before publishing their first intent. */
+  enrollProviderCanaries():undefined;
   status(state:PlatformSupervisorStatus["state"]):PlatformSupervisorStatus;
   release():boolean;
   close():void;
@@ -83,14 +85,14 @@ export async function openSupervisorLease(databasePath:string,input:PlatformSupe
     const ensureOpen=()=>{if(closed)fail("SUPERVISOR_CLOSED","Supervisor leadership is closed.");};
     const assertConfiguration=(connection:Connection=native)=>{
       const row=connection.prepare("SELECT * FROM clank_platform_supervisor_state WHERE singleton=1").get();
-      if(row?.protocol!==1)fail("SUPERVISOR_PROTOCOL","Unsupported supervisor protocol.");
+      if(row?.protocol!==1&&row?.protocol!==2)fail("SUPERVISOR_PROTOCOL","Unsupported supervisor protocol.");
       if(row.configuration_id!==options.configurationId||row.configuration_revision!==options.configurationRevision
         ||row.lease_ms!==options.leaseMs||row.poll_ms!==options.pollIntervalMs)fail("SUPERVISOR_CONFIGURATION_CHANGED","Current supervisor configuration is required.");
     };
     const configured=Boolean(native.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_platform_supervisor_state'").get()),retained=Boolean(native.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_platform_supervisor_lease'").get());
     if(configured!==retained)fail("SUPERVISOR_STATE_INVALID","Incomplete persisted supervisor ownership; preserve it for operator recovery.");
-    if(configured
-      &&native.prepare("SELECT protocol FROM clank_platform_supervisor_state WHERE singleton=1").get()?.protocol!==1)fail("SUPERVISOR_PROTOCOL","Unsupported supervisor protocol.");
+    if(configured){const protocol=native.prepare("SELECT protocol FROM clank_platform_supervisor_state WHERE singleton=1").get()?.protocol;
+      if(protocol!==1&&protocol!==2)fail("SUPERVISOR_PROTOCOL","Unsupported supervisor protocol.");}
     transaction(()=>{
       native.exec(`CREATE TABLE IF NOT EXISTS clank_platform_supervisor_state(
         singleton INTEGER PRIMARY KEY CHECK(singleton=1),protocol INTEGER NOT NULL,configuration_id TEXT NOT NULL,
@@ -100,7 +102,7 @@ export async function openSupervisorLease(databasePath:string,input:PlatformSupe
         owner TEXT,token_hash TEXT,expires_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,controller_pid INTEGER,controller_birth TEXT) STRICT;`);
       const prior=native.prepare("SELECT * FROM clank_platform_supervisor_state WHERE singleton=1").get();
       if(prior&&!native.prepare("SELECT 1 FROM clank_platform_supervisor_lease WHERE singleton=1").get())fail("SUPERVISOR_STATE_INVALID","Missing retained supervisor ownership; its epoch cannot be reset.");
-      if(prior&&(prior.protocol!==1||typeof prior.configuration_id!=="string"||! /^[A-Za-z][A-Za-z0-9._-]{0,127}$/u.test(prior.configuration_id)
+      if(prior&&((prior.protocol!==1&&prior.protocol!==2)||typeof prior.configuration_id!=="string"||! /^[A-Za-z][A-Za-z0-9._-]{0,127}$/u.test(prior.configuration_id)
         ||!Number.isSafeInteger(prior.configuration_revision)||Number(prior.configuration_revision)<1
         ||!Number.isSafeInteger(prior.lease_ms)||Number(prior.lease_ms)<5000||Number(prior.lease_ms)>120000
         ||!Number.isSafeInteger(prior.poll_ms)||Number(prior.poll_ms)<50||Number(prior.poll_ms)>Math.floor(Number(prior.lease_ms)/3))) {
@@ -155,6 +157,19 @@ export async function openSupervisorLease(databasePath:string,input:PlatformSupe
       renew(){ensureOpen();transaction(()=>{assertCurrent();const at=now();native.prepare("UPDATE clank_platform_supervisor_lease SET expires_at=?,updated_at=? WHERE singleton=1 AND epoch=? AND owner=? AND token_hash=?")
         .run(at+options.leaseMs,at,epoch,owner,tokenHash);});},
       assertCurrent,
+      enrollProviderCanaries(){ensureOpen();return transaction(()=>{
+        assertCurrent();
+        // Protocol 2 adds the durable provider candidate/retirement barrier to
+        // the supervisor's writer duties. Protocol-1 binaries already refuse
+        // it during enrollment and every retained ownership assertion.
+        const prior=native.prepare("SELECT protocol FROM clank_platform_supervisor_state WHERE singleton=1").get();
+        if(prior?.protocol===1){
+          const changed=native.prepare("UPDATE clank_platform_supervisor_state SET protocol=2 WHERE singleton=1 AND protocol=1").run();
+          if(Number(changed.changes)!==1)fail("SUPERVISOR_PROTOCOL","Provider canary capability enrollment was not applied.");
+        }
+        if(native.prepare("SELECT protocol FROM clank_platform_supervisor_state WHERE singleton=1").get()?.protocol!==2)fail("SUPERVISOR_PROTOCOL","Provider canary capability enrollment was not retained.");
+        assertCurrent();return undefined;
+      });},
       status(state){ensureOpen();assertConfiguration();const row=readLease();return Object.freeze({state,epoch:Number(row.epoch),expiresAt:Number(row.expires_at),responsibilities});},
       release(){ensureOpen();return transaction(()=>{assertConfiguration();const row=readLease();if(!tokenHash||row.epoch!==epoch||row.owner!==owner||row.token_hash!==tokenHash)return false;
         native.prepare("UPDATE clank_platform_supervisor_lease SET owner=NULL,token_hash=NULL,expires_at=0,updated_at=?,controller_pid=NULL,controller_birth=NULL WHERE singleton=1").run(now());tokenHash=undefined;return true;
@@ -258,7 +273,7 @@ const save=phase=>{const temporary=spec.fence+'.tmp';writeFileSync(temporary,JSO
 const clear=()=>{try{unlinkSync(spec.fence);}catch(error){if(error.code!=='ENOENT')throw error;}const folder=openSync(dirname(spec.fence),'r');try{fsyncSync(folder);}finally{closeSync(folder);}};
 // Renewals can commit while the guardian waits for its native read. Evaluate
 // that observed row against the clock after reading, retaining strict expiry.
-const current=()=>{const state=native.prepare('SELECT * FROM clank_platform_supervisor_state WHERE singleton=1').get(),lease=native.prepare('SELECT * FROM clank_platform_supervisor_lease WHERE singleton=1').get(),now=Date.now();if(now<lastNow)throw new Error('Clock regression');lastNow=now;return state?.protocol===1&&state.configuration_id===spec.configurationId&&state.configuration_revision===spec.configurationRevision&&state.lease_ms===spec.leaseMs&&state.poll_ms===spec.pollMs&&lease?.epoch===spec.epoch&&lease.owner===spec.owner&&lease.token_hash===spec.tokenHash&&lease.controller_pid===spec.controllerPid&&lease.controller_birth===spec.controllerBirth&&lease.expires_at>now&&lease.updated_at<=now;};
+const current=()=>{const state=native.prepare('SELECT * FROM clank_platform_supervisor_state WHERE singleton=1').get(),lease=native.prepare('SELECT * FROM clank_platform_supervisor_lease WHERE singleton=1').get(),now=Date.now();if(now<lastNow)throw new Error('Clock regression');lastNow=now;return (state?.protocol===1||state?.protocol===2)&&state.configuration_id===spec.configurationId&&state.configuration_revision===spec.configurationRevision&&state.lease_ms===spec.leaseMs&&state.poll_ms===spec.pollMs&&lease?.epoch===spec.epoch&&lease.owner===spec.owner&&lease.token_hash===spec.tokenHash&&lease.controller_pid===spec.controllerPid&&lease.controller_birth===spec.controllerBirth&&lease.expires_at>now&&lease.updated_at<=now;};
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const fence=async()=>{if(stopping)return;stopping=true;clearInterval(timer);try{if(birth()===spec.controllerBirth)process.kill(spec.controllerPid,'SIGKILL');const until=Date.now()+5000;while(birth()===spec.controllerBirth&&Date.now()<until)await pause(25);if(birth()===spec.controllerBirth)throw new Error('Coordinator cleanup unresolved');clear();native.close();process.exit(0);}catch{try{save('failed');}catch{}process.exit(72);}};
 const check=()=>{try{if(!process.connected||!current())void fence();}catch{void fence();}};

@@ -92,6 +92,8 @@ export declare function createManagedIngress(options: {
     admitRequest?: IngressAdmissionPolicy;
     /** Starts or otherwise prepares an inactive route before the request is proxied. */
     prepareRoute?: (route: Readonly<IngressRoute>) => void | Promise<void>;
+    /** Synchronously checks native ownership of the primary route and its selected canary before effects and across response awaits. */
+    assertCanaryCurrent?: (route: Readonly<IngressRoute>) => undefined;
     onRequest?: (metric: IngressRequestMetric) => void | Promise<void>;
 }): ManagedIngress;
 export interface DomainChallenge {

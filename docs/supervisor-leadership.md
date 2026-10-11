@@ -81,6 +81,8 @@ Before first enabling leadership, quiesce every legacy coordinator and verify te
 
 For a configuration change, deploy compatible settings with a higher revision. This intentionally fences older owners. Keep callbacks, native adapters, secret sources and all effectful options consistent; registered adapter/class instances retain their identity and are not deep-copied. Preserve unknown protocol and exhausted-epoch records for operator recovery rather than resetting them.
 
+Enabling [provider canaries](deployment-platform.md#isolated-provider-canaries) permanently enrolls protocol 2 under the current native supervisor lease before active admission. Current supervisors and guardians support protocols 1 and 2; protocol-1-only binaries refuse an enrolled catalog before writer admission. Disabling the canary policy still requires compatible code to retire retained operations. There is no automatic downgrade, journal reconstruction or epoch reset. Ordinary catalogs remain at protocol 1 until explicitly enrolled.
+
 For rollback to ordinary mode, stop every coordinator and tenant runtime, back up the catalog and guardian evidence, and review an explicit recovery procedure before changing the topology marker. Removing a row while writers run is unsafe. There is no automatic downgrade or epoch-reset endpoint.
 
 Native process tests exercise stopped/killed leaders, guardian death, configuration replacement, death during actual application health recovery, retained tenant data, job-writer cleanup, one due encrypted backup, CLI takeover, ordinary-mode refusal and unresolved cleanup. Host-specific Docker/provider certification remains governed by the separate deployment admission contracts.
