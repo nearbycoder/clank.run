@@ -475,6 +475,46 @@ interface DatabaseSyncConstructor {
 // Only openSQLite can register the actual native object. Compatible structural
 // connections keep ordinary database support without gaining source ownership.
 const nativeSQLiteHandles = new WeakSet<DatabaseSyncLike>();
+const sourceSQLiteDatabases = new WeakMap<object, () => void>();
+const sourceBackendRuntimes = new WeakMap<object, () => void>();
+
+/** Capture identities without invoking application getters or exposing registration. */
+function unchangedSourceObjects(roots: readonly unknown[], deep = true): () => void {
+  const seen = new WeakSet<object>();
+  const snapshots: Array<{ object: object; prototype: unknown; properties: PropertyDescriptorMap }> = [];
+  const pending = [...roots];
+  try {
+    while (pending.length) {
+      const value = pending.pop();
+      if (!value || typeof value !== "object" || seen.has(value)) continue;
+      // Reflection is a private eligibility check, never a new requirement for
+      // ordinary startup. Bound its work and avoid recursive client traversal.
+      if (snapshots.length >= 4096) throw new Error("Source identity graph is too large.");
+      seen.add(value);
+      const properties = Object.getOwnPropertyDescriptors(value);
+      snapshots.push({ object: value, prototype: Object.getPrototypeOf(value), properties });
+      if (deep) for (const key of Reflect.ownKeys(properties)) {
+        const descriptor = Reflect.get(properties, key);
+        if ("value" in descriptor) pending.push(descriptor.value);
+      }
+    }
+  } catch {
+    return () => { throw new Error("Source backend identity cannot be safely verified."); };
+  }
+  return () => {
+    for (const snapshot of snapshots) {
+      const current = Object.getOwnPropertyDescriptors(snapshot.object);
+      const keys = Reflect.ownKeys(snapshot.properties);
+      if (Object.getPrototypeOf(snapshot.object) !== snapshot.prototype
+        || Reflect.ownKeys(current).length !== keys.length
+        || keys.some(key => {
+          const before = Reflect.get(snapshot.properties, key), after = Reflect.get(current, key);
+          return !after || before.value !== after.value || before.get !== after.get || before.set !== after.set
+            || before.writable !== after.writable || before.enumerable !== after.enumerable || before.configurable !== after.configurable;
+        })) throw new Error("Source backend definition or database identity changed.");
+    }
+  };
+}
 
 function assertSQLiteSourceStartup(native: DatabaseSyncLike): void {
   const markers = native.prepare(`SELECT name,type FROM sqlite_schema WHERE name COLLATE NOCASE IN
@@ -1476,6 +1516,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
       capture?.close();
       native.close();
       nativeSQLiteHandles.delete(native);
+      sourceSQLiteDatabases.delete(database);
     },
     [SQLITE_INTERNAL]: {
       guardWrites(guard) {
@@ -1596,6 +1637,10 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
   if (pollInterval > 0) {
     poller = setInterval(() => synchronizeChanges(undefined, false), pollInterval);
     (poller as ReturnType<typeof setInterval> & { unref?: () => void }).unref?.();
+  }
+  if (nativeSQLiteHandles.has(native)) {
+    const unchanged = unchangedSourceObjects([database, database[SQLITE_INTERNAL]], false);
+    sourceSQLiteDatabases.set(database, () => { unchanged(); assertNativeIdle(); });
   }
   return database;
 }
@@ -2225,6 +2270,14 @@ export async function openBackend<
   definition: BackendDefinition<Schema, Functions, Auth, Jobs>,
   options: OpenBackendOptions<Schema, Storage> = {},
 ): Promise<BackendRuntime<Schema, Functions, Auth, Jobs, Storage>> {
+  // Captured before the first await; removing declared jobs later cannot enroll
+  // an already opened runtime as a source without background workers.
+  const sourceDefinition = definition;
+  const sourceSchema = definition.schema;
+  const sourceFunctions = definition.functions;
+  const sourceJobs = definition.jobs;
+  const unchangedDefinition = unchangedSourceObjects([definition], false);
+  const unchangedContract = unchangedSourceObjects([sourceSchema, sourceFunctions]);
   const heartbeatMs = positiveIntegerOption(options.heartbeat ?? 20_000, "heartbeat");
   const maxRequestBytes = positiveIntegerOption(options.maxRequestBytes ?? 64 * 1024, "maxRequestBytes");
   const maxResponseBytes = positiveIntegerOption(options.maxResponseBytes ?? 4 * 1024 * 1024, "maxResponseBytes");
@@ -3008,6 +3061,7 @@ export async function openBackend<
     close() {
       if (closed) return;
       closed = true;
+      sourceBackendRuntimes.delete(runtime);
       for (const disconnect of [...liveDisconnects]) disconnect();
       liveDisconnects.clear();
       stopChanges();
@@ -3022,8 +3076,35 @@ export async function openBackend<
       database.close();
     },
   };
+  const unchangedRuntime = unchangedSourceObjects([runtime], false);
+  sourceBackendRuntimes.set(runtime, () => {
+    ensureOpen();
+    unchangedRuntime();
+    unchangedDefinition();
+    unchangedContract();
+    if (sourceJobs !== undefined || jobsRuntime !== undefined || runtime.jobs !== undefined
+      || runtime.definition !== sourceDefinition || definition.schema !== sourceSchema
+      || definition.functions !== sourceFunctions || definition.jobs !== sourceJobs
+      || runtime.database !== database || database.schema !== sourceSchema) {
+      throw new Error("Source ownership requires the original backend, definition and database without jobs.");
+    }
+    const assertDatabase = sourceSQLiteDatabases.get(database);
+    if (!assertDatabase) throw new Error("Source ownership requires a genuine openSQLite backend database.");
+    assertDatabase();
+  });
   return runtime;
 }
+
+// The imported constructor is the immutable anchor for this private lookup.
+// No registration/minting function is exported, and caller-supplied internal
+// database hooks are never consulted to establish runtime identity.
+Object.defineProperty(openBackend, SQLITE_INTERNAL, { value: Object.freeze({
+  assertSourceRuntime(runtime: object): void {
+    const assertRuntime = sourceBackendRuntimes.get(runtime);
+    if (!assertRuntime) throw new Error("Source ownership requires a genuine live backend runtime.");
+    assertRuntime();
+  },
+}) });
 
 function trimBoundarySlashes(value: string): string {
   let start = 0;
