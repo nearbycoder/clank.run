@@ -1,4 +1,18 @@
 /** Shared browser/server-safe security helpers used by Clank internals. */
+/** @internal Native transport proof; never inherited by Request.clone(). */
+export interface ExactRequest { readonly method: "GET" | "HEAD"; readonly path: string; readonly accept: string | null; }
+/** @internal Called only by the native adapter, before Fetch normalization. */
+export declare function captureExactRequest(method: unknown, target: unknown, rawHeaders: unknown, trustProxy: boolean, digest: (value: string) => string): ((request: Request) => void) | undefined;
+/** @internal Returns bounded public metadata only while the exact native request still matches. */
+export declare function exactRequest(request: Request): Readonly<ExactRequest> | undefined;
+/** @internal Reserve one post-write notification; cancellation also detaches the primary tap. */
+export declare function registerRequestHandoff(request: Request, callback: () => undefined): (() => void) | undefined;
+/** @internal Native adapter alone consumes this after its ordinary first write/end. */
+export declare function takeRequestHandoff(request: Request): (() => void) | undefined;
+/** @internal Ends only shadow observation; it never cancels the primary request. */
+export declare function cancelRequestHandoff(request: Request): void;
+/** @internal Controller cancellation detaches consumer-driven byte notifications. */
+export declare function requestHandoffActive(request: Request, detach?: () => void): boolean;
 /** Attaches adapter-authenticated network identity without trusting request headers. */
 export declare function setTrustedClientAddress(request: Request, address: string): void;
 /** Returns network identity attached by a trusted server adapter, when available. */
