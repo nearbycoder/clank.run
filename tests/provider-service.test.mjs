@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { fork } from "node:child_process";
 import { once } from "node:events";
+import { createServer, request as nativeHttpRequest } from "node:http";
+import { Readable } from "node:stream";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import {
   access,
   chmod,
@@ -1386,7 +1390,7 @@ async function serviceFixture(name) {
           route: `/v1/clank/apps/${projectId}`,
           token: "clanki_provider-service-token-12345678901234567890",
           ...(options.controlToken===false?{}:{controlToken:
-            "clankc_provider-service-control-token-12345678901234567890"}),
+            options.controlToken??"clankc_provider-service-control-token-12345678901234567890"}),
         },
         artifact,
       }, {
@@ -1787,4 +1791,278 @@ test("failed final snapshot leaves a durable source barrier and exact retry comp
   const request=()=>new Request('https://provider.example/v1/clank/control/project_service_01/evacuate',{method:'POST',headers:{authorization:'Bearer clankc_provider-service-control-token-12345678901234567890','x-clank-evacuation-id':'evac_failure_plan_01'}});
   assert.equal((await first.service.handle(request())).status,503);assert.equal(first.runtimes.inspect().length,0);await assert.rejects(first.service.reconcile(input),/fenced for planned evacuation/);await first.service.close();fail=false;const resumed=await fixture.open();assert.equal((await resumed.service.handle(request())).status,200);await resumed.service.close();
  }finally{await fixture.close()}
+});
+
+const canaryHttpToken="clankc_provider-service-control-token-12345678901234567890";
+const canaryHttpPath=operation=>`/v1/clank/control/project_service_01/canary/${operation}`;
+function canaryHttpInput(primary,runtime,operationId="canary_http_01",controllerEpoch=1) {
+  return {primary,operationId,controllerEpoch,releaseId:runtime.manifest.releaseId,capsuleSha256:runtime.sha256};
+}
+function canaryHttpOptions(operation,input,token=canaryHttpToken,runtime) {
+  if(operation==="binding") return {headers:{authorization:`Bearer ${token}`},redirect:"error"};
+  const body=runtime?runtime.bytes:JSON.stringify(input);
+  return {method:"POST",body,redirect:"error",headers:{authorization:`Bearer ${token}`,"content-type":runtime?"application/vnd.clank.runtime":"application/json",
+    "content-length":String(typeof body==="string"?Buffer.byteLength(body):body.byteLength),...(runtime?{"x-clank-canary-input":JSON.stringify(input)}:{})}};
+}
+async function openCanaryHttp(service,onBodyRead) {
+  const server=createServer(async(incoming,outgoing)=>{
+    try {
+      const controller=new AbortController();incoming.on("aborted",()=>controller.abort());
+      const request=new Request(`http://127.0.0.1${incoming.url}`,{method:incoming.method,headers:incoming.headers,signal:controller.signal,
+        ...(["GET","HEAD"].includes(incoming.method)?{}:{body:Readable.toWeb(incoming),duplex:"half"})});
+      if(onBodyRead&&request.body) {const original=request.body.getReader.bind(request.body);request.body.getReader=(...args)=>{onBodyRead(incoming.url);return original(...args);};}
+      const response=await service.handle(request);
+      outgoing.writeHead(response.status,Object.fromEntries(response.headers));
+      outgoing.end(Buffer.from(await response.arrayBuffer()));
+    } catch {outgoing.writeHead(500);outgoing.end();}
+  });
+  await new Promise(resolve=>server.listen(0,"127.0.0.1",resolve));
+  return {url:`http://127.0.0.1:${server.address().port}`,async close(){server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}};
+}
+async function httpCanaryPrimary(fixture,opened) {
+  const primary=await fixture.runtime({generation:1,releaseId:"release_http_primary",mode:"initialize",snapshot:await sqliteSnapshot(fixture.root,"http-primary")});
+  await opened.service.reconcile(providerInput(primary,1));return primary;
+}
+async function expectCanaryJson(response) {assert.equal(response.status,200,await response.clone().text());const json=await response.json();assert.equal(json.protocol,"clank-provider-canary-control/1");return json;}
+function heldCanaryHttp(url,options) {
+  let resolve,reject;
+  const response=new Promise((yes,no)=>{resolve=yes;reject=no;});
+  const request=nativeHttpRequest(url,{method:options.method,headers:options.headers},incoming=>{
+    const chunks=[];incoming.on("data",chunk=>chunks.push(chunk));incoming.on("end",()=>resolve({status:incoming.statusCode,body:Buffer.concat(chunks).toString()}));
+  });
+  request.on("error",reject);response.catch(()=>{});
+  request.write(options.body.subarray(0,1));
+  return {request,response,finish(){request.end(options.body.subarray(1));}};
+}
+
+test("HTTP canary controls issue durable bindings and expose route credentials only on exact prepare", {timeout:30_000}, async()=>{
+  const fixture=await serviceFixture("http-controls");let opened,http;
+  try {
+    opened=await fixture.open({canaries:{readPaths:["/healthz"]}});await httpCanaryPrimary(fixture,opened);http=await openCanaryHttp(opened.service);
+    const call=(operation,input,runtime,token=canaryHttpToken)=>fetch(http.url+canaryHttpPath(operation),canaryHttpOptions(operation,input,token,runtime));
+    assert.equal((await call("binding",null,null,"invalid-token-123456789012345678901234567890")).status,404);
+    const first=await expectCanaryJson(await call("binding")),primary=first.binding;
+    const file=join(fixture.providerRoot,"service","project_service_01.canary-binding.json"),stored=await readFile(file,"utf8");
+    assert(!stored.includes(canaryHttpToken));assert(!JSON.stringify(first).includes("tokenDigest"));
+    assert.deepEqual(await expectCanaryJson(await call("binding")),first);assert.equal(await readFile(file,"utf8"),stored);
+    const runtime=await fixture.runtime({generation:2,releaseId:"release_http_candidate",mode:"preserve"}),input=canaryHttpInput(primary,runtime);
+    const prepared=(await expectCanaryJson(await call("prepare",input,runtime))).state;
+    assert.equal(prepared.phase,"running");assert.match(prepared.route.token,/^clanki_/u);
+    assert.deepEqual((await expectCanaryJson(await call("prepare",input,runtime))).state,prepared);
+    const identity={primary,operationId:input.operationId,controllerEpoch:input.controllerEpoch};
+    const inspected=await expectCanaryJson(await call("inspect",identity));assert.equal(inspected.state.phase,"running");assert(!JSON.stringify(inspected).includes(prepared.route.token));assert(!("route" in inspected.state));
+    const stopped=await expectCanaryJson(await call("stop",identity));assert.equal(stopped.state.phase,"stopped");assert(!("route" in stopped.state));
+    const retired=await expectCanaryJson(await call("retire",{...input,retirementEpoch:2}));assert.equal(retired.retirement.phase,"retired");
+    assert.equal((await call("prepare",input,runtime)).status,503);
+    assert.equal(await fixture.data.inspect(prepared.candidateProjectId),null);
+    for (const suffix of ["binding?x=1","binding/","unknown","../shadow","binding#invalid"]) {
+      if(suffix.includes("#")) continue; // Fragments are not transmitted by HTTP clients.
+      assert.equal((await fetch(http.url+canaryHttpPath(suffix),canaryHttpOptions("binding"))).status,404);
+    }
+    const bad=canaryHttpOptions("inspect",identity);bad.headers["content-encoding"]="gzip";
+    assert.equal((await fetch(http.url+canaryHttpPath("inspect"),bad)).status,404);
+    assert.equal((await fetch(http.url+canaryHttpPath("inspect"),{...canaryHttpOptions("inspect",identity),body:"{}",headers:{authorization:`Bearer ${canaryHttpToken}`,"content-type":"application/json","content-length":"2","x-clank-canary-input":"{}"}})).status,404);
+  } finally {await http?.close();await opened?.service.close();await fixture.close();}
+});
+
+test("HTTP held native body rechecks rotated current credentials before candidate effects", {timeout:30_000},async()=>{
+  const fixture=await serviceFixture("http-held-body");let opened,http,held,bodyRead;let snapshots=0,applies=0;
+  const entered=new Promise(resolve=>bodyRead=resolve);
+  try {
+    opened=await fixture.open({canaries:{readPaths:["/healthz"]},data:{...fixture.data,snapshot:async(...args)=>{snapshots++;return fixture.data.snapshot(...args);},apply:async(input,...args)=>{if(input.operation.projectId.startsWith("canary_"))applies++;return fixture.data.apply(input,...args);}}});
+    await httpCanaryPrimary(fixture,opened);http=await openCanaryHttp(opened.service,url=>{if(url.endsWith("/prepare"))bodyRead();});
+    const primary=(await expectCanaryJson(await fetch(http.url+canaryHttpPath("binding"),canaryHttpOptions("binding")))).binding;
+    const runtime=await fixture.runtime({generation:2,releaseId:"release_http_held",mode:"preserve"}),input=canaryHttpInput(primary,runtime);
+    held=heldCanaryHttp(http.url+canaryHttpPath("prepare"),canaryHttpOptions("prepare",input,canaryHttpToken,runtime));await entered;
+    const rotated=await fixture.runtime({generation:2,releaseId:"release_http_rotated",mode:"preserve",controlToken:"clankc_rotated-http-token-123456789012345678901234567890"});
+    await opened.service.reconcile(providerInput(rotated,2));
+    const replacement=(await expectCanaryJson(await fetch(http.url+canaryHttpPath("binding"),canaryHttpOptions("binding",null,rotated.manifest.ingress.controlToken)))).binding;
+    assert.notEqual(replacement.incarnation,primary.incarnation);
+    held.finish();assert.equal((await held.response).status,503);
+    assert.equal(snapshots,0);assert.equal(applies,0);assert.equal((await fixture.data.inspect("project_service_01")).releaseId,rotated.manifest.releaseId);
+    assert.equal((await fetch(http.url+canaryHttpPath("binding"),canaryHttpOptions("binding"))).status,404);
+    assert.equal((await fetch(http.url+deploymentProviderSnapshotPath("project_service_01"),{headers:{authorization:`Bearer ${canaryHttpToken}`}})).status,404);
+  } finally {held?.request.destroy();await http?.close();await opened?.service.close();await fixture.close();}
+});
+
+test("HTTP canary deadline cancels held intake, persists retirement and captures timeout options", {timeout:30_000},async()=>{
+  const fixture=await serviceFixture("http-timeout");let opened,http,held,bodyRead;
+  const entered=new Promise(resolve=>bodyRead=resolve),policy={readPaths:["/healthz"],controlTimeoutMs:150};
+  try {
+    opened=await fixture.open({canaries:policy});policy.controlTimeoutMs=60_000;await httpCanaryPrimary(fixture,opened);
+    http=await openCanaryHttp(opened.service,url=>{if(url.endsWith("/prepare"))bodyRead();});
+    const primary=(await expectCanaryJson(await fetch(http.url+canaryHttpPath("binding"),canaryHttpOptions("binding")))).binding;
+    const runtime=await fixture.runtime({generation:2,releaseId:"release_http_timeout",mode:"preserve"}),input=canaryHttpInput(primary,runtime);
+    held=heldCanaryHttp(http.url+canaryHttpPath("prepare"),canaryHttpOptions("prepare",input,canaryHttpToken,runtime));await entered;
+    const response=await held.response;assert.equal(response.status,503);assert.match(response.body,/uncertain/u);assert(!response.body.includes('"phase":"retired"'));
+    const retired=await expectCanaryJson(await fetch(http.url+canaryHttpPath("retire"),canaryHttpOptions("retire",{...input,retirementEpoch:3})));
+    assert.equal(retired.retirement.phase,"retired");assert.equal((JSON.parse(await readFile(retirementFile(fixture),"utf8"))).epochFloor,3);
+    assert.equal(await fixture.data.inspect(retired.retirement.candidateProjectId),null);
+    await opened.service.close();opened=await fixture.open();
+    await http.close();http=await openCanaryHttp(opened.service);
+    assert.equal((await expectCanaryJson(await fetch(http.url+canaryHttpPath("retire"),canaryHttpOptions("retire",{...input,retirementEpoch:3})))).retirement.phase,"retired");
+  } finally {held?.request.destroy();await http?.close();await opened?.service.close();await fixture.close();}
+});
+
+function holdCanaryReceiptRead(filename) {
+  const original=fsPromises.open;let enter,release,held=false;
+  const entered=new Promise(resolve=>enter=resolve),pending=new Promise(resolve=>release=resolve);
+  fsPromises.open=async function(file,...args) {
+    const handle=await original.call(this,file,...args);
+    if(file===filename&&!held) {held=true;const read=handle.readFile.bind(handle);handle.readFile=async(...readArgs)=>{const value=await read(...readArgs);enter();await pending;return value;};}
+    return handle;
+  };
+  syncBuiltinESMExports();
+  return {entered,release,restore(){fsPromises.open=original;syncBuiltinESMExports();}};
+}
+
+test("HTTP native receipt reads cannot resurrect revoked inspect or cleanup authority", {timeout:30_000},async()=>{
+  const fixture=await serviceFixture("http-held-receipt");let opened,http,barrier,pending;
+  try {
+    opened=await fixture.open({canaries:{readPaths:["/healthz"]}});await httpCanaryPrimary(fixture,opened);http=await openCanaryHttp(opened.service);
+    const oldPrimary=(await expectCanaryJson(await fetch(http.url+canaryHttpPath("binding"),canaryHttpOptions("binding")))).binding;
+    const runtime=await fixture.runtime({generation:2,releaseId:"release_http_receipt_old",mode:"preserve"}),input=canaryHttpInput(oldPrimary,runtime);
+    await expectCanaryJson(await fetch(http.url+canaryHttpPath("retire"),canaryHttpOptions("retire",{...input,retirementEpoch:1})));
+    const file=join(fixture.providerRoot,"service","project_service_01.canary-binding.json");
+    barrier=holdCanaryReceiptRead(file);
+    pending=fetch(http.url+canaryHttpPath("inspect"),canaryHttpOptions("inspect",{primary:oldPrimary,operationId:input.operationId,controllerEpoch:1}));await barrier.entered;
+    const token="clankc_new-current-http-123456789012345678901234567890";
+    const next=await fixture.runtime({generation:2,releaseId:"release_http_receipt_new",mode:"preserve",controlToken:token});await opened.service.reconcile(providerInput(next,2));
+    assert.equal((await fetch(http.url+canaryHttpPath("binding"),canaryHttpOptions("binding"))).status,404);
+    assert.equal((await fetch(http.url+canaryHttpPath("prepare"),canaryHttpOptions("prepare",input,canaryHttpToken,runtime))).status,404);
+    assert.equal((await expectCanaryJson(await fetch(http.url+canaryHttpPath("retire"),canaryHttpOptions("retire",{...input,retirementEpoch:2})))).retirement.phase,"retired");
+    const newPrimary=(await expectCanaryJson(await fetch(http.url+canaryHttpPath("binding"),canaryHttpOptions("binding",null,token)))).binding;
+    barrier.release();assert.equal((await pending).status,404);barrier.restore();barrier=undefined;
+    assert.notEqual(newPrimary.incarnation,oldPrimary.incarnation);
+    assert.equal((await fetch(http.url+canaryHttpPath("retire"),canaryHttpOptions("retire",{...input,retirementEpoch:2}))).status,404);
+    const candidate=await fixture.runtime({generation:3,releaseId:"release_http_receipt_candidate",mode:"preserve"}),newInput=canaryHttpInput(newPrimary,candidate,"new_http_operation",2);
+    const prepared=(await expectCanaryJson(await fetch(http.url+canaryHttpPath("prepare"),canaryHttpOptions("prepare",newInput,token,candidate)))).state;
+    assert.equal(prepared.phase,"running");
+    const retained=await readFile(file,"utf8");assert(!retained.includes(canaryHttpToken));assert(!retained.includes(token));
+    assert.equal((await opened.service.canaries.inspect("project_service_01")).operationId,newInput.operationId);
+  } finally {barrier?.release();barrier?.restore();await pending?.catch(()=>{});await http?.close();await opened?.service.close();await fixture.close();}
+});
+
+test("HTTP binding issuance refuses ignored, altered and unsynced private receipts", {timeout:30_000},async()=>{
+  const fixture=await serviceFixture("http-receipt-writes");let opened,http;
+  const originalRename=fsPromises.rename,originalOpen=fsPromises.open;
+  try {
+    opened=await fixture.open({canaries:{readPaths:["/healthz"]}});await httpCanaryPrimary(fixture,opened);http=await openCanaryHttp(opened.service);
+    const file=join(fixture.providerRoot,"service","project_service_01.canary-binding.json");
+    for(const fault of ["ignored","altered","unsynced"]) {
+      fsPromises.rename=async function(from,to) {if(to!==file)return originalRename.call(this,from,to);if(fault==="ignored")return;await originalRename.call(this,from,to);if(fault==="altered"){const row=JSON.parse(await readFile(to,"utf8"));row.tokenDigest[0]^=1;await writeFile(to,JSON.stringify(row),{mode:0o600});}};
+      fsPromises.open=async function(filename,...args) {const handle=await originalOpen.call(this,filename,...args);if(fault==="unsynced"&&String(filename).startsWith(file+".tmp-"))handle.sync=async()=>{throw new Error("held receipt fsync failure");};return handle;};
+      syncBuiltinESMExports();
+      const response=await fetch(http.url+canaryHttpPath("binding"),canaryHttpOptions("binding"));assert.equal(response.status,503,fault);assert(!JSON.stringify(await response.json()).includes('"binding"'));
+      fsPromises.rename=originalRename;fsPromises.open=originalOpen;syncBuiltinESMExports();await rm(file,{force:true});
+    }
+    await expectCanaryJson(await fetch(http.url+canaryHttpPath("binding"),canaryHttpOptions("binding")));
+    await opened.service.close();opened=undefined;
+    const valid=await readFile(file,"utf8");
+    for(const invalid of ["{",JSON.stringify({...JSON.parse(valid),protocol:"clank-provider-canary-binding/999"}),JSON.stringify({...JSON.parse(valid),primary:{...JSON.parse(valid).primary,projectId:"other_project"}})]) {
+      await writeFile(file,invalid,{mode:0o600});await assert.rejects(fixture.open(),/invalid|scope/u);
+    }
+    await writeFile(file,valid,{mode:0o600});opened=await fixture.open();
+  } finally {fsPromises.rename=originalRename;fsPromises.open=originalOpen;syncBuiltinESMExports();await http?.close();await opened?.service.close();await fixture.close();}
+});
+
+async function openHttpChild(root,primaryFile,mode) {
+  const child=fork(new URL("./fixtures/provider-canary-http.mjs",import.meta.url),[root,primaryFile,mode],{execArgv:["--disable-warning=ExperimentalWarning"],stdio:["ignore","ignore","pipe","ipc"]});
+  let errors="";child.stderr.on("data",chunk=>{errors+=chunk.toString();});
+  const ready=await Promise.race([once(child,"message").then(([value])=>value),once(child,"exit").then(([code,signal])=>{throw new Error(`HTTP fixture exited ${code}/${signal}: ${errors}`);})]);
+  assert.equal(ready.phase,"ready",JSON.stringify(ready));
+  return {child,url:ready.url,async close(){if(child.exitCode!==null||child.signalCode!==null)return;const exit=once(child,"exit");child.send("close");await exit;}};
+}
+
+test("HTTP lost prejournal prepare survives native child SIGKILL and disabled restart with exact absence proof", {timeout:30_000},async()=>{
+  const fixture=await serviceFixture("http-process-restart");let first,restarted,held;
+  try {
+    const primaryRuntime=await fixture.runtime({generation:1,releaseId:"release_http_child_primary",mode:"initialize",snapshot:await sqliteSnapshot(fixture.root,"http-child")});
+    const primaryFile=join(fixture.root,"primary.runtime");await writeFile(primaryFile,primaryRuntime.bytes,{mode:0o600});
+    first=await openHttpChild(fixture.providerRoot,primaryFile,"first");
+    const primary=(await expectCanaryJson(await fetch(first.url+canaryHttpPath("binding"),canaryHttpOptions("binding")))).binding;
+    const runtime=await fixture.runtime({generation:2,releaseId:"release_http_child_candidate",mode:"preserve"}),input=canaryHttpInput(primary,runtime,"http_child_lost",7);
+    const message=once(first.child,"message");held=heldCanaryHttp(first.url+canaryHttpPath("prepare"),canaryHttpOptions("prepare",input,canaryHttpToken,runtime));
+    assert.equal((await message)[0].phase,"body-held");
+    await assert.rejects(access(join(fixture.providerRoot,"service","project_service_01.canary.json")),{code:"ENOENT"});
+    const exit=once(first.child,"exit");first.child.kill("SIGKILL");assert.equal((await exit)[1],"SIGKILL");await assert.rejects(held.response);
+    restarted=await openHttpChild(fixture.providerRoot,primaryFile,"disabled");
+    for(const operation of ["binding","inspect","prepare","stop"]) {
+      const options=canaryHttpOptions(operation,operation==="prepare"?input:{primary,operationId:input.operationId,controllerEpoch:7},canaryHttpToken,operation==="prepare"?runtime:undefined);
+      assert.equal((await fetch(restarted.url+canaryHttpPath(operation),options)).status,404,operation);
+    }
+    assert.equal((await fetch(restarted.url+deploymentProviderSnapshotPath("project_service_01"),{headers:{authorization:`Bearer ${canaryHttpToken}`}})).status,404);
+    const wrong={...input,primary:{...primary,incarnation:crypto.randomUUID()},retirementEpoch:9};
+    assert.equal((await fetch(restarted.url+canaryHttpPath("retire"),canaryHttpOptions("retire",wrong))).status,404);
+    const requested={...input,retirementEpoch:9};
+    const retired=(await expectCanaryJson(await fetch(restarted.url+canaryHttpPath("retire"),canaryHttpOptions("retire",requested)))).retirement;
+    assert.equal(retired.phase,"retired");assert.equal(retired.controllerEpoch,7);assert.equal(retired.retirementEpoch,9);
+    await assert.rejects(access(join(fixture.providerRoot,"projects",retired.candidateProjectId)),{code:"ENOENT"});
+    assert.equal((await fixture.data.inspect("project_service_01")).releaseId,primaryRuntime.manifest.releaseId);
+    await restarted.close();restarted=await openHttpChild(fixture.providerRoot,primaryFile,"disabled");
+    assert.deepEqual((await expectCanaryJson(await fetch(restarted.url+canaryHttpPath("retire"),canaryHttpOptions("retire",requested)))).retirement,retired);
+    assert.equal((await fetch(restarted.url+canaryHttpPath("retire"),canaryHttpOptions("retire",{...requested,capsuleSha256:"f".repeat(64)}))).status,503);
+  } finally {held?.request.destroy();await restarted?.close();await first?.close();await fixture.close();}
+});
+
+test("HTTP native callback timeout remains uncertain and shutdown retains root ownership until cleanup", {timeout:30_000},async()=>{
+  const fixture=await serviceFixture("http-native-timeout");let opened,http,pending,closing,release,enter;
+  const entered=new Promise(resolve=>enter=resolve),held=new Promise(resolve=>release=resolve);
+  try {
+    opened=await fixture.open({canaries:{readPaths:["/healthz"],controlTimeoutMs:500},data:{...fixture.data,snapshot:async projectId=>{const snapshot=await fixture.data.snapshot(projectId);enter();await held;return snapshot;}}});
+    await httpCanaryPrimary(fixture,opened);http=await openCanaryHttp(opened.service);
+    const primary=(await expectCanaryJson(await fetch(http.url+canaryHttpPath("binding"),canaryHttpOptions("binding")))).binding;
+    const runtime=await fixture.runtime({generation:2,releaseId:"release_http_native_timeout",mode:"preserve"}),input=canaryHttpInput(primary,runtime);
+    pending=fetch(http.url+canaryHttpPath("prepare"),canaryHttpOptions("prepare",input,canaryHttpToken,runtime));await entered;
+    const response=await pending;assert.equal(response.status,503);assert.match(await response.text(),/uncertain/u);
+    const journalFile=join(fixture.providerRoot,"service","project_service_01.canary.json");assert.equal(JSON.parse(await readFile(journalFile,"utf8")).current.phase,"preparing");
+    let closed=false;closing=opened.service.close().then(()=>{closed=true;});
+    await assert.rejects(fixture.open(),/already has an active writer/u);assert.equal(closed,false);
+    release();await closing;await http.close();http=undefined;
+    assert.equal(JSON.parse(await readFile(journalFile,"utf8")).current.phase,"stopped");
+    opened=await fixture.open();http=await openCanaryHttp(opened.service);
+    const retired=(await expectCanaryJson(await fetch(http.url+canaryHttpPath("retire"),canaryHttpOptions("retire",{...input,retirementEpoch:3})))).retirement;
+    assert.equal(retired.phase,"retired");assert.equal(await fixture.data.inspect(retired.candidateProjectId),null);
+  } finally {release?.();await pending?.catch(()=>{});await closing?.catch(()=>{});await http?.close();await opened?.service.close();await fixture.close();}
+});
+
+test("HTTP malformed and encoded controls never fall through to ordinary application ingress", {timeout:30_000},async()=>{
+  const fixture=await serviceFixture("http-control-envelopes");let opened,http,held,bodyRead;
+  const entered=new Promise(resolve=>bodyRead=resolve);let applicationRequests=0;
+  try {
+    const ingress=fakeIngress([]);ingress.handle=async()=>{applicationRequests++;return new Response("unexpected application response");};
+    opened=await fixture.open({ingress,canaries:{readPaths:["/healthz"],controlTimeoutMs:500}});await httpCanaryPrimary(fixture,opened);http=await openCanaryHttp(opened.service,url=>{if(url.endsWith("/prepare"))bodyRead();});
+    for(const path of ["/v1/clank/%2563ontrol/project_service_01/canary/binding","/v1/clank/%252563ontrol/project_service_01/canary/binding","/v1/clank/%63ontrol/project_service_01/canary/binding","/v1/clank/control/project_service_01/canary/%62inding","/v1/clank/control/project_service_01/canary/shadow","/v1/clank/control/project_service_01/canary/prepare?redirect=1"]) {
+      assert.equal((await fetch(http.url+path,canaryHttpOptions("binding"))).status,404,path);
+    }
+    const primary=(await expectCanaryJson(await fetch(http.url+canaryHttpPath("binding"),canaryHttpOptions("binding")))).binding;
+    const runtime=await fixture.runtime({generation:2,releaseId:"release_http_envelope",mode:"preserve"}),input=canaryHttpInput(primary,runtime);
+    const options=canaryHttpOptions("prepare",input,canaryHttpToken,runtime);
+    for(const patch of [{"content-length":"9999999999"},{"x-clank-canary-input":"x".repeat(4_097)},{"content-encoding":"br"}]) {
+      const response=await opened.service.handle(new Request("http://provider.test"+canaryHttpPath("prepare"),{...options,headers:{...options.headers,...patch}}));assert.equal(response.status,404);
+    }
+    // A held unauthenticated body is rejected without consuming the intake slot.
+    const bad=heldCanaryHttp(http.url+canaryHttpPath("prepare"),canaryHttpOptions("prepare",input,"clankc_wrong-authentication-12345678901234567890",runtime));
+    assert.equal((await bad.response).status,404);bad.request.destroy();
+    held=heldCanaryHttp(http.url+canaryHttpPath("prepare"),options);await entered;
+    const busy=await fetch(http.url+canaryHttpPath("prepare"),options);assert.equal(busy.status,503);
+    held.finish();assert.equal((await held.response).status,200);
+    assert.equal(applicationRequests,0);
+  } finally {held?.request.destroy();await http?.close();await opened?.service.close();await fixture.close();}
+});
+
+test("HTTP canary envelope captures validated length before asynchronous native receipt reads", {timeout:30_000},async()=>{
+  const fixture=await serviceFixture("http-length-capture");let opened,barrier,pending;
+  try {
+    opened=await fixture.open({canaries:{readPaths:["/healthz"]}});await httpCanaryPrimary(fixture,opened);
+    const url="http://provider.test"+canaryHttpPath("binding");
+    const primary=(await expectCanaryJson(await opened.service.handle(new Request(url,canaryHttpOptions("binding"))))).binding;
+    const runtime=await fixture.runtime({generation:2,releaseId:"release_http_captured_length",mode:"preserve"}),input=canaryHttpInput(primary,runtime);
+    const request=new Request("http://provider.test"+canaryHttpPath("prepare"),canaryHttpOptions("prepare",input,canaryHttpToken,runtime));
+    barrier=holdCanaryReceiptRead(join(fixture.providerRoot,"service","project_service_01.canary-binding.json"));
+    pending=opened.service.handle(request);await barrier.entered;
+    request.headers.set("content-length","1");request.headers.set("x-clank-canary-input","{}");request.headers.set("authorization","Bearer changed-credential-123456789012345678901234567890");
+    barrier.release();const prepared=(await expectCanaryJson(await pending)).state;
+    assert.equal(prepared.capsuleSha256,runtime.sha256);assert.equal(prepared.operationId,input.operationId);
+  } finally {barrier?.release();barrier?.restore();await pending?.catch(()=>{});await opened?.service.close();await fixture.close();}
 });
