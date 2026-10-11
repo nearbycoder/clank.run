@@ -1,0 +1,51 @@
+{
+  "feature": 7,
+  "complete": false,
+  "scope": "Private marked-root ownership, native daemon-domain catalog binding and durable barrier prerequisite; source-stop/target activation/ingress switch remain pending.",
+  "pullRequest": "https://github.com/nearbycoder/clank.run/pull/356",
+  "reviewedHead": "317e17cc38d4386c373b80d3baae1ceb587136fc",
+  "acceptedMain": "ca0a6646ab87d458d75d02a260592c33b22b2da5",
+  "reviewedTree": "660bf277d09810df0b553590233b51725b0bd7db",
+  "originalLocalFilesPreserved": 23,
+  "finalHostedChecks": {
+    "passed": 8,
+    "codeqlNewAlerts": 0,
+    "reviewThreadResolved": true,
+    "analysisAnnotation": "Ubuntu26 runner migration notice"
+  },
+  "fullOrdinaryNativeGate": {
+    "executedHead": "775682c29a62f2f5a7442cbf8d98dad1475e7d1d",
+    "eachRuntime": {
+      "reported": 2327,
+      "passed": 2315,
+      "failed": 0,
+      "cancelled": 0,
+      "explicitPrivilegedSkips": 12
+    },
+    "coverageProfilesVerified": {
+      "node26": 2890,
+      "node22": 2889
+    },
+    "evidenceSha256": "4cd6f84f63b1f7b7262f098d50abf5e05a674b1802604c1a600f6c227a31aafe"
+  },
+  "testOnlyRepair": {
+    "head": "bee62e7db307bd899bb0f7c7b4b73d441c86b42e",
+    "passedEachRuntime": 26,
+    "skipped": 0,
+    "evidenceSha256": "7187c280a11e066813e761ad42e652b10b54010ff20d5d94b4cca8c16b68609a"
+  },
+  "nativeDockerProof": {
+    "evidenceSha256": "a7c43ef579998f983c9da59f7b61517295aef8adaed63a91879fc630a140e7c7",
+    "actualWriterSigkill": true,
+    "exactReplayAndChangedInputRefusal": true,
+    "ordinaryBarrierPreservesSentinel": true,
+    "allOwnedResourcesAbsent": true,
+    "originalDaemonPreserved": true
+  },
+  "authorVerificationComment": 5482125191,
+  "independentHumanApproval": false,
+  "roadmap": {
+    "accepted": 29,
+    "remaining": 11
+  }
+}
