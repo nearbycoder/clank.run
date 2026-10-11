@@ -3,6 +3,7 @@ import type { PlatformSupervisorOptions, PlatformSupervisorStatus } from "./plat
 export type { PlatformSupervisorOptions, PlatformSupervisorStatus } from "./platform-supervisor.js";
 import type {PlatformServiceAccountOptions} from "./platform-service-accounts.js";
 import type {AuthenticatedServiceAccount} from "./service-accounts.js";
+import type { PlatformShadowPolicy } from "./managed-shadow.js";
 import type { ManagedCanaryOptions } from "./managed-canary.js";
 import type { ReleaseAttestationPolicy } from "./release-attestation.js";
 import type { PlatformOperationsOptions } from "./operations-monitor.js";
@@ -445,6 +446,8 @@ export interface ClankPlatformOptions {
     releaseWindows?: { intervalMs?: number | false };
     /** Measured stages; provider isolation requires native supervisor leadership and managed ingress. */
     canary?: ManagedCanaryOptions;
+    /** Explicit provider-isolated shadow bounds; never activates a release. */
+    shadowTraffic?: PlatformShadowPolicy;
     jobs?: PlatformJobOperationsOptions;
     previews?: PlatformPreviewOptions;
     /**
