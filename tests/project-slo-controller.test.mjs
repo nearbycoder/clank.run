@@ -20,7 +20,7 @@ async function setup(t,options={}){
  t.after(()=>{for(const value of controllers)value.close();for(const value of databases)value.close();return rm(root,{recursive:true,force:true});});
  const tick=(milliseconds=1000)=>{now+=milliseconds;mono+=milliseconds;return controller.pulse();};
  const outcome=(statusCode=200,durationMs=100,responseOutcome='complete')=>controller.record({projectId:project,routeId:'route_slo_exact_01',method:'GET',statusCode,durationMs,responseOutcome,recordedAt:0,requestBytes:0,responseBytes:0,admitted:true});
- const fresh=async()=>{const db=await openSQLite(schema,{path:join(root,'control.sqlite')}),c=openProjectSlos(db[internal],options,hooks);databases.push(db);controllers.push(c);return c;};
+ const fresh=async()=>{const db=await openSQLite(schema,{path:join(root,'control.sqlite')});databases.push(db);const c=openProjectSlos(db[internal],options,hooks);controllers.push(c);return c;};
  return {controller,authority,sql,clock,errors,tick,outcome,fresh,now:()=>now,jump(wall,monotonic=wall){now+=wall;mono+=monotonic;},failAudit(value){auditFailure=value;},revoke(){authorized=false;}};
 }
 const create=f=>f.controller.create(project,f.authority,{configuration,operationId:'slo_create_exact_01'});
@@ -109,4 +109,59 @@ test('two real SQLite policy controllers preserve one exact creation and one acc
  assert.equal(other.change(project,policy.id,f.authority,input).version,2);
  assert.throws(()=>f.controller.change(project,policy.id,f.authority,{...input,configuration:{...configuration,name:'Stale rejected'},operationId:'slo_concurrent_second_01'}),error=>error.code==='SLO_VERSION_CONFLICT');
  assert.equal(f.sql.prepare('SELECT count(*) AS n FROM clank_platform_slo_policies').get().n,1);assert.equal(f.sql.prepare('SELECT count(*) AS n FROM clank_platform_slo_receipts').get().n,2);
+});
+
+const retainedSnapshot=sql=>JSON.stringify(sql.prepare("SELECT name,type,sql FROM sqlite_schema WHERE name LIKE 'clank_platform_slo_%' ORDER BY name").all().map(entry=>({...entry,rows:entry.type==='table'?sql.prepare('SELECT * FROM '+entry.name+' ORDER BY rowid').all():null})));
+for(const damage of ['missing','layout'])for(const suffix of ['state','collectors','coverage','buckets','policies','receipts','alerts'])test('retained SLO '+suffix+' '+damage+' refuses live and reopened work without rebuilding history',async t=>{
+ const f=await setup(t);create(f);f.controller.close();const name='clank_platform_slo_'+suffix;
+ if(damage==='missing')f.sql.exec('DROP TABLE '+name);else f.sql.exec('ALTER TABLE '+name+' ADD COLUMN unexpected TEXT');
+ const before=retainedSnapshot(f.sql);
+ await assert.rejects(f.fresh(),error=>error.code==='SLO_STORAGE_INVALID');
+ assert.equal(retainedSnapshot(f.sql),before);
+ // A separate already-open controller detects damage before even allocating a policy.
+ const g=await setup(t);create(g);g.sql.exec(damage==='missing'?'DROP TABLE '+name:'ALTER TABLE '+name+' ADD COLUMN unexpected TEXT');const live=retainedSnapshot(g.sql);
+ assert.throws(()=>g.controller.create(project,g.authority,{configuration:{...configuration,name:'Changed historical input'},operationId:'slo_create_exact_01'}),error=>error.code==='SLO_STORAGE_INVALID');
+ assert.equal(retainedSnapshot(g.sql),live);
+});
+for(const damage of ['missing','multiple'])test('retained SLO '+damage+' singleton is not normalized',async t=>{
+ const f=await setup(t);create(f);f.controller.close();
+ if(damage==='missing')f.sql.exec('DELETE FROM clank_platform_slo_state');else f.sql.exec('ALTER TABLE clank_platform_slo_state RENAME TO native_prior_state;CREATE TABLE clank_platform_slo_state(singleton INTEGER PRIMARY KEY,protocol INTEGER NOT NULL,owner TEXT,epoch TEXT);INSERT INTO clank_platform_slo_state SELECT * FROM native_prior_state;INSERT INTO clank_platform_slo_state(singleton,protocol) VALUES(2,1);DROP TABLE native_prior_state');
+ const before=retainedSnapshot(f.sql);await assert.rejects(f.fresh(),error=>error.code==='SLO_STORAGE_INVALID');assert.equal(retainedSnapshot(f.sql),before);
+});
+for(const kind of ['create','change'])for(const target of ['policy','receipt'])for(const fault of ['ignored','altered'])test('native '+fault+' SLO '+kind+' '+target+' rolls back exact effect and receipt',async t=>{
+ const f=await setup(t),prior=kind==='change'?create(f):null,input={configuration:{...configuration,name:'  Exact intent  ',burnThreshold:1.5},operationId:'slo_fault_operation_01',...(prior?{expectedVersion:1}:{})};
+ const table=target==='policy'?'clank_platform_slo_policies':'clank_platform_slo_receipts',verb=target==='policy'&&prior?'UPDATE':'INSERT';
+ const action=fault==='ignored'?'SELECT RAISE(IGNORE);':target==='policy'?"UPDATE clank_platform_slo_policies SET configuration=json_set(configuration,'$.name','Changed by trigger') WHERE id=NEW.id;":"UPDATE clank_platform_slo_receipts SET result=json_set(result,'$.version',999) WHERE project_id=NEW.project_id AND actor_id=NEW.actor_id AND operation_id=NEW.operation_id;";
+ f.sql.exec(`CREATE TRIGGER native_slo_fault ${fault==='ignored'?'BEFORE':'AFTER'} ${verb} ON ${table} BEGIN ${action} END`);
+ const before=retainedSnapshot(f.sql);const submit=()=>prior?f.controller.change(project,prior.id,f.authority,input):f.controller.create(project,f.authority,input);
+ assert.throws(submit,error=>error.code==='SLO_STORAGE_INVALID');assert.equal(retainedSnapshot(f.sql),before);
+ f.sql.exec('DROP TRIGGER native_slo_fault');const accepted=submit();assert.equal(accepted.name,input.configuration.name);assert.equal(accepted.burnThreshold,1.5);assert.deepEqual(submit(),accepted);
+});
+for(const target of ['policy','receipt','authority'])test('SLO audit '+target+' change cannot publish or commit an earlier authorization',async t=>{
+ const f=await setup(t);f.sql.exec('CREATE TABLE native_slo_audit(action TEXT);CREATE TABLE native_slo_permission(allowed INTEGER);INSERT INTO native_slo_permission VALUES(1)');
+ const authority={userId:f.authority.userId,authorize(){if(f.sql.prepare('SELECT allowed FROM native_slo_permission').get().allowed!==1)throw new Error('Native authority revoked');},audit(action){f.sql.prepare('INSERT INTO native_slo_audit VALUES(?)').run(action);if(target==='authority')f.sql.exec('UPDATE native_slo_permission SET allowed=0');else if(target==='policy')f.sql.exec("UPDATE clank_platform_slo_policies SET version=99");else f.sql.exec('DELETE FROM clank_platform_slo_receipts');}};
+ const before=retainedSnapshot(f.sql);assert.throws(()=>f.controller.create(project,authority,{configuration,operationId:'slo_audit_fault_01'}),target==='authority'?/revoked/:error=>error.code==='SLO_STORAGE_INVALID');
+ assert.equal(retainedSnapshot(f.sql),before);assert.equal(f.sql.prepare('SELECT count(*) AS n FROM native_slo_audit').get().n,0);assert.equal(f.sql.prepare('SELECT allowed FROM native_slo_permission').get().allowed,1);
+});
+for(const verb of ['INSERT','UPDATE'])for(const fault of ['ignored','altered'])test('actual ingress '+fault+' metric '+verb+' invalidates replayed coverage rather than proving health',async t=>{
+ const f=await setup(t),policy=f.controller.create(project,f.authority,{configuration:{...configuration,minimumRequests:1},operationId:'slo_metric_failure_01'}),observed=[];
+ const server=createServer((request,response)=>{response.writeHead(request.url==='/failure'?503:200);response.end('observed');});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>{server.closeAllConnections();return new Promise(resolve=>server.close(resolve));});
+ const ingress=createManagedIngress({routes:()=>[{id:'route_slo_exact_01',projectId:project,hosts:['slo.example.test'],upstream:'http://127.0.0.1:'+server.address().port,active:true}],onRequest:metric=>{observed.push(metric);f.controller.record(metric);}});
+ for(let second=0;second<60;second++)f.tick();
+ if(verb==='UPDATE')await (await ingress.handle(new Request('https://slo.example.test/healthy'))).text();
+ const before=JSON.stringify(f.sql.prepare('SELECT * FROM clank_platform_slo_buckets').all());
+ const action=fault==='ignored'?'SELECT RAISE(IGNORE);':'UPDATE clank_platform_slo_buckets SET requests=99 WHERE project_id=NEW.project_id AND started_at=NEW.started_at;';
+ f.sql.exec(`CREATE TRIGGER native_metric_fault ${fault==='ignored'?'BEFORE':'AFTER'} ${verb} ON clank_platform_slo_buckets BEGIN ${action} END`);
+ const response=await ingress.handle(new Request('https://slo.example.test/failure'));assert.equal(response.status,503);await response.text();
+ assert.deepEqual(observed.map(metric=>[metric.statusCode,metric.responseOutcome]),verb==='UPDATE'?[[200,'complete'],[503,'complete']]:[[503,'complete']]);
+ assert.equal(JSON.stringify(f.sql.prepare('SELECT * FROM clank_platform_slo_buckets').all()),before);assert.ok(f.errors.some(error=>error.code==='SLO_STORAGE_INVALID'));
+ assert.equal(f.sql.prepare('SELECT complete FROM clank_platform_slo_coverage WHERE started_at=?').get(f.now()).complete,0);
+ f.sql.exec('DROP TRIGGER native_metric_fault');for(let second=0;second<300;second++)f.tick();
+ const result=f.controller.read(project,policy.id,f.authority);assert.equal(result.evaluation.status,'insufficient-data');assert.equal(result.evaluation.burning,null);assert.equal(result.evaluation.coverage.complete,false);
+});
+for(const target of ['state','collectors'])test('native metric write loses '+target+' authority before commit without keeping a bucket',async t=>{
+ const f=await setup(t);create(f);for(let second=0;second<60;second++)f.tick();
+ const action=target==='state'?"UPDATE clank_platform_slo_state SET owner='foreign_native_owner';":'DELETE FROM clank_platform_slo_collectors;';
+ f.sql.exec(`CREATE TRIGGER native_metric_authority AFTER INSERT ON clank_platform_slo_buckets BEGIN ${action} END`);f.outcome();
+ assert.equal(f.sql.prepare('SELECT count(*) AS n FROM clank_platform_slo_buckets').get().n,0);assert.ok(f.errors.some(error=>/ownership changed/.test(error.message)));assert.equal(f.sql.prepare('SELECT complete FROM clank_platform_slo_coverage WHERE started_at=?').get(f.now()).complete,0);
 });
