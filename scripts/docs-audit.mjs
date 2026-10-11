@@ -1,6 +1,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { declarationReleaseLayout } from "./build.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const failures = [];
@@ -60,15 +61,15 @@ const declarations = (await readdir(sourceDirectory))
   .filter((name) => name.endsWith(".d.ts"))
   .sort();
 for (const declaration of declarations) {
-  const source = await readFile(path.join(sourceDirectory, declaration), "utf8");
+  const source = await readFile(path.join(sourceDirectory, declaration));
   let built;
   try {
-    built = await readFile(path.join(distributionDirectory, declaration), "utf8");
+    built = await readFile(path.join(distributionDirectory, declaration));
   } catch {
     failures.push(`dist/${declaration} is missing; run the build before the documentation audit.`);
     continue;
   }
-  if (built !== source) failures.push(`dist/${declaration} does not match src/${declaration}.`);
+  if (!built.equals(declarationReleaseLayout(source))) failures.push(`dist/${declaration} does not match src/${declaration}.`);
 }
 
 const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
