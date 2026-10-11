@@ -42,8 +42,13 @@ export function openMutationReceipts(database: SQLiteDatabase<any>, options: Mut
     const value = execute();
     const output = JSON.stringify({ value });
     if (new TextEncoder().encode(output).byteLength > 65536) throw new RequestInputError(413, "MUTATION_RESULT_TOO_LARGE", "Offline mutation results must fit in 64 KiB.");
-    sql.prepare("INSERT INTO clank_mutation_receipts(owner, key, path, input, output, expires) VALUES (?, ?, ?, ?, ?, ?)")
+    const inserted = sql.prepare("INSERT INTO clank_mutation_receipts(owner, key, path, input, output, expires) VALUES (?, ?, ?, ?, ?, ?)")
       .run(owner, key, path, input, output, issued + retention);
+    const retained = sql.prepare("SELECT owner,key,path,input,output,expires FROM clank_mutation_receipts WHERE owner=? AND key=?").get(owner,key);
+    if (Number(inserted.changes) !== 1 || !retained || retained.owner !== owner || retained.key !== key || retained.path !== path
+      || retained.input !== input || retained.output !== output || retained.expires !== issued + retention) {
+      throw new RequestInputError(503,"MUTATION_RECEIPT_FAILED","The mutation receipt was not durably acknowledged; the transaction was rolled back.");
+    }
     return value;
   };
 }

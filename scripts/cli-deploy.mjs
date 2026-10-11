@@ -175,6 +175,10 @@ const COMMANDS = Object.freeze({
     usage: "clank billing [--json]",
     summary: "Show the account plan, billing state, and effective entitlements.",
   },
+  costs: {
+    usage: "clank costs [directory] [--month YYYY-MM] [--history] [--json]",
+    summary: "Read measured project costs, unknown coverage, and current budget status.",
+  },
   token: {
     usage: "clank token <create|list|revoke>",
     summary: "Manage scoped automation tokens.",
@@ -207,6 +211,10 @@ const COMMANDS = Object.freeze({
     usage: "clank channel <list|get|pin|history|actions|promote|rollback|retire> [name] [directory] [--expected-version <n>] [--from <environment>] [--release=<id>] [--digest <sha256>] [--to <environment>] [--environment-version <n>] [--expected-active=<id|none>] [--from-version <n>] [--key <id>] [--attestation <file>] [--confirm <phrase>] [--version <n>] [--dependency-version <n>] [--dependency-check <id>] [--json]",
     summary: "Pin immutable channel history and explicitly promote or roll back an exact retained artifact.",
   },
+  shadow: {
+    usage: "clank shadow status [directory] [--session <id>] [--json]",
+    summary: "Read shadow comparison and exact candidate cleanup status without changing a deployment.",
+  },
   canary: {
     usage: "clank canary <status|recover> [operation-id] [directory] [--expected-epoch <n>] [--json]",
     summary: "Inspect canary measurements or retry cleanup for an exact provider candidate.",
@@ -230,6 +238,10 @@ const COMMANDS = Object.freeze({
   backup: {
     usage: "clank backup <create|list|verify|restore>",
     summary: "Create, verify, list, or restore encrypted backups.",
+  },
+  recovery: {
+    usage: "clank recovery <status|checkpoint|restore-plan> [directory] [--key <id>] [--expected-version <n>] [--request <json-file>] [--json]",
+    summary: "Inspect retained recovery horizons, request an exact checkpoint, or prepare a browser-approved restore.",
   },
   secrets: {
     usage: "clank secrets <list|set|delete|rotations|stage|validate|activate|rollback>",
@@ -267,11 +279,13 @@ const VALUE_OPTIONS = Object.freeze({
   activity: ["org", "limit", "before"],
   audit: ["org", "limit", "before"],
   usage: ["org", "month"],
+  costs: ["month"],
   token: ["permissions", "expires-in", "name"],
   deploy: ["name", "slug", "org", "placement", "output", "signing-key", "builder", "build-id", "dependency-version", "dependency-check"],
   environment: ["expected-version", "migration-policy", "from", "release", "digest", "expected-active", "key", "attestation", "confirm", "dependency-version", "dependency-check"],
   dependency: ["config", "expected-version", "confirm"],
   "release-window": ["request", "expected-version", "confirm", "attestation"],
+  shadow: ["session"],
   canary: ["expected-epoch"],
   channel: ["expected-version", "from", "release", "digest", "to", "environment-version", "expected-active", "from-version", "key", "attestation", "confirm", "version", "dependency-version", "dependency-check"],
   preview: [
@@ -292,6 +306,7 @@ const VALUE_OPTIONS = Object.freeze({
   logs: ["limit"],
   rollback: ["confirm", "key", "expected-active", "expected-activation", "dependency-version", "dependency-check"],
   backup: ["reason", "confirm"],
+  recovery: ["key", "expected-version", "request"],
   secrets: ["from-env"],
 });
 const BOOLEAN_OPTIONS = Object.freeze({
@@ -307,12 +322,15 @@ const BOOLEAN_OPTIONS = Object.freeze({
   audit: ["json"],
   usage: ["json"],
   billing: ["json"],
+  costs: ["history", "json"],
   deploy: ["dry-run", "json"],
   environment: ["json"],
   dependency: ["json"],
   "release-window": ["json"],
+  shadow: ["json"],
   canary: ["json"],
   channel: ["json"],
+  recovery: ["json"],
   preview: [
     "json",
     "acknowledge-data-loss",
@@ -354,6 +372,7 @@ export async function run(command, args) {
       case "audit": return await activity(args);
       case "usage": return await usageCommand(args);
       case "billing": return await billingCommand(args);
+      case "costs": return await costsCommand(args);
       case "token": return await tokenCommand(args);
       case "domain": return await domainCommand(args);
       case "deploy": return await deploy(args);
@@ -362,12 +381,14 @@ export async function run(command, args) {
       case "dependency": return await dependencyCommand(args);
       case "release-window": return await releaseWindowCommand(args);
       case "channel": return await channelCommand(args);
+      case "shadow": return await shadowCommand(args);
       case "canary": return await canaryCommand(args);
       case "status": return await status(args);
       case "releases": return await releases(args);
       case "logs": return await logs(args);
       case "rollback": return await rollback(args);
       case "backup": return await backupCommand(args);
+      case "recovery": return await recoveryCommand(args);
       case "secrets": return await secrets(args);
       case "migrate": return await migrate(args);
       case "inspect": return await inspectArtifact(args);
@@ -609,6 +630,8 @@ Platform:
   clank domain list                     List custom domains
   clank domain verify <domain-id>       Verify the published TXT record
   clank domain remove <domain-id>       Remove a custom domain
+  clank shadow status [directory] [--session <id>] [--json]
+                                      Read shadow observations; never start or stop
   clank canary status [directory]      Inspect measured stages and candidate cleanup
   clank canary recover <operation-id> --expected-epoch <n>
   clank status                         Show the linked project and active release
@@ -621,6 +644,9 @@ Platform:
   clank backup list
   clank backup verify <backup-id>
   clank backup restore <backup-id> --confirm="restore-backup <slug> <id>"
+  clank recovery status [directory] --json
+  clank recovery checkpoint [directory] --key <id> --expected-version <n>
+  clank recovery restore-plan [directory] --request <json-file> --json
   clank secrets list
   clank secrets set NAME               Read a secret value from stdin
   clank secrets rotations              Inspect versions and running consumers
@@ -1830,6 +1856,25 @@ async function usageCommand(args) {
     console.log(`History before ${new Date(payload.period.trackingStartedAt).toISOString()} may be incomplete.`);
   }
   console.log("Known transfer counts request bodies and responses that declare Content-Length; no prices or invoices are calculated.");
+}
+
+async function costsCommand(args) {
+  const paths = positionals(args), month = option(args, "month");
+  if (paths.length > 1 || (month !== undefined && !/^20[0-9]{2}-(?:0[1-9]|1[0-2])$/u.test(month))) throw new CliError(COMMANDS.costs.usage);
+  if (flag(args, "history") && month === undefined) throw new CliError("Cost history requires --month YYYY-MM.");
+  const {profile, link} = await linkedContext(resolve(paths[0] ?? "."));
+  const suffix = flag(args, "history") ? "/history" : "";
+  const query = month === undefined ? "" : `?month=${encodeURIComponent(month)}`;
+  const payload = await platformRequest(profile.server, `/api/projects/${encodeURIComponent(link.projectId)}/costs${suffix}${query}`, {token: profile.token});
+  if (flag(args, "json")) { console.log(JSON.stringify(payload, null, 2)); return; }
+  if (flag(args, "history")) {
+    for (const snapshot of payload.snapshots) console.log(`Revision ${snapshot.version}: ${snapshot.rateCard.currency} ${snapshot.amountMinor ?? "unknown"} smallest currency units · ${snapshot.reason}`);
+  } else {
+    const report = payload.report;
+    console.log(`${report.projectId} · ${report.month} · ${report.status} · admission ${report.admission}`);
+    console.log(report.snapshot ? `${report.snapshot.rateCard.currency} ${report.snapshot.amountMinor ?? "unknown"} smallest currency units · known subtotal ${report.snapshot.knownAmountMinor}` : "No reconciled measurement.");
+  }
+  console.log("Measured estimates use the operator rate card and explicit coverage; they are not invoices.");
 }
 
 async function billingCommand(args) {
@@ -3232,6 +3277,136 @@ function shellSingleQuote(value) {
   return `'${String(value).replaceAll("'", "'\"'\"'")}'`;
 }
 
+function validateShadowStatus(payload, selected) {
+  const invalid = () => { throw new CliError("Shadow status is unavailable: the platform returned an invalid status document.", "SHADOW_UNAVAILABLE"); };
+  const object = value => value !== null && typeof value === "object" && !Array.isArray(value);
+  const shape = (value, keys) => object(value) && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
+  const integer = (value, minimum = 0, maximum = Number.MAX_SAFE_INTEGER) => Number.isSafeInteger(value) && value >= minimum && value <= maximum;
+  const id = value => typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+  const digest = value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+  const timestamp = value => integer(value,1);
+  const canonicalBase64 = value => /^[A-Za-z0-9_-]+$/.test(value) && value.length%4!==1
+    && (value.length%4!==2 || /[AQgw]$/.test(value)) && (value.length%4!==3 || /[AEIMQUYcgkosw048]$/.test(value));
+  const cursor = value => { if(typeof value!=="string" || value.length>512)return false;const parts=value.split(".");return parts.length===3 && parts[0]==="clankshc1" && canonicalBase64(parts[1]) && parts[2].length===43 && canonicalBase64(parts[2]); };
+  const policy = (value, configured = false) => {
+    const bounds = configured ? {maxDurationMs:1_800_000,maxAttempts:10_000,maxConcurrent:16,maxResponseBytes:65_536,maxRequestMs:10_000,maxReports:100} : {durationMs:1_800_000,maxAttempts:10_000,maxConcurrent:16,maxResponseBytes:65_536,requestMs:10_000};
+    const percent = configured ? "maxSamplePercent" : "samplePercent";
+    return shape(value, ["readPaths","methods",percent,...Object.keys(bounds),...(configured ? ["revision"] : [])])
+      && Array.isArray(value.readPaths) && value.readPaths.length > 0 && value.readPaths.length <= 32
+      && new Set(value.readPaths).size === value.readPaths.length
+      && value.readPaths.every((path,index) => (index===0 || value.readPaths[index-1]<path) && typeof path === "string" && path.length <= 256 && /^\/[A-Za-z0-9/_.~-]*$/u.test(path)
+        && !path.includes("//") && !path.split("/").some(segment => segment === "." || segment === ".."))
+      && Array.isArray(value.methods) && value.methods.length > 0 && value.methods.length <= 2 && new Set(value.methods).size === value.methods.length && value.methods.every((method,index) => (method === "GET" || method === "HEAD") && (index===0 || value.methods[index-1]<method))
+      && Number.isFinite(value[percent]) && value[percent] >= 0.01 && value[percent] <= 100
+      && Object.entries(bounds).every(([key,max]) => integer(value[key],1,max)) && (!configured || integer(value.revision,1));
+  };
+  const report = (value, maxAttempts) => {
+    const versioned=object(value)&&Object.hasOwn(value,"protocol");
+    if (!shape(value,versioned?["protocol","counters","latency","skips"]:["counters","latency"])) return false;
+    const skipNames=["ineligible","sampled-out","capacity","attempt-limit","handoff-timeout","withdrawn"];
+    if(versioned && (value.protocol!==2 || !shape(value.skips,skipNames) || !skipNames.every(key=>integer(value.skips[key],0,2147483647))))return false;
+    const counts = value.counters, names = ["reserved","settled","comparable","statusClassEqual","statusClassDifferent","mediaTypeEqual","mediaTypeDifferent","bothComplete"];
+    const reasons = ["not-submitted","candidate-timeout","candidate-oversized","candidate-error","primary-incomplete","primary-oversized","cancelled","authority-lost","interrupted","persistence-uncertain","content-type-invalid"];
+    if (!shape(counts,[...names,"unknown"]) || !names.every(name => integer(counts[name],0,maxAttempts)) || !shape(counts.unknown,reasons)
+      || !reasons.every(reason => integer(counts.unknown[reason],0,counts.settled))) return false;
+    const incomplete = counts.unknown["not-submitted"] + counts.unknown["candidate-timeout"] + counts.unknown["candidate-oversized"]
+      + counts.unknown["candidate-error"] + counts.unknown["primary-incomplete"] + counts.unknown["primary-oversized"];
+    if (counts.settled > counts.reserved || counts.bothComplete > counts.settled - incomplete || counts.comparable > counts.bothComplete
+      || counts.statusClassEqual + counts.statusClassDifferent !== counts.comparable || counts.mediaTypeEqual + counts.mediaTypeDifferent !== counts.comparable
+      || counts.comparable + Object.values(counts.unknown).reduce((total,count) => total + count,0) !== counts.settled || !shape(value.latency,["primary","candidate"])) return false;
+    return [value.latency.primary,value.latency.candidate].every(latency => shape(latency,["cumulative","overflow","unknown"])
+      && Array.isArray(latency.cumulative) && latency.cumulative.length === 12
+      && latency.cumulative.every((count,index) => integer(count,0,counts.settled) && (index === 0 || count >= latency.cumulative[index-1]))
+      && integer(latency.overflow,0,counts.settled) && integer(latency.unknown,0,counts.settled)
+      && latency.cumulative[11] + latency.overflow + latency.unknown === counts.settled);
+  };
+  const session = row => {
+    if (!shape(row,["sessionId","operationId","controllerEpoch","epoch","policyRevision","releaseId","artifactSha256","primary","phase","outcome","stopRequested","cleanupRequired","reportAvailable","policy","snapshot","report","createdAt","expiresAt","updatedAt","nextAction"])
+      || !id(row.sessionId) || !id(row.operationId) || !id(row.releaseId) || !digest(row.artifactSha256)
+      || !integer(row.controllerEpoch,1) || !integer(row.epoch,row.controllerEpoch,payload.epoch) || !integer(row.policyRevision,1)
+      || !shape(row.primary,["releaseId","generation"]) || !id(row.primary.releaseId) || !integer(row.primary.generation,1)
+      || !["binding","preparing","observing","retiring","retired","complete"].includes(row.phase)
+      || !(row.outcome === null || ["stopped","expired","attempt-limit","interrupted","authority-revoked","policy-changed","primary-changed","provider-error"].includes(row.outcome))
+      || typeof row.stopRequested !== "boolean" || typeof row.cleanupRequired !== "boolean" || typeof row.reportAvailable !== "boolean"
+      || !policy(row.policy) || ![row.createdAt,row.expiresAt,row.updatedAt].every(timestamp) || !["none","wait","stop","recover","review"].includes(row.nextAction)) invalid();
+    if (row.snapshot !== null && (!shape(row.snapshot,["sha256","bytes","providerStartedAt","providerCompletedAt","platformObservedAt","elapsedSinceObservationMs","crossHostFreshness"])
+      || !digest(row.snapshot.sha256) || !integer(row.snapshot.bytes,1,2*1024*1024*1024-2*1024*1024-100*1024*1024-32) || ![row.snapshot.providerStartedAt,row.snapshot.providerCompletedAt,row.snapshot.platformObservedAt].every(timestamp) || !(row.snapshot.elapsedSinceObservationMs===null || integer(row.snapshot.elapsedSinceObservationMs))
+      || row.snapshot.crossHostFreshness !== "unknown")) invalid();
+    if (row.reportAvailable !== (row.report!==null) || row.report !== null && !report(row.report,row.policy.maxAttempts)) invalid();
+    const terminal=["retiring","retired","complete"].includes(row.phase);
+    if ((row.outcome!==null)!==terminal || row.cleanupRequired!==(row.phase!=="complete") || row.releaseId===row.primary.releaseId
+      || row.updatedAt<row.createdAt || row.expiresAt!==row.createdAt+row.policy.durationMs
+      || row.nextAction!==(row.phase==="complete"?"none":row.phase==="retiring"||row.phase==="retired"?"recover":row.stopRequested?"wait":"stop")
+      || row.phase==="observing" && row.snapshot===null || row.phase==="binding" && (row.snapshot!==null || row.report===null || row.report.counters.reserved!==0 || row.report.protocol===2 && Object.values(row.report.skips).some(Boolean))
+      || row.phase!=="complete" && row.report===null
+      || ["retired","complete"].includes(row.phase) && row.report!==null && row.report.counters.reserved!==row.report.counters.settled)invalid();
+    if(row.snapshot && (row.snapshot.providerCompletedAt<row.snapshot.providerStartedAt || row.snapshot.platformObservedAt<row.createdAt || row.snapshot.platformObservedAt>row.updatedAt))invalid();
+  };
+  if (!object(payload) || payload.ok !== true || typeof payload.enabled !== "boolean" || !integer(payload.epoch)) invalid();
+  if (selected !== undefined) {
+    if (!shape(payload,["ok","enabled","epoch","session"])) invalid();
+    session(payload.session); if (payload.session.sessionId !== selected) invalid();
+  } else {
+    if (!shape(payload,["ok","enabled","epoch","policy","sessions","nextBefore"]) || !(payload.enabled ? policy(payload.policy,true) : payload.policy === null)
+      || !Array.isArray(payload.sessions) || payload.sessions.length > 20
+      || !(payload.nextBefore === null || payload.sessions.length>0 && cursor(payload.nextBefore))) invalid();
+    payload.sessions.forEach(session);
+    if (new Set(payload.sessions.map(row => row.sessionId)).size !== payload.sessions.length || payload.sessions.some((row,index)=>index>0 && row.controllerEpoch>=payload.sessions[index-1].controllerEpoch)) invalid();
+  }
+}
+
+async function shadowCommand(args) {
+  const action = args.shift(), values = positionals(args), session = option(args, "session");
+  if (action !== "status" || values.length > 1) throw new CliError(COMMANDS.shadow.usage);
+  if (optionArguments(args).filter(value => value === "--session" || value.startsWith("--session=")).length > 1) throw new CliError("Pass --session only once.");
+  if (session !== undefined && (typeof session !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(session))) throw new CliError("Pass an exact shadow session ID from status.");
+  const { profile, link } = await linkedContext(resolve(values[0] ?? "."));
+  const payload = await platformRequest(profile.server, `/api/projects/${encodeURIComponent(link.projectId)}/shadow${session === undefined ? "" : "/" + encodeURIComponent(session)}`, { token: profile.token });
+  validateShadowStatus(payload, session);
+  // The launcher exits after this command returns: keep the real pipe write owned.
+  const output = [], line = value => output.push(stripVTControlCharacters(String(value)));
+  const publish = text => new Promise((resolve, reject) => {
+    const failed = error => reject(error);
+    process.stdout.once("error", failed);
+    try { process.stdout.write(text, error => {
+      if (error) { reject(error); return; }
+      process.stdout.removeListener("error", failed); resolve();
+    }); } catch (error) { process.stdout.removeListener("error", failed); reject(error); }
+  });
+  if (flag(args, "json")) { await publish(JSON.stringify(payload, null, 2) + "\n"); return; }
+  line(`Shadow policy: ${payload.enabled ? "enabled" : "disabled"}. Status version: ${payload.epoch}.`);
+  const sessions = payload.session ? [payload.session] : payload.sessions ?? [];
+  if (!sessions.length) line("No shadow sessions retained.");
+  for (const row of sessions) {
+    line(`${row.sessionId}  ${row.phase}${row.outcome ? " · " + row.outcome : ""}`);
+    line(`Operation: ${row.operationId}; original controller epoch: ${row.controllerEpoch}; status version: ${row.epoch}.`);
+    line(`Candidate: ${row.releaseId}; artifact: ${row.artifactSha256}. Primary: ${row.primary?.releaseId ?? "not bound"}; generation: ${row.primary?.generation ?? "unknown"}.`);
+    line(`Policy revision: ${row.policyRevision}; limits: ${JSON.stringify(row.policy)}.`);
+    line(`Cleanup: ${row.cleanupRequired ? "required or uncertain" : "acknowledged"}. Stop requested: ${Boolean(row.stopRequested)}. Next action: ${row.nextAction}.`);
+    if (row.snapshot) {
+      const checkpoint = row.snapshot;
+      line(`Isolated checkpoint: ${checkpoint.sha256}; ${checkpoint.bytes} bytes. Provider acquisition: ${checkpoint.providerStartedAt ?? "unknown"} through ${checkpoint.providerCompletedAt ?? "unknown"}.`);
+      line(`Platform observed: ${checkpoint.platformObservedAt ?? "unknown"}; elapsed since observation: ${checkpoint.elapsedSinceObservationMs === null ? "unavailable after restart" : checkpoint.elapsedSinceObservationMs + "ms"}. Cross-host freshness is unknown.`);
+    } else line("No verified checkpoint reported. Cross-host freshness is unknown.");
+    if (!row.reportAvailable) line("Full report unavailable; retained state and replay receipts remain authoritative.");
+    if (row.report) {
+      const counts = row.report.counters;
+      line(`${counts.reserved} reserved; ${counts.settled} settled; ${counts.comparable} comparable; ${counts.bothComplete} both complete.`);
+      line(`Comparable denominator ${counts.comparable}: status ${counts.statusClassEqual} equal / ${counts.statusClassDifferent} different; media type ${counts.mediaTypeEqual} equal / ${counts.mediaTypeDifferent} different.`);
+      line(`Unknown outcomes: ${JSON.stringify(counts.unknown)}.`);
+      if(row.report.protocol===2)line(`Skipped observations (best-effort lower bounds, excluded from comparison denominators): ${JSON.stringify(row.report.skips)}.`);
+      const limits = [1,5,10,25,50,100,250,500,1000,2500,5000,10000];
+      for (const side of ["primary", "candidate"]) {
+        const latency = row.report.latency[side];
+        line(`${side} cumulative latency counts (population ${counts.settled} settled): ${limits.map((ms,index) => "<=" + ms + "ms:" + latency.cumulative[index]).join(" ")}; overflow:${latency.overflow}; unknown:${latency.unknown}.`);
+      }
+    }
+  }
+  if (payload.nextBefore) line("Older sessions are available in the Console; use --session for an exact retained session.");
+  line("Transport aggregates do not establish semantic correctness or deployment approval. This command is read-only; use the Console for exact-session stop.");
+  await publish(output.join("\n") + "\n");
+}
+
 async function canaryCommand(args) {
   const action = args.shift(), values = positionals(args);
   const allowed = { status: ["json"], recover: ["json", "expected-epoch"] }[action];
@@ -3337,6 +3512,39 @@ async function rollback(args) {
   });
   if (flag(args, "json")) console.log(JSON.stringify(payload, null, 2));
   else console.log(`Active release: ${payload.release.id}`);
+}
+
+async function recoveryCommand(args) {
+  const action=args.shift(),allowed={status:["json"],checkpoint:["key","expected-version","json"],"restore-plan":["request","json"]}[action];
+  if(!allowed)throw new CliError(COMMANDS.recovery.usage);
+  for(const argument of optionArguments(args)){const name=argument.slice(2).split("=",1)[0];if(argument.startsWith("--")&&!allowed.includes(name))throw new CliError(`--${name} does not apply to recovery ${action}.`);}
+  const values=positionals(args);if(values.length>1)throw new CliError(COMMANDS.recovery.usage);
+  let request;
+  if(action==="restore-plan"){
+    const file=option(args,"request");if(!file)throw new CliError("Pass --request with the proposed operationId, checkpointId, expectedVersion, throughSequence, name and slug.");
+    request=await readBoundedJsonFile(resolve(file),"Recovery restore plan",8192);
+    const keys=["operationId","checkpointId","expectedVersion","throughSequence","name","slug"];
+    if(!request||typeof request!=="object"||Array.isArray(request)||Object.keys(request).length!==keys.length||keys.some(key=>!Object.hasOwn(request,key))||typeof request.operationId!=="string"||!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(request.operationId)||typeof request.checkpointId!=="string"||!/^pitr_[0-9a-f]{64}$/u.test(request.checkpointId)||!Number.isSafeInteger(request.expectedVersion)||request.expectedVersion<1||!Number.isSafeInteger(request.throughSequence)||request.throughSequence<0||typeof request.name!=="string"||!request.name.trim()||request.name.length>100||typeof request.slug!=="string"||request.slug.length>50||!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u.test(request.slug))throw new CliError("Use an exact bounded recovery plan with a canonical destination slug and retained checkpoint.");
+  }
+  let checkpoint;
+  if(action==="checkpoint"){
+    const operationId=option(args,"key"),expectedVersion=positiveIntegerOption(args,"expected-version",undefined,Number.MAX_SAFE_INTEGER);
+    if(typeof operationId!=="string"||!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(operationId)||expectedVersion===undefined)throw new CliError("Pass a stable --key and the current --expected-version from recovery status.");checkpoint={operationId,expectedVersion};
+  }
+  const {profile,link}=await linkedContext(resolve(values[0]??".")),base=`/api/projects/${encodeURIComponent(link.projectId)}/point-in-time`;
+  let payload=await platformRequest(profile.server,base+(checkpoint?"/checkpoints":""),{token:profile.token,...(checkpoint?{method:"POST",body:checkpoint,timeoutMs:PLATFORM_DEPLOY_TIMEOUT_MS}:{})});
+  if(request){
+    const retained=payload.checkpoints?.find(value=>value.id===request.checkpointId);
+    if(payload.policy?.version!==request.expectedVersion||!retained||!Number.isSafeInteger(retained.sequence)||request.throughSequence>retained.sequence)throw new CliError("Refresh the recovery horizon and policy version before preparing this restore.");
+    const source=await platformRequest(profile.server,`/api/projects/${encodeURIComponent(link.projectId)}`,{token:profile.token});
+    if(typeof source.project?.slug!=="string")throw new CliError("Current recovery source metadata is unavailable.");
+    payload={ok:true,browserOnly:true,method:"POST",path:base+"/restores",request:{...request,confirmation:`restore-recovery ${source.project.slug} ${request.checkpointId} ${request.throughSequence} ${request.slug}`},authorization:"Fresh current human browser administration required; no restore was submitted."};
+  }
+  if(flag(args,"json")||request){console.log(JSON.stringify(payload,null,2));return;}
+  if(payload.checkpoint){console.log(`Retained ${payload.checkpoint.id} through sequence ${payload.checkpoint.sequence}.`);return;}
+  console.log(`Recovery policy ${payload.policy?.version??0}: ${payload.policy?.enabled?"enabled":"disabled"}.`);
+  for(const retained of payload.checkpoints??[])console.log(`${retained.id}  epoch ${retained.epoch}  through sequence ${retained.sequence}`);
+  for(const restore of payload.restores??[])console.log(`${restore.operationId}  ${restore.state}  destination ${restore.destinationProjectId}`);
 }
 
 async function backupCommand(args) {
@@ -3963,6 +4171,7 @@ function positionals(args) {
         "--github",
         "--no-workflows",
         "--json",
+        "--history",
       ].includes(argument)) index++;
       continue;
     }

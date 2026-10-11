@@ -2,6 +2,12 @@
 
 ## Governance, lifecycle, and tooling
 
+Use `@clank.run/framework/reviewed-actions` for durable previews, decisions, atomic
+commits and receipts. `ReviewedAction.approvalQuorum` opts into distinct human
+approvers, required roles, requester separation, native membership/security versions
+and expiring votes. `ReviewedApprovalMembership`, `ReviewedApprovalQuorum` and
+`ReviewedApprovalProgress` describe that contract; see [approval quorum policies](approval-quorums.md).
+
 Use `@clank.run/framework/governance` for policy decisions, expiring agent approvals,
 entitlements, and feature flags. Use `@clank.run/framework/lifecycle` for revision replay,
 provenance, promotions, rollout guardrails, sanitized clones, portable exports, and capacity.
@@ -357,6 +363,10 @@ Optional module: `@clank.run/framework/component-harness`; see [component harnes
   platforms or standalone database helpers. See [SQLite worker isolation](sqlite-isolation.md).
 - `openPlatform({ invitations })`: durable, encrypted, cross-instance-leased invitation delivery
   through any `EmailService`, while retaining manual copy-once fallback.
+- `openPlatform({ projectCosts })` adds trusted cumulative measurements, immutable rate cards,
+  version-fenced budgets, expiring overrides and private operational alerts. Public
+  `createProjectCostClient()`, `createProjectCostView()` and `createProjectCostMcpTools()`
+  share native project authorization. See [project costs](project-costs.md).
 - Types: `ClankPlatformOptions`, `PlatformBackupOptions`, `PlatformJobOperationsOptions`,
   `PlatformInvitationDeliveryOptions`, `PlatformLimits`, `PlatformHostingProfile`,
   `PlatformRunnerOptions`, `ProcessRunnerOptions`, `DockerRunnerOptions`,
@@ -711,6 +721,8 @@ grant inspection, reduction, and revocation.
 - `AuthClient`: `.user`, `.session`, `.authenticated`, `.loading`, `.error`, `.reload`, `.register`, `.login`, `.logout`, `.logoutAll`, `.changePassword`.
 - `AuthRequest`: `.user`, `.session`, `.csrfToken`, `.requireUser()`, `.requireRole()`.
 - `AuthError`: explicit safe auth code, status, and optional retry delay.
+- `openOrganizationSecurityPolicies(database, auth, options)`: same-store current human policy controller with `read`, `preview`, version-fenced `change`, independent `recover`, immutable delegation capture/carry and current admission. Hooks are synchronous and bounded; JSON state cannot authenticate. `openBackend(definition, { organizationSecurity: { organizationId, policy } })` binds application/CLI-MCP admission explicitly. Native `openPlatform` enables enforcement with `organizationSecurity: { operatorRecovery?: boolean }`.
+- `createOrganizationSecurityClient({ auth, url?, prefix?, fetch?, timeoutMs? })`: current session/CSRF transport for `read`, `preview`, `change` and `recover`. Retain exact unknown acknowledgements, then read current policy. See [organization security policies](organization-security-policies.md) for console, recovery, protocol and failure boundaries.
 - `openOrganizationSso(database, auth, options)`: organization OIDC authentication, opt-in verified identity linking and scoped SCIM User/Group provisioning with a persistent policy revision. Provider `provisioning` accepts a separate expiring token and bounded external-group-to-viewer/developer mappings. Embedded applications supply synchronous `onProvisioning`; the native platform supplies transactional membership provenance and reviewed adoption. See [organization and account security](organization-security.md) for the bounded SCIM profile, conditional writes, retained receipts, deactivation, migration and rollback requirements.
 - `createOrganizationIdentityClient({ auth, url?, prefix?, fetch? })`: account-bound browser identity inventory, fresh provider linking and versioned unlink receipts. `AccountSecurity({ auth, identities?, onIdentityRedirect? })` supplies the corresponding account controls. Both are exported from `@clank.run/framework/account-security`.
 - Types: `AuthDefinition`, `AuthDefinitionOptions`, `AuthUser`, `AuthSession`, `AuthState`, `AuthRegisterInput`, `AuthLoginInput`, `AuthUserId`, `DefaultAuthProfile`.
@@ -925,3 +937,9 @@ compact retired keys, limits and rollback semantics.
 Project dependency configuration, checks, retained activations and verified recovery use
 `/api/projects/:id/dependencies`. See [deployment dependency gates](deployment-dependencies.md)
 for strict bodies, version/check binding, upload headers, rollback fencing and human override scope.
+
+- `createTemporaryAccessClient` and `createTemporaryAccessView` expose current-session, bounded native preview grants with expected versions, exact retry intents and explicit revocation. `TemporaryAccessError` supplies bounded transport error codes/status. See [temporary preview access](temporary-access.md) for mandatory native freshness, restart invalidation and the restricted creation header.
+
+## Customer status pages
+
+Use `createCustomerStatusClient()` from `@clank.run/framework/customer-status` for current human administration, public projections and own-account subscriber preferences/inboxes. `create`, `configure`, `preview`, `publish` and `unpublish` retain native versions and exact operation receipts. `domains`, `beginDomain` and `verifyDomain` use current native domain reservations. `publicPage` omits credentials and validates the strict public projection. `preferences`, `subscribe` and `notifications` act only on the actual native account. See [Customer status pages](customer-status-pages.md) for publication review, assurance, limits, custom domains and recovery.

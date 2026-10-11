@@ -40,6 +40,8 @@ export interface SQLiteInternal {
   writeScoped<Value>(userId: string | null, handler: (db: import("./backend.ts").WriteDatabase<any>) => Value): Value;
   /** Capture selective dependencies inside the current write transaction. */
   readTrackedScoped<Value>(userId: string | null, handler: (db: import("./backend.ts").ReadDatabase<any>) => Value): import("./backend.ts").TrackedResult<Value>;
+  /** Pending native mutations, including delete/reinsert, before the journal flush. */
+  readDependenciesChanged(dependencies: readonly { readonly table: string; readonly id?: string; readonly ownerId?: string | null }[]): boolean;
   /** Retire persisted and pending snapshots of a record deleted in this write transaction. */
   purgeDeletedHistory(table: string, id: string): void;
 }
@@ -86,6 +88,10 @@ export function retentionHistoryUsage(connection: Pick<SQLiteInternal, "prepare"
 /** Internal hook used by the point-in-time journal. All callbacks are synchronous. */
 export interface SQLiteCaptureConnection {
   readonly path: string;
+  /** Genuine openSQLite handle, idle outside managed reads/writes/control sections. */
+  assertNativeIdle(): void;
+  /** Synchronous native control; managed reentry and structural handles are refused. */
+  withNativeControl<Value>(handler: () => Value): Value;
   exec(sql: string): void;
   prepare(sql: string): SQLiteStatement;
   createSession(options: { table?: string }): { changeset(): Uint8Array; close(): void };

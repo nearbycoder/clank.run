@@ -1,11 +1,16 @@
+import type {PlatformStatusPagesOptions} from "./platform-status-pages.js";
 import type { LinuxHostCertificationOptions } from "./host-certification.js";
+import type { PlatformPointInTimeOptions } from "./platform-point-in-time.js";
+export type { PlatformPointInTimeOptions, PlatformPointInTimePolicy, PlatformPointInTimeCheckpoint, PlatformPointInTimeResolution } from "./platform-point-in-time.js";
 import type { PlatformSupervisorOptions, PlatformSupervisorStatus } from "./platform-supervisor.js";
 export type { PlatformSupervisorOptions, PlatformSupervisorStatus } from "./platform-supervisor.js";
 import type {PlatformServiceAccountOptions} from "./platform-service-accounts.js";
 import type {AuthenticatedServiceAccount} from "./service-accounts.js";
+import type { PlatformShadowPolicy, ShadowSessionPolicy, ShadowReport, ShadowPhase, ShadowOutcome } from "./managed-shadow.js";
 import type { ManagedCanaryOptions } from "./managed-canary.js";
 import type { ReleaseAttestationPolicy } from "./release-attestation.js";
 import type { PlatformOperationsOptions } from "./operations-monitor.js";
+import type { PlatformProjectCostOptions } from "./platform-project-costs.js";
 import type { OrganizationSsoOptions } from "./organization-sso.js";
 import type { AuditExportOptions } from "./audit-export.js";
 import type { RetentionAdministrationOptions } from "./retention-administration.js";
@@ -338,7 +343,33 @@ export interface PlatformBillingOptions {
     /** Entitlement grace after first entering past_due. Defaults to 7 days. */
     pastDueGraceMs?: number;
 }
+/** Safe shadow receipt. Provider credentials, raw observations and sampled URLs are never returned. */
+export interface PlatformShadowSession {
+  readonly sessionId:string; readonly operationId:string; readonly controllerEpoch:number; readonly epoch:number;
+  readonly policyRevision:number; readonly releaseId:string; readonly artifactSha256:string; readonly primary:Readonly<{releaseId:string;generation:number}>;
+  readonly phase:ShadowPhase; readonly outcome:ShadowOutcome|null; readonly stopRequested:boolean; readonly cleanupRequired:boolean; readonly reportAvailable:boolean;
+  readonly policy:ShadowSessionPolicy;
+  readonly snapshot:Readonly<{sha256:string;bytes:number;providerStartedAt:number;providerCompletedAt:number;platformObservedAt:number;elapsedSinceObservationMs:number|null;crossHostFreshness:"unknown"}>|null;
+  readonly report:ShadowReport|null; readonly createdAt:number; readonly expiresAt:number; readonly updatedAt:number; readonly nextAction:"none"|"wait"|"stop"|"recover"|"review";
+}
+export interface PlatformShadowList { readonly ok:true; readonly enabled:boolean; readonly epoch:number; readonly policy:PlatformShadowPolicy|null; readonly sessions:readonly PlatformShadowSession[]; readonly nextBefore:string|null; }
+export interface PlatformShadowResponse { readonly ok:true; readonly enabled:boolean; readonly epoch:number; readonly session:PlatformShadowSession; }
+export interface PlatformShadowPreview {
+  readonly ok:true; readonly reviewToken:string; readonly expiresAt:number;
+  readonly review:Readonly<{projectId:string;releaseId:string;artifactSha256:string;primary:Readonly<{releaseId:string;generation:number}>;expectedEpoch:number;policyRevision:number;policy:ShadowSessionPolicy}>;
+}
+
 export interface ClankPlatformOptions {
+  organizationSecurity?: {readonly operatorRecovery?: boolean};
+  /** Current-human grants for a new isolated preview; requires organization security. */
+  temporaryAccess?: {readonly maxGrants?: number; readonly maxReceipts?: number};
+    /** Approved public health, customer domains and native subscriber inboxes. */
+    statusPages?: PlatformStatusPagesOptions;
+  incidents?: import("./platform-incidents.js").PlatformIncidentOptions;
+  /** Bounded native-ingress completion objectives and durable burn metadata. */
+  slos?: import("./platform-slo.js").PlatformSloOptions;
+  /** Opt-in bounded encrypted checkpoints from registered, explicitly captured provider applications. */
+  pointInTime?: PlatformPointInTimeOptions;
     /** Same-host Linux coordinators; each occupies a dedicated process terminated after leadership loss. */
     supervisor?: PlatformSupervisorOptions;
   serviceAccounts?: PlatformServiceAccountOptions;
@@ -441,10 +472,14 @@ export interface ClankPlatformOptions {
     backups?: PlatformBackupOptions;
     auditExport?: AuditExportOptions;
     operations?: PlatformOperationsOptions;
+    /** Trusted measured cost reconciliation. Retained admission policies survive disabling the collector. */
+    projectCosts?: PlatformProjectCostOptions;
     /** Poll queued exact release windows; defaults to one second. False pauses execution. */
     releaseWindows?: { intervalMs?: number | false };
     /** Measured stages; provider isolation requires native supervisor leadership and managed ingress. */
     canary?: ManagedCanaryOptions;
+    /** Explicit provider-isolated shadow bounds; never activates a release. */
+    shadowTraffic?: PlatformShadowPolicy;
     jobs?: PlatformJobOperationsOptions;
     previews?: PlatformPreviewOptions;
     /**

@@ -107,6 +107,7 @@ test('native PostgreSQL refuses unsupported services and operations before chang
   const publicSchema=defineDatabase({records:defineTable({title:s.string()})}),publicDb=await openPostgres(publicSchema,{...settings,namespace:namespace()});t.after(()=>publicDb.close());
   const publicDefinition=defineBackend({schema:publicSchema}).functions(({publicQuery})=>({list:publicQuery({args:{},handler:()=>[]})}));
   await assert.rejects(openBackend(publicDefinition,{database:publicDb,agentActivity:{maxEntries:2}}),/public functions/);
+  await assert.rejects(openBackend(publicDefinition,{database:publicDb,organizationSecurity:{organizationId:"portable_company_01",policy:{}}}),/organization security/);
   const privateDefinition=defineBackend({schema:publicSchema,auth:defineAuth()}).functions(({query})=>({list:query({args:{},handler:()=>[]})}));
   await assert.rejects(openBackend(privateDefinition,{database:publicDb}),/public functions/);assert.equal(publicDb.version,0);
 });

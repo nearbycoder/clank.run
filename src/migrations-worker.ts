@@ -583,10 +583,10 @@ async function verifyDatabaseFile(path: string): Promise<void> {
   }
 }
 
-export async function publishSQLiteReplacement(temporary: string, destinationPath: string): Promise<void> {
+export async function publishSQLiteReplacement(temporary: string, destinationPath: string, assertCurrent?: () => void): Promise<void> {
   const destination = await resolveDatabaseDestination(destinationPath);
   const fsName = "node:fs/promises", constantsName = "node:fs";
-  const [fs, { constants }] = await Promise.all([import(fsName), import(constantsName)]);
+  const [fs, nativeFs] = await Promise.all([import(fsName), import(constantsName)]);const {constants}=nativeFs;
   // Never chmod the published pathname: an application can replace it with a
   // symlink immediately after rename. Harden through a no-follow descriptor.
   const handle = await fs.open(temporary, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -594,8 +594,15 @@ export async function publishSQLiteReplacement(temporary: string, destinationPat
     const stats = await handle.stat();
     if (!stats.isFile()) throw new Error("SQLite staging output must be a regular file.");
     await handle.chmod(0o600);
-    await Promise.all([fs.rm(`${destination}-wal`, { force: true }), fs.rm(`${destination}-shm`, { force: true })]);
-    await fs.rename(temporary, destination);
+    if(assertCurrent){
+      // The large native backup is finished. Keep this small publication step
+      // synchronous so an async caller cannot change authority between the
+      // final assertion and removing the stopped destination's sidecars.
+      assertCurrent();nativeFs.rmSync(`${destination}-wal`,{force:true});nativeFs.rmSync(`${destination}-shm`,{force:true});nativeFs.renameSync(temporary,destination);
+    }else{
+      await Promise.all([fs.rm(`${destination}-wal`, { force: true }), fs.rm(`${destination}-shm`, { force: true })]);
+      await fs.rename(temporary, destination);
+    }
   } finally { await handle.close(); }
 }
 

@@ -1,4 +1,5 @@
 import { type FunctionReference, type SyncClient } from "./backend.js";
+export * from "./offline-attachments.js";
 
 export type OfflineMutationStatus = "pending" | "sending" | "conflict" | "failed";
 export interface OfflineMutation {

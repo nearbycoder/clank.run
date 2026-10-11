@@ -6,6 +6,17 @@ import { runInNewContext } from 'node:vm';
 // these tests still exercise their original log/activity/runtime assertions.
 export function installEnvironmentConsoleContext(context, html) {
   context.initial ??= { authenticated: false, email: null, impersonation: null };
+  context.organizationSecurityView ??= {scope:null,generation:0,latest:null,draft:null,review:null,busy:false,challenge:null,drafts:new Map(),owner:null};
+  context.q('#organization-security-dialog').close ??= () => {};
+  const resetSecurity=html.match(/^function resetOrganizationSecurity\([^\n]+/m)?.[0];
+  assert.ok(resetSecurity,'Shared organization security reset must be present.');
+  runInNewContext(resetSecurity,context);
+  context.temporaryAccessView ??= null;
+  context.temporaryAccessScope ??= null;
+  context.temporaryAccessGeneration ??= 0;
+  const resetTemporary=html.match(/^function disposeTemporaryAccess\([^\n]+/m)?.[0];
+  assert.ok(resetTemporary,'Shared temporary-access reset must be present.');
+  runInNewContext(resetTemporary,context);
   context.state.environmentDrafts ??= new Map();
   context.state.environmentHistoryGeneration ??= 0;
   context.state.environmentProject ??= null;
@@ -27,8 +38,27 @@ export function installEnvironmentConsoleContext(context, html) {
     return source;
   }).join('\n');
   runInNewContext(channels, context);
+  // Sign-out clears the real shadow state too; do not replace its reset with a stub.
+  context.qa ??= selector => {
+    assert.equal(selector, '#shadow-sessions button');
+    const visit = node => (node.children ?? []).flatMap(child => [
+      ...((child.tagName ?? child.tag) === 'button' ? [child] : []), ...visit(child),
+    ]);
+    return visit(context.q('#shadow-sessions'));
+  };
+  const shadow = ['resetShadowView', 'shadowViewCurrent', 'shadowCanManage'].map(name => {
+    const source = html.match(new RegExp('^function ' + name + '\\([^\\n]+', 'm'))?.[0];
+    assert.ok(source, 'Shared shadow helper must be present: ' + name);
+    return source;
+  });
+  const controls = html.match(/^function syncShadowControls\(\)\{[\s\S]*?^\}/m)?.[0];
+  assert.ok(controls, 'Shared shadow controls must be present.');
+  runInNewContext([...shadow, controls].join('\n'), context);
   const reset=html.match(/^function resetEnvironmentReview\(\)[^\n]+/m)?.[0];
   const save=html.match(/^function saveEnvironmentDraft\(\)\{[\s\S]*?^\}/m)?.[0];
   assert.ok(reset&&save,'Console environment helpers must be present.');
   runInNewContext(reset+'\n'+save,context);
+  const recovery=html.match(/\/\/ Recovery console:[\s\S]*?\/\/ End recovery console\./)?.[0];
+  assert.ok(recovery,'Shared recovery console must be present.');
+  runInNewContext(recovery,context);
 }

@@ -1,4 +1,8 @@
+import type { IngressRoute, IngressShadowObserver } from "./data-plane.ts";
+import type { ExactRequest } from "./security.ts";
 import type { SQLiteInternal } from "./sqlite-internal.js";
+import type { DeploymentProviderCanaryBinding, DeploymentProviderCanaryRetirement } from "./provider-service.js";
+
 /** @internal Explicit platform maxima; no implicit widening or enablement. */
 export interface PlatformShadowPolicy {
   readonly revision: number;
@@ -29,20 +33,165 @@ export type ShadowUnknownReason = "not-submitted" | "candidate-timeout" | "candi
   | "primary-incomplete" | "primary-oversized" | "cancelled" | "authority-lost" | "interrupted" | "persistence-uncertain" | "content-type-invalid";
 interface ShadowLatency { readonly cumulative: readonly number[]; readonly overflow: number; readonly unknown: number; }
 /** @internal Transport aggregates carry no response body, identity or arbitrary header key. */
-export interface ShadowReport {
+interface ShadowReportBody {
   readonly counters: Readonly<{ reserved: number; settled: number; comparable: number; statusClassEqual: number; statusClassDifferent: number;
     mediaTypeEqual: number; mediaTypeDifferent: number; bothComplete: number; unknown: Readonly<Record<ShadowUnknownReason, number>> }>;
   readonly latency: Readonly<{ primary: ShadowLatency; candidate: ShadowLatency }>;
 }
 
+export type ShadowSkipReason = "ineligible" | "sampled-out" | "capacity" | "attempt-limit" | "handoff-timeout" | "withdrawn";
+export type ShadowSkips = Readonly<Record<ShadowSkipReason,number>>;
+export interface ShadowLegacyReport extends ShadowReportBody { readonly protocol?: never; readonly skips?: never; }
+export interface ShadowReportV2 extends ShadowReportBody { readonly protocol: 2; readonly skips: ShadowSkips; }
+export type ShadowReport = ShadowLegacyReport | ShadowReportV2;
+/** @internal The status version is separate from the immutable provider retirement identity. */
+export type ShadowPhase = "binding" | "preparing" | "observing" | "retiring" | "retired" | "complete";
+export type ShadowOutcome = "stopped" | "expired" | "attempt-limit" | "interrupted" | "authority-revoked" | "policy-changed" | "primary-changed" | "provider-error";
+export interface ShadowCheckpoint {
+  readonly sha256: string;
+  readonly bytes: number;
+  readonly providerStartedAt: number;
+  readonly providerCompletedAt: number;
+  readonly platformObservedAt: number;
+}
+export interface ShadowOperation {
+  readonly kind: "shadow";
+  readonly sessionId: string;
+  readonly operationId: string;
+  readonly idempotencyKeyDigest: string;
+  readonly inputDigest: string;
+  readonly reviewDigest: string;
+  readonly releaseId: string;
+  readonly artifactSha256: string;
+  readonly capsuleSha256: string | null;
+  readonly controllerEpoch: number;
+  readonly retirementEpoch: number;
+  readonly primary: DeploymentProviderCanaryBinding | null;
+  readonly primaryReleaseId: string;
+  readonly primaryFence: number;
+  readonly nodeId: string;
+  readonly origin: string;
+  readonly credentialGeneration: number;
+  readonly policyRevision: number;
+  readonly policyDigest: string;
+  readonly policy: ShadowSessionPolicy;
+  readonly maxReports: number;
+  readonly phase: ShadowPhase;
+  readonly outcome: ShadowOutcome | null;
+  readonly stopRequested: boolean;
+  readonly snapshot: ShadowCheckpoint | null;
+  readonly report: ShadowReport;
+  readonly reservations: readonly number[];
+  readonly retirement: DeploymentProviderCanaryRetirement | null;
+  readonly createdAt: number;
+  readonly expiresAt: number;
+  readonly updatedAt: number;
+}
+export interface ShadowRecord {
+  readonly protocol: 2;
+  readonly epoch: number;
+  readonly operation: ShadowOperation;
+  readonly serialized: string;
+}
+
 export declare const shadowLatencyBuckets: readonly number[];
 export declare function normalizeShadowPolicy(value: unknown): PlatformShadowPolicy;
 export declare function narrowShadowPolicy(policy: PlatformShadowPolicy, value: unknown): ShadowSessionPolicy;
-export declare function emptyShadowReport(): ShadowReport;
+export declare function emptyShadowReport(version?: 1): ShadowLegacyReport;
+export declare function emptyShadowReport(version: 2): ShadowReportV2;
+export declare function addShadowSkips(report: ShadowReportV2, increments: ShadowSkips, maxAttempts: number): ShadowReportV2;
 export declare function normalizeShadowReport(value: unknown, maxAttempts: number): ShadowReport;
+
+export interface ShadowReplayIdentity {
+  readonly projectId: string; readonly sessionId: string; readonly operationId: string; readonly controllerEpoch: number; readonly epoch: number;
+  readonly idempotencyKeyDigest: string; readonly inputDigest: string; readonly reviewDigest: string;
+  readonly releaseId: string; readonly artifactSha256: string; readonly capsuleSha256: string | null;
+  readonly primary: DeploymentProviderCanaryBinding | null; readonly primaryReleaseId: string; readonly primaryGeneration: number;
+  readonly policyRevision: number; readonly policyDigest: string; readonly policy: ShadowSessionPolicy;
+  readonly phase: "binding" | "complete"; readonly outcome: ShadowOutcome | null; readonly stopRequested: boolean;
+  readonly snapshot: ShadowCheckpoint | null; readonly createdAt: number; readonly expiresAt: number; readonly updatedAt: number;
+}
+export interface ShadowReplayReceipt {
+  readonly protocol: 1; readonly identity: ShadowReplayIdentity; readonly reportDigest: string;
+}
+export interface ShadowReplay { readonly receipt: ShadowReplayReceipt; readonly report: ShadowReport | null; }
+export interface ShadowPriorRecord { readonly epoch: number; readonly serialized: string; }
+export declare function shadowCandidateProjectId(operation: Pick<ShadowOperation,"primary"|"controllerEpoch"|"operationId"|"capsuleSha256">, hash: (value:string)=>string): string;
+export declare function normalizeShadowOperation(value: unknown, projectId: string, epoch: number, hash: (value:string)=>string): ShadowOperation;
+export declare function readShadowRecord(row: Record<string,unknown>, projectId:string, hash:(value:string)=>string): ShadowRecord;
+export declare function readShadowReplays(connection: Pick<SQLiteInternal,"prepare">, projectId: string, hash: (value:string)=>string): readonly ShadowReplay[];
+export declare function writeShadowReplay(connection: SQLiteInternal, projectId: string, record: ShadowRecord, previous: readonly ShadowReplay[], hash: (value:string)=>string): void;
+export declare function assertShadowReplay(connection: Pick<SQLiteInternal,"prepare">, projectId: string, record: ShadowRecord, hash: (value:string)=>string): void;
+export declare function saveShadowRecord(connection: SQLiteInternal, projectId: string, prior: ShadowPriorRecord|null, operation: ShadowOperation, current:()=>void, hash:(value:string)=>string): ShadowRecord;
+export interface ShadowLifecycleAdapter {
+  read(projectId:string):ShadowRecord|null;
+  save(projectId:string,prior:ShadowRecord,operation:ShadowOperation,current:()=>void):ShadowRecord;
+  retire(projectId:string,record:ShadowRecord,current:()=>void):Promise<DeploymentProviderCanaryRetirement>;
+}
+export declare function retireShadow(adapter:ShadowLifecycleAdapter,projectId:string,input:ShadowRecord,current:()=>void,outcome:ShadowOutcome):Promise<ShadowRecord>;
+
+export interface ShadowObservationCapability { readonly primary: Readonly<IngressRoute>; request(exact:Readonly<ExactRequest>,signal:AbortSignal,current:()=>void):Promise<Response>; }
+export interface ShadowCandidateTarget { readonly origin:string; readonly projectId:string; readonly path:string; readonly token:string; readonly protocol:string; readonly generation:1; readonly readPaths:readonly string[]; readonly methods:readonly ("GET"|"HEAD")[]; }
+export declare function createShadowCandidateRequest(input:Readonly<ShadowCandidateTarget>):ShadowObservationCapability["request"];
+export interface ShadowPreparedObservation { readonly snapshot:ShadowCheckpoint; readonly observation?:ShadowObservationCapability; }
+export interface ShadowOwnerAdapter extends ShadowLifecycleAdapter {
+  lock<Value>(projectId:string,work:()=>Promise<Value>,wait?:boolean):Promise<Value>;
+  authority(projectId:string):()=>void;
+  scope<Value>(current:()=>void,work:()=>Promise<Value>):Promise<Value>;
+  admit(projectId:string,operation:ShadowOperation):void;
+  begin(projectId:string,operation:ShadowOperation,current:()=>void):ShadowRecord;
+  prepare(projectId:string,record:()=>ShadowRecord,change:(update:(operation:ShadowOperation)=>ShadowOperation)=>void,current:()=>void,signal:AbortSignal,reviewedPrimary?:DeploymentProviderCanaryBinding):Promise<ShadowCheckpoint|ShadowPreparedObservation>;
+  replay?(projectId:string,keyDigest:string,current:()=>void,bySession?:boolean):ShadowReplayView|null;
+  history?(projectId:string,current:()=>void):ShadowHistoryView;
+  onError?(error:unknown):void;
+}
+export interface ShadowHistoryView { readonly replays:readonly ShadowReplay[]; readonly current:ShadowRecord|null; readonly epoch:number; }
+export interface ShadowHistoryRead { readonly view:ShadowHistoryView; readonly assertCurrent:()=>void; }
+export interface ShadowCursor { readonly version:1; readonly projectId:string; readonly ceilingEpoch:number; readonly beforeEpoch:number; }
+export interface ShadowReplayView { readonly replay:ShadowReplay; readonly current:ShadowRecord|null; readonly epoch:number; }
+export interface ShadowController {
+  readonly observer: IngressShadowObserver;
+  start(projectId:string,operation:ShadowOperation,admission:()=>void,reviewedPrimary?:DeploymentProviderCanaryBinding,authorizeBegin?:()=>void):Promise<ShadowRecord>;
+  replay(projectId:string,keyDigest:string,bySession?:boolean):ShadowReplayView|null|undefined;
+  history(projectId:string):ShadowHistoryRead|undefined;
+  requestStop(projectId:string,sessionId:string,operationId:string,controllerEpoch:number,authorized:()=>void):Promise<ShadowRecord|undefined>;
+  elapsed(projectId:string,sessionId:string):number|null;
+  stop(projectId:string,sessionId:string,epoch:number,authorized:()=>void):Promise<ShadowRecord>;
+  recover(projectId:string):Promise<ShadowRecord|null>;
+  close():Promise<void>;
+}
+export declare function createShadowController(adapter:ShadowOwnerAdapter):ShadowController;
+
+/** @internal Canonical, bounded review identity; this value never grants native authority. */
+export interface ShadowReviewSelection {
+  readonly pathIndices: readonly number[]; readonly methodMask: number; readonly samplePercent: number; readonly durationMs: number;
+  readonly maxAttempts: number; readonly maxConcurrent: number; readonly maxResponseBytes: number; readonly requestMs: number;
+}
+export interface ShadowReviewPayload {
+  readonly version: 1; readonly projectId: string; readonly releaseId: string; readonly artifactSha256: string;
+  readonly primaryReleaseId: string; readonly primaryGeneration: number; readonly primaryFence: number; readonly primaryIncarnation: string;
+  readonly primaryArtifactSha256: string; readonly nodeId: string; readonly providerBindingDigest: string; readonly credentialGeneration: number;
+  readonly principalBindingDigest: string; readonly policyRevision: number; readonly policyDigest: string; readonly selection: ShadowReviewSelection;
+  readonly expectedEpoch: number; readonly issuedAt: number; readonly expiresAt: number; readonly nonce: string; readonly reviewDigest: string;
+}
+export declare function normalizeShadowReview(value:unknown):ShadowReviewPayload;
+export declare function shadowReviewToken(payload:ShadowReviewPayload,sign:(canonical:string)=>Uint8Array):string;
+export declare function parseShadowReviewToken(token:unknown):Readonly<{payload:ShadowReviewPayload;canonical:string;signature:Uint8Array}>;
+export declare function shadowReviewSelection(policy:PlatformShadowPolicy,effective:ShadowSessionPolicy):ShadowReviewSelection;
+export declare function expandShadowReviewSelection(policy:PlatformShadowPolicy,selection:ShadowReviewSelection):ShadowSessionPolicy;
+export declare function shadowReviewDigest(payload:ShadowReviewPayload,principalBindingDigest:string,policy:ShadowSessionPolicy,hash:(value:string)=>string):string;
+export declare function assertShadowReviewReplay(payload:ShadowReviewPayload,identity:ShadowReplayIdentity,principalDigest:string,hash:(value:string)=>string):void;
 
 /** @internal Schema identity is separate from per-session policy and enablement. */
 export declare const shadowSchemaIdentity = "clank-platform-shadow/2";
-export interface ShadowSchemaIdentity { readonly enrollmentId: string; readonly version: 1 | 2; }
+export declare const shadowReportSchemaIdentity = "clank-platform-shadow/3";
+export interface ShadowSchemaIdentity { readonly enrollmentId: string; readonly version: 1 | 2 | 3; }
+export declare function upgradeShadowReportSchema(connection: SQLiteInternal, current:()=>void): ShadowSchemaIdentity;
 /** @internal Read only: protocol-three startup must never reconstruct missing state. */
 export declare function assertProviderShadowSchema(connection: Pick<SQLiteInternal, "prepare">): ShadowSchemaIdentity;
+
+export declare function normalizeShadowCursor(value:unknown):ShadowCursor;
+export declare function shadowCursorToken(value:ShadowCursor,sign:(canonical:string)=>Uint8Array):string;
+export declare function parseShadowCursorToken(value:unknown):Readonly<{payload:ShadowCursor;canonical:string;signature:Uint8Array}>;
+export declare function shadowStatusQuery(search:string):Readonly<{limit:number;before?:string}>;
+export declare function selectShadowHistory(view:ShadowHistoryView,limit:number,cursor?:ShadowCursor):Readonly<{views:readonly ShadowReplayView[];nextEpoch:number|null;ceilingEpoch:number}>;

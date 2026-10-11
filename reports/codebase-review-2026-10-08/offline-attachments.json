@@ -1,0 +1,231 @@
+{
+  "feature": 30,
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/317",
+  "status": "verified-native-draft-browser-activation-pending",
+  "counted": false,
+  "acceptedFeatures": 27,
+  "remainingFeatures": 13,
+  "base": "7bdb73efc3bf297c566d63814223306b047b2792",
+  "source": "f477b0dc0fedbd4b846722af97ac714b9500b97e",
+  "tree": "92237a924c837aa309330ab34373384240c9aaea",
+  "tarSha256": "2062705d187b7d238bc414b7abc25fa8d63470b3f36b6fb7fd68ecc16f9546b3",
+  "trackedInputs": 1116,
+  "implemented": [
+    "Bounded native IndexedDB immutable Blobs with exact account/input/replay identity",
+    "Native Web Locks, bounded upload/attachment deadlines and current-account chunk fences",
+    "Expected-absence publication and exact private object generation reconciliation",
+    "Same SQLite transaction checks completed object identity and application record ownership",
+    "Ignored or altered native receipt insertion rolls back application writes",
+    "Metadata-only accessible pending/failed view with explicit retry, synchronize and confirmed local discard"
+  ],
+  "nativeFocused": {
+    "tests": 12,
+    "passed": 12,
+    "log": "offline-attachments-native-after-04.log",
+    "scope": "Native authentication, bucket catalog/local object store, application SQLite, partial/expired upload, exact replay after restart, ignored/altered receipt rollback and concurrent writer locking. Earlier combined regressions passed82."
+  },
+  "fullReleaseGates": {
+    "source": "f477b0dc0fedbd4b846722af97ac714b9500b97e",
+    "tree": "92237a924c837aa309330ab34373384240c9aaea",
+    "tarSha256": "2062705d187b7d238bc414b7abc25fa8d63470b3f36b6fb7fd68ecc16f9546b3",
+    "inputs": 1116,
+    "ordinaryUid": 1000,
+    "results": {
+      "26": {
+        "log": "offline-attachments-node26-gate-01.log",
+        "sha256": "055ff9946305ea00d2e0cdea5c7227ce55c65b61ccdcec7c84617bcc0fff59d4",
+        "exit": 0,
+        "counts": {
+          "tests": 2121,
+          "pass": 2118,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": [
+          91.54,
+          81.06,
+          90.03
+        ]
+      },
+      "22": {
+        "log": "offline-attachments-node22-gate-01.log",
+        "sha256": "117d9bcc3fb5833a555f940b129b046b23017ad4f811a4b137e1a4b99056df7c",
+        "exit": 0,
+        "counts": {
+          "tests": 2121,
+          "pass": 2118,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": [
+          91.53,
+          81.07,
+          90.06
+        ]
+      }
+    },
+    "scope": "Complete unmodified scripts/check.mjs on frozen offline attachment source. Three intentional unsupported-host skips remain. Browser native automatic HTTP and storage evidence is separate; interactive acceptance is pending. Feature 30 remains uncounted."
+  },
+  "browser": {
+    "storageCases": 6,
+    "storageScope": "Actual IndexedDB reopen/concurrency/Web Locks; controlled upload/backend transports. Earlier source capture; not interactive acceptance.",
+    "nativeHTTP": {
+      "source": "f477b0dc0fedbd4b846722af97ac714b9500b97e",
+      "fixture": "owned-native-attachment-network",
+      "applicationRows": 1,
+      "mutationReceipts": 1,
+      "completedObjects": 1,
+      "scope": "Actual native browser HTTP automatic registration/upload/download/replay/logout at frozen source. Keyboard Enter focused Synchronize; native Return did not activate it. Interactive and phone acceptance remain unverified.",
+      "runtimeInputs": {
+        "backend": "05cfe58fc1ffbe05f9bd4346c9ad046350cf11301410fca55ed9be785cff4504",
+        "auth": "6af99a333354d9b2c1f495e35df13bc05288a4c87bc0116ad4d4578eeff9ffcf",
+        "buckets": "9537074d94e439d4ee690cffaac014878991ec24db4c5db206d2fe1394b2c3a1",
+        "mutation-receipts": "58c751f94d78a833dcac53ac971d62bd5c783f6b92e600d89237b1b707c375a5",
+        "offline-attachments": "e128bdd26e2e2c899101062cdefd573f6e809f99e20b6487179cdad0193a5b9f"
+      }
+    },
+    "phoneDocumentation": {
+      "requested": {
+        "width": 390,
+        "height": 844
+      },
+      "actual": {
+        "height": 844,
+        "scrollWidth": 375,
+        "width": 375
+      },
+      "searchResultPresent": true,
+      "scope": "Native home/search/offline guide phone layout; guide/home also measured width 375, height 844, scrollWidth 375. No keyboard or phone activation acceptance claimed."
+    },
+    "pending": [
+      "Explicit Synchronize activation did not change the page on click or Return; Enter focused the correct button",
+      "Real pending/failed view keyboard/focus and phone interaction acceptance",
+      "Fresh final hosted checks and review, then protected merge"
+    ]
+  },
+  "types": {
+    "positiveNegativeFixtures": 35,
+    "existingDiagnostics": 159,
+    "newDiagnostics": 0,
+    "unchangedBaseline": 163,
+    "log": "offline-attachments-types-05.log"
+  },
+  "package": {
+    "files": 415,
+    "unpackedBytes": 6165113,
+    "maximumBytes": 6291456,
+    "headroom": 126343,
+    "newFiles": [
+      "dist/offline-attachments.js",
+      "dist/offline-attachments.d.ts"
+    ],
+    "dependencies": 0
+  },
+  "documentation": {
+    "guides": 101,
+    "words": 178002,
+    "doctor": {
+      "passed": 6,
+      "optionalUnlinkedWarning": 1,
+      "failed": 0
+    },
+    "offlineArtifact": "1432e19d70a5b6ce902be774ea39c09868c9e64d4cb101c32baad54441c222f6",
+    "uploaded": false,
+    "endpoints": {
+      "surfaces": [
+        {
+          "path": "/",
+          "status": 200,
+          "bytes": 88683,
+          "sha256": "d6dbedfc9559c1d89b3cb1164f3ea1375c95b630c043affc33dc7aa8e955a4bc"
+        },
+        {
+          "path": "/docs/offline",
+          "status": 200,
+          "bytes": 97852,
+          "sha256": "61e397e873fd62cd0444f13fa1db1718d643d888fc6e605eff69d1f99b2a2e70"
+        },
+        {
+          "path": "/raw/offline.md",
+          "status": 200,
+          "bytes": 11495,
+          "sha256": "17564e9b0f0b6f15c9602ecd651b55177025691f1fe988650dde5b0175238717"
+        },
+        {
+          "path": "/api/docs.json",
+          "status": 200,
+          "bytes": 82521,
+          "sha256": "b1ba375ef31a2a7c4fc9c9438e2f8223f870b94f16de16f2fab425d0e7bfb9ad"
+        },
+        {
+          "path": "/api/docs/offline.json",
+          "status": 200,
+          "bytes": 12324,
+          "sha256": "de40f4b3fc4f42210fb19d479f2b620580cbdeed520f24ebd306cb7e8ca8ac9b"
+        },
+        {
+          "path": "/llms.txt",
+          "status": 200,
+          "bytes": 30673,
+          "sha256": "5a1ea4e333e768fe9302a309a086ac59fb751454b73b507450dd773d1dd907dd"
+        },
+        {
+          "path": "/llms-full.txt",
+          "status": 200,
+          "bytes": 1542128,
+          "sha256": "84824ff152ee7b49e5ab1c73c041e9acbb26c49ec131364af2eecde529c63313"
+        },
+        {
+          "path": "/.well-known/clank",
+          "status": 200,
+          "bytes": 700,
+          "sha256": "d71de3a5c6fe0a085392976abe5c5218b38bad6608b552567552ac0c42bd6f21"
+        }
+      ],
+      "mcp": [
+        {
+          "method": "server/discover",
+          "name": null,
+          "status": 200
+        },
+        {
+          "method": "tools/list",
+          "name": null,
+          "status": 200
+        },
+        {
+          "method": "tools/call",
+          "name": "docs_search",
+          "status": 200
+        },
+        {
+          "method": "tools/call",
+          "name": "docs_read",
+          "status": 200
+        }
+      ],
+      "guideSha256": "17564e9b0f0b6f15c9602ecd651b55177025691f1fe988650dde5b0175238717"
+    },
+    "desktopHome": "Native home capture: document1265x720, scrollWidth1265. Screenshot offline-attachments-docs-home-desktop-01.jpg; width verified in separate extension proof.",
+    "desktopSearchAndGuide": "Native screenshot/DOM captures; search returns Offline mutations.",
+    "phoneLayout": "Native home/search/guide measured375px, no horizontal overflow. Requested390x844; original JPEGs375x844 home and375x812 search/guide."
+  },
+  "evidence": {
+    "index": "/tmp/clank-review-2026-10-08/offline-attachments-evidence-01/index.json",
+    "indexSha256": "9f65099f56ad8b2d6b677394f28e5bd891e19e6ea671f0d6f722cd29dc810f4c",
+    "entries": 52,
+    "mode": "0400",
+    "desktopExtensionIndex": "/tmp/clank-review-2026-10-08/offline-attachments-evidence-desktop-extension-01.json",
+    "desktopExtensionSha256": "4da480618566a62d9f5171d33f461fea7199f9bef81474924981687df7e3139a"
+  },
+  "limitations": [
+    "Attachment and bucket catalog require one supported native SQLite database; no distributed transaction guarantee",
+    "Same-origin IndexedDB is application storage, not an encrypted vault",
+    "Already dispatched original-account requests may commit after disposal; discarding local data does not undo server effects",
+    "Partial upload reservation may need native expiry before exact retry",
+    "Queue never replaces attachment input, object generation or expired receipt identity automatically",
+    "Native automatic fixture checks do not establish actual human keyboard/device/production host certification"
+  ]
+}

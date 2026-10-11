@@ -2,6 +2,31 @@ import { McpToolError, type McpTool } from "./mcp.ts";
 import type { ObjectStore } from "./object-storage.ts";
 import { readRequestBytes, RequestInputError } from "./security.ts";
 import type { SQLiteStatement } from "./sqlite-internal.ts";
+import type { MutationContext } from "./backend.ts";
+import type { SQLiteInternal } from "./sqlite-internal.ts";
+
+export interface BucketAttachmentReference {
+  readonly bucket: string;
+  readonly key: string;
+  readonly objectId: string;
+  readonly sha256: string;
+  readonly generation: string;
+}
+const attachmentManagers = new WeakMap<object, (sql: SQLiteInternal, owner: string, reference: BucketAttachmentReference) => BucketObject>();
+const attachmentContexts = new WeakMap<object, (reference: BucketAttachmentReference) => BucketObject>();
+/** @internal Installed only for the duration of a native synchronous backend mutation. */
+export function bindBucketAttachmentContext(context: object, manager: BucketManager, sql: SQLiteInternal, owner: string): () => void {
+  const resolve = attachmentManagers.get(manager);
+  if (!resolve) return () => {};
+  attachmentContexts.set(context, reference => resolve(sql, owner, reference));
+  return () => { attachmentContexts.delete(context); };
+}
+/** Verify a completed object in the same SQLite transaction as its record attachment. */
+export function resolveBucketAttachment(context: MutationContext<any>, reference: BucketAttachmentReference): BucketObject {
+  const resolve = attachmentContexts.get(context);
+  if (!resolve) throw new RequestInputError(409, "ATTACHMENT_CONTEXT_REQUIRED", "Use a live authenticated backend mutation with a native bucket manager.");
+  return resolve(reference);
+}
 
 /** @internal Opaque generation, never an object-store path or browser authority. */
 export interface BucketProcessingSource {
@@ -123,6 +148,8 @@ export interface BucketObject {
   readonly ownerId: string | null;
   readonly size: number;
   readonly sha256: string;
+  /** Opaque current generation. Native managers supply it; legacy external metadata may omit it. */
+  readonly generation?: string;
   readonly contentType: string;
   readonly visibility: BucketVisibility;
   readonly cacheControl: string;
@@ -178,6 +205,7 @@ export interface BucketUploadIntentInput extends BucketIdentity {
   readonly contentType: string;
   readonly resumable?: boolean;
   readonly expectedSha256?: string;
+  readonly ifSha256?: string | null;
   readonly expiresInMs?: number;
 }
 
@@ -289,6 +317,10 @@ export interface BucketUploadOptions {
   readonly contentType?: string;
   readonly resumable?: boolean;
   readonly expectedSha256?: string;
+  readonly ifSha256?: string | null;
+  readonly signal?: AbortSignal;
+  /** Trusted synchronous account assertion, checked around network and body awaits. */
+  readonly assertCurrent?: () => void;
   readonly onProgress?: (uploadedBytes: number, totalBytes: number) => void;
 }
 
@@ -808,6 +840,7 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
       ownerId: row.owner_id === "" ? null : String(row.owner_id),
       size: safeStoredInteger(row.size, "size"),
       sha256: storedSha(row.sha256),
+      generation: String(row.storage_key).split("/").at(-1)!,
       contentType: normalizeContentType(String(row.content_type)),
       visibility: definition.visibility,
       cacheControl: safeHeader(String(row.cache_control), "cacheControl"),
@@ -1464,6 +1497,7 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
     );
     const reservation = await reserve(definition, input.key, input.size, input.contentType, input, {
       expectedSha256: input.expectedSha256,
+      ifSha256: input.ifSha256,
       expiresAt,
       resumable,
     });
@@ -1876,7 +1910,7 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
       if (operation === "uploads" && segments.length === 2 && request.method === "POST") {
         await requireBrowser(definition, context, true);
         const body = await readJson(request);
-        exactKeys(body, ["key", "size", "contentType", "resumable", "expectedSha256", "expiresInMs"], "upload intent");
+        exactKeys(body, ["key", "size", "contentType", "resumable", "expectedSha256", "ifSha256", "expiresInMs"], "upload intent");
         return jsonResponse(await createUploadIntent(definition, {
           userId: context.userId,
           key: requiredString(body.key, "key"),
@@ -1884,6 +1918,7 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
           contentType: requiredString(body.contentType, "contentType"),
           resumable: optionalBoolean(body.resumable, "resumable"),
           expectedSha256: optionalString(body.expectedSha256, "expectedSha256"),
+          ifSha256: body.ifSha256 === null ? null : optionalString(body.ifSha256, "ifSha256"),
           expiresInMs: optionalNumber(body.expiresInMs, "expiresInMs"),
         }));
       }
@@ -1958,6 +1993,17 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
     },
   });
   const generation = (row: ObjectRow) => String(row.storage_key).split("/").at(-1)!;
+  attachmentManagers.set(manager, (sql, owner, reference) => {
+    ensureOpen();
+    if (!sql.inTransaction || sql.prepare("PRAGMA database_list").all().find(row => row.name === "main")?.file !== catalogPath) throw new RequestInputError(409, "ATTACHMENT_CATALOG_REQUIRED", "Attachment and record must use the same native SQLite catalog.");
+    if (!reference || typeof reference !== "object" || Object.keys(reference).sort().join(",") !== "bucket,generation,key,objectId,sha256") throw new RequestInputError(400, "INVALID_ATTACHMENT", "Use an exact completed bucket attachment reference.");
+    const definition = definitionFor(boundedName(reference.bucket));
+    if (definition.ownership !== "user" || definition.visibility !== "private" || definition.browserAccess !== "authenticated") throw new RequestInputError(409, "ATTACHMENT_BUCKET_REQUIRED", "Attachments require a private authenticated user-owned bucket.");
+    const row = sql.prepare("SELECT * FROM clank_bucket_objects WHERE bucket=? AND owner_id=? AND object_key=? AND object_id=? AND sha256=?")
+      .get(definition.name, ownerFor(definition, {userId:owner}), bucketKey(reference.key), boundedId(reference.objectId,"object id"), storedSha(reference.sha256));
+    if (!row || generation(row as ObjectRow) !== boundedId(reference.generation,"generation")) throw new RequestInputError(409, "ATTACHMENT_CHANGED", "The completed attachment is unavailable or has changed.");
+    return objectFromRow(row as ObjectRow);
+  });
   const snapshot = (bucket: string, key: string, userId: string): BucketProcessingSource | null => {
     ensureOpen(); const definition = definitionFor(bucket), row = rowForKey(definition.name, ownerFor(definition, { userId }), bucketKey(key));
     return row ? Object.freeze({ bucket: definition.name, key: String(row.object_key), generation: generation(row), metadata: objectFromRow(row) }) : null;
@@ -2024,14 +2070,28 @@ export function createBucketClient(nameInput: string, options: BucketClientOptio
       return result.object;
     },
     async upload(uploadOptions) {
-      const { key, value, contentType: requestedContentType, resumable, expectedSha256, onProgress } = uploadOptions;
+      const { key, value, contentType: requestedContentType, resumable, expectedSha256, ifSha256, onProgress, signal, assertCurrent } = uploadOptions;
+      if (assertCurrent !== undefined && typeof assertCurrent !== "function") throw new TypeError("Upload current authority must be a synchronous assertion.");
+      const current = () => {
+        signal?.throwIfAborted();
+        const result: unknown = assertCurrent?.();
+        if (result !== undefined) {
+          if (result && typeof Reflect.get(Object(result), "then") === "function") void Promise.resolve(result).catch(() => undefined);
+          throw new TypeError("Upload current authority must complete synchronously.");
+        }
+        signal?.throwIfAborted();
+      };
+      const uploadRequest = async (url: string, init: RequestInit) => { current(); const response = await request(url, {...init,signal}); current(); return response; };
+      const uploadJson = async <T>(response: Response) => { current(); const result = await json<T>(response); current(); return result; };
+      current();
       const writeHeaders = { "content-type": "application/json", ...csrfHeaders() };
       const bytes = value instanceof Blob
         ? new Uint8Array(await value.arrayBuffer())
         : copyBytes(value);
+      current();
       const contentType = requestedContentType
         ?? (value instanceof Blob && value.type ? value.type : "application/octet-stream");
-      const intent = await json<BucketUploadIntent>(await request(`${endpoint}/uploads`, {
+      const intent = await uploadJson<BucketUploadIntent>(await uploadRequest(`${endpoint}/uploads`, {
         method: "POST",
         credentials: "same-origin",
         headers: writeHeaders,
@@ -2041,10 +2101,11 @@ export function createBucketClient(nameInput: string, options: BucketClientOptio
           contentType,
           resumable,
           expectedSha256,
+          ifSha256,
         }),
       }));
       if (!intent.resumable) {
-        const result = await json<{ object: BucketObject }>(await request(intent.url, {
+        const result = await uploadJson<{ object: BucketObject }>(await uploadRequest(intent.url, {
           method: "PUT",
           headers: intent.headers,
           body: bytes,
@@ -2059,17 +2120,17 @@ export function createBucketClient(nameInput: string, options: BucketClientOptio
       let offset = intent.offset;
       while (offset < bytes.byteLength) {
         const end = Math.min(bytes.byteLength, offset + intent.maxChunkBytes);
-        const response = await request(intent.url, {
+        const response = await uploadRequest(intent.url, {
           method: "PATCH",
           headers: { ...intent.headers, "upload-offset": String(offset) },
           body: bytes.slice(offset, end),
         });
         if (end === bytes.byteLength) {
-          const result = await json<{ object: BucketObject }>(response);
+          const result = await uploadJson<{ object: BucketObject }>(response);
           onProgress?.(end, bytes.byteLength);
           return result.object;
         }
-        if (!response.ok) await json(response);
+        if (!response.ok) await uploadJson(response);
         const nextOffset = response.headers.get("upload-offset");
         if (nextOffset === null || !/^\d+$/u.test(nextOffset) || Number(nextOffset) !== end) {
           throw new BucketError(502, "UPLOAD_OFFSET_MISMATCH", "Upload response offset does not match the accepted chunk.");

@@ -33,6 +33,7 @@ export interface ApplyMigrationsOptions extends LoadMigrationsOptions {
 import { pinSQLiteDirectory } from "./sqlite-sandbox.ts";
 import { runSQLiteTask } from "./sqlite-task.ts";
 import { publishSQLiteReplacement } from "./migrations-worker.ts";
+import { SQLITE_INTERNAL } from "./sqlite-internal.ts";
 export { loadMigrations, assertSafeMigrationSql } from "./migrations-worker.ts";
 
 /** Returns applied and pending migrations in a bounded, terminable process. */
@@ -50,12 +51,31 @@ export function backupSQLite(sourcePath: string, destinationPath: string): Promi
   return runSQLiteReplacement("stageSQLiteBackup", sourcePath, destinationPath);
 }
 
+// Only the privately captured source may create its first base. Link publication
+// refuses any existing destination; uncertain output is retained, never adopted.
+Object.defineProperty(backupSQLite,SQLITE_INTERNAL,{value:Object.freeze({async source(token:object,destination:string,directory:import("./sqlite-sandbox.ts").PinnedSQLiteDirectory,parents:readonly import("./sqlite-sandbox.ts").PinnedSQLiteDirectory[]){
+  const {openBackend}=await import("./backend.ts");
+  const context=(openBackend as any)[SQLITE_INTERNAL].sourceContext(token),current=context.current;
+  const fsName="node:fs/promises",pathName="node:path";current();
+  const [fs,path]=await Promise.all([import(fsName),import(pathName)]);current();
+  if(path.dirname(destination)!==directory.path)throw new Error("Invalid private backup destination.");
+  const temporary=destination+".tmp-"+globalThis.crypto.randomUUID(),anchored=directory.anchor+"/"+path.basename(temporary),target=directory.anchor+"/"+path.basename(destination);
+  await runSQLiteTask("migrations","stageSQLiteBackup",[context.path,destination,temporary],parents,token);current();
+  const file=await fs.open(anchored,"r");
+  try{current();await file.sync();current();}finally{await file.close();}current();
+  await fs.link(anchored,target);current();await fs.unlink(anchored);current();
+  const parent=await fs.open(directory.anchor,"r");
+  try{current();await parent.sync();current();}finally{await parent.close();}current();
+}})});
+
 /** Replaces a stopped application's database with a verified prior backup. */
-export function restoreSQLiteBackup(sourcePath: string, destinationPath: string): Promise<void> {
-  return runSQLiteReplacement("stageSQLiteRestore", sourcePath, destinationPath);
+export function restoreSQLiteBackup(sourcePath: string, destinationPath: string, assertCurrent?: () => void): Promise<void> {
+  return runSQLiteReplacement("stageSQLiteRestore", sourcePath, destinationPath, assertCurrent);
 }
 
-async function runSQLiteReplacement(operation: string, sourcePath: string, destinationPath: string): Promise<void> {
+async function runSQLiteReplacement(operation: string, sourcePath: string, destinationPath: string, assertCurrent?: () => void): Promise<void> {
+  const current=()=>{if(assertCurrent===undefined)return;if(typeof assertCurrent!=="function")throw new TypeError("SQLite publication requires a synchronous current authority assertion.");const result:unknown=assertCurrent();if(result!==undefined){if(result&&(typeof result==="object"||typeof result==="function")&&typeof Reflect.get(result,"then")==="function")void Promise.resolve(result).catch(()=>undefined);throw new TypeError("SQLite publication authority assertions must complete synchronously.");}};
+  current();
   // The parent must know which private files to clean: a SIGKILL or native OOM
   // skips every worker finally block. Only this attempt's unpredictable paths
   // are removed, and runSQLiteTask settles only after the child has closed.
@@ -71,7 +91,7 @@ async function runSQLiteReplacement(operation: string, sourcePath: string, desti
     await runSQLiteTask("migrations", operation, [sourcePath, destination, temporary], pinned ? [pinned] : []);
     // Publish only after successful worker completion. A forced worker exit can
     // never delete destination sidecars or replace the caller's live database.
-    await publishSQLiteReplacement(anchoredTemporary, anchoredDestination);
+    current();await publishSQLiteReplacement(anchoredTemporary, anchoredDestination,assertCurrent===undefined?undefined:current);
   } finally {
     const moduleName = "node:fs/promises";
     const fs = await import(moduleName);

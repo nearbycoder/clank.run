@@ -1,5 +1,14 @@
 import { openNodeEvacuations, type NodeEvacuationPlan, type EvacuationProject, type NodeEvacuationHooks } from "./node-evacuation.ts";
-import { assertProviderShadowSchema, shadowSchemaIdentity } from "./managed-shadow.ts";
+import { openProjectIncidents, ProjectIncidentError, type PlatformIncidentOptions, type IncidentAuthority } from "./platform-incidents.ts";
+import {openPlatformStatusPages,type PlatformStatusPagesOptions,type StatusPageAuthority} from "./platform-status-pages.ts";
+import {CustomerStatusError,type CustomerStatusSnapshot} from "./customer-status.ts";
+import { openProjectSlos, ProjectSloError, type PlatformSloOptions, type SloAuthority } from "./platform-slo.ts";
+import { openPlatformPointInTime, type PlatformPointInTimeOptions } from "./platform-point-in-time.ts";
+export type { PlatformPointInTimeOptions, PlatformPointInTimePolicy, PlatformPointInTimeCheckpoint, PlatformPointInTimeResolution } from "./platform-point-in-time.ts";
+import { shadowStatusQuery, parseShadowCursorToken, shadowCursorToken, selectShadowHistory, type ShadowHistoryView, type ShadowCursor, createShadowCandidateRequest, assertProviderShadowSchema, shadowSchemaIdentity, upgradeShadowReportSchema, readShadowRecord, assertShadowReplay, readShadowReplays, saveShadowRecord, retireShadow,
+  normalizeShadowPolicy, narrowShadowPolicy, createShadowController, emptyShadowReport, normalizeShadowReview, parseShadowReviewToken, shadowReviewToken, shadowReviewSelection, expandShadowReviewSelection, shadowReviewDigest, assertShadowReviewReplay,
+  type ShadowReviewPayload, type ShadowSessionPolicy, type ShadowReplayView, type ShadowReport, type ShadowPhase, type PlatformShadowPolicy, type ShadowRecord, type ShadowOperation, type ShadowOutcome, type ShadowLifecycleAdapter } from "./managed-shadow.ts";
+import { createMcpServer, McpToolError } from "./mcp.ts";
 import { createManagedCanary, validateManagedCanary, type ManagedCanaryOptions } from "./managed-canary.ts";
 import { decodeReleaseAttestation, verifyReleaseAttestation, type ReleaseAttestation, type ReleaseAttestationPolicy } from "./release-attestation.ts";
 import { createOperationalMonitor, type OperationalSignal, type PlatformOperationsOptions } from "./operations-monitor.ts";
@@ -8,11 +17,14 @@ import { createRetentionController, dispatchRetention } from "./retention-intern
 import type { RetentionAdministrationOptions } from "./retention-administration.ts";
 import { openAuditExporter, type AuditExportOptions } from "./audit-export.ts";
 import { forecastUsage } from "./usage-forecast.ts";
+import { openPlatformProjectCosts, ProjectCostError, type PlatformProjectCostOptions, type ProjectCostAuthority } from "./platform-project-costs.ts";
 import { openOrganizationSso, type OrganizationSsoOptions, type OrganizationProvisioningAssignment } from "./organization-sso.ts";
 import { captureLogLines, redactLogSecrets } from "./security.ts";
 import { createSQLiteTaskScope, runSQLiteTask } from "./sqlite-task.ts";
 import { openSecretRotations, type SecretRotationOptions, type SecretRevision } from "./secret-rotation.ts";
 import {openPlatformServiceAccounts, assertServiceAccountProtocol, ServiceAccountError, type PlatformServiceAccountOptions, type ServiceAccountAuthority, type AuthenticatedServiceAccount} from "./platform-service-accounts.ts";
+import {openOrganizationSecurityPolicies, assertOrganizationSecurityProtocol, type OrganizationSecurityPolicyController} from "./organization-security-policy.ts";
+import {openPlatformTemporaryAccess, type TemporaryAccessAuthority} from "./platform-temporary-access.ts";
 import {
   AuthError,
   defineAuth,
@@ -123,6 +135,7 @@ import { platformConsolePage } from "./platform-console.ts";
 import { platformMarketingPage } from "./platform-marketing.ts";
 import {
   readRequestBytes,
+  hasCanonicalRequestTarget,
   requestOriginAllowed,
   RequestInputError,
   readJsonRequest,
@@ -173,7 +186,8 @@ interface PlatformProviderCanaryOperation {
   createdAt: number;
   updatedAt: number;
 }
-interface PlatformProviderCanaryRecord { epoch: number; operation: PlatformProviderCanaryOperation; serialized: string; }
+interface PlatformProviderCanaryRecord { protocol: 1; epoch: number; operation: PlatformProviderCanaryOperation; serialized: string; }
+type PlatformProviderCandidateRecord = PlatformProviderCanaryRecord | ShadowRecord;
 
 export interface ProcessRunnerOptions {
   kind?: "process";
@@ -603,7 +617,35 @@ const PLATFORM_QUOTA_DEFINITIONS = Object.freeze({
   label: string;
 }>);
 
+/** Safe shadow receipt. Provider credentials, raw observations and sampled URLs are never returned. */
+export interface PlatformShadowSession {
+  readonly sessionId:string; readonly operationId:string; readonly controllerEpoch:number; readonly epoch:number;
+  readonly policyRevision:number; readonly releaseId:string; readonly artifactSha256:string; readonly primary:Readonly<{releaseId:string;generation:number}>;
+  readonly phase:ShadowPhase; readonly outcome:ShadowOutcome|null; readonly stopRequested:boolean; readonly cleanupRequired:boolean; readonly reportAvailable:boolean;
+  readonly policy:ShadowSessionPolicy;
+  readonly snapshot:Readonly<{sha256:string;bytes:number;providerStartedAt:number;providerCompletedAt:number;platformObservedAt:number;elapsedSinceObservationMs:number|null;crossHostFreshness:"unknown"}>|null;
+  readonly report:ShadowReport|null; readonly createdAt:number; readonly expiresAt:number; readonly updatedAt:number; readonly nextAction:"none"|"wait"|"stop"|"recover"|"review";
+}
+export interface PlatformShadowList { readonly ok:true; readonly enabled:boolean; readonly epoch:number; readonly policy:PlatformShadowPolicy|null; readonly sessions:readonly PlatformShadowSession[]; readonly nextBefore:string|null; }
+export interface PlatformShadowResponse { readonly ok:true; readonly enabled:boolean; readonly epoch:number; readonly session:PlatformShadowSession; }
+export interface PlatformShadowPreview {
+  readonly ok:true; readonly reviewToken:string; readonly expiresAt:number;
+  readonly review:Readonly<{projectId:string;releaseId:string;artifactSha256:string;primary:Readonly<{releaseId:string;generation:number}>;expectedEpoch:number;policyRevision:number;policy:ShadowSessionPolicy}>;
+}
+
 export interface ClankPlatformOptions {
+  /** Opt-in native organization policies. Recovery requires independent current platform operator authority. */
+  organizationSecurity?: {readonly operatorRecovery?: boolean};
+  /** Opt-in current-human grants for creating a new isolated project preview. Requires organization security. */
+  temporaryAccess?: {readonly maxGrants?: number; readonly maxReceipts?: number};
+  /** Bounded project incident workspace and optional scoped readonly diagnostic adapter. */
+  incidents?: PlatformIncidentOptions;
+  /** Bounded native-ingress completion objectives and durable burn metadata. */
+  slos?: PlatformSloOptions;
+  /** Approved public health, customer domains and native subscriber inboxes. */
+  statusPages?: PlatformStatusPagesOptions;
+  /** Opt-in bounded encrypted checkpoints from registered, explicitly captured provider applications. */
+  pointInTime?: PlatformPointInTimeOptions;
   /** Same-host Linux coordinators; each must occupy a dedicated process. Lost leadership terminates that process. */
   supervisor?: PlatformSupervisorOptions;
   /** Opt-in dedicated organization machine identities with project-scoped credentials. */
@@ -715,6 +757,8 @@ export interface ClankPlatformOptions {
   releaseWindows?: { intervalMs?: number | false };
   /** Measured code-only traffic gates; provider candidates additionally require explicit isolated policy and native supervisor leadership. */
   canary?: ManagedCanaryOptions;
+  /** Explicit bounds for provider-isolated anonymous shadow observations; never activates a release. */
+  shadowTraffic?: PlatformShadowPolicy;
   jobs?: PlatformJobOperationsOptions;
   previews?: PlatformPreviewOptions;
   /**
@@ -759,6 +803,8 @@ export interface ClankPlatformOptions {
   };
   /** Receives unexpected failures for private operator logging. */
   onError?: (error: unknown) => void;
+  /** Trusted measured cost reconciliation. Retained admission policies survive disabling the collector. */
+  projectCosts?: PlatformProjectCostOptions;
 }
 
 export type PlatformRuntimePolicy = "always_on" | "on_demand" | "suspended";
@@ -926,8 +972,33 @@ interface TokenPrincipal {
 
 // Request-local authority never becomes a persisted credential or an audit field.
 const admittedTokenAuthority = new WeakMap<TokenPrincipal, string>();
+const organizationSecurityStores = new WeakMap<SQLiteInternal, {controller: OrganizationSecurityPolicyController; auth: AuthRuntime<any>}>();
+const admittedOrganizationScopes = new WeakMap<TokenPrincipal, Set<string>>();
+const admittedTemporaryAccess = new WeakMap<TokenPrincipal, {readonly projectId: string; readonly grantId: string; readonly assertCurrent: () => void}>();
+function authorizeOrganizationPolicy(internal: SQLiteInternal, principal: TokenPrincipal, organizationId: string): void {
+  let scopes = admittedOrganizationScopes.get(principal);
+  if (!scopes) admittedOrganizationScopes.set(principal, scopes = new Set());
+  scopes.add(organizationId);
+  const security = organizationSecurityStores.get(internal);
+  assertOrganizationSecurityProtocol(internal);
+  if (principal.machine) return;
+  if (!internal.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_organization_security_policies' AND type='table'").get()) return;
+  if (!internal.prepare('SELECT 1 FROM clank_organization_security_policies WHERE organization_id=?').get(organizationId)) return;
+  if (!security) throw new AuthError('ORGANIZATION_POLICY_UNCONFIGURED','Reopen this controller with organization security enforcement.',503);
+  if (principal.tokenId) security.controller.authorizeDelegation(organizationId, 'cli_'+principal.tokenId, principal.userId);
+  else {
+    const current = principal.sessionId ? security.auth.refreshSession(principal.sessionId) : null;
+    if (principal.impersonation || current?.user?.id !== principal.userId) throw new AuthError('ORGANIZATION_POLICY_SESSION','Sign in with your own current organization session.',401);
+    security.controller.authorizeAuth(organizationId, current);
+  }
+}
+function organizationPolicyAllows(internal: SQLiteInternal, principal: TokenPrincipal, organizationId: string): boolean {
+  try {authorizeOrganizationPolicy(internal, principal, organizationId); return true;}
+  catch (error) {if (error instanceof AuthError && [401,403].includes(error.status)) return false; throw error;}
+}
 function machineProjectPermission(operation: string, method: string): ProjectPermission {
-  if(method==='GET' && ['', 'usage', 'releases', 'backups'].includes(operation)) return 'read';
+  if(method==='GET' && (['', 'usage', 'releases', 'backups', 'costs', 'costs/history', 'point-in-time', 'shadow'].includes(operation) || /^shadow\/[A-Za-z0-9_-]{1,128}$/u.test(operation))) return 'read';
+  if(method==='POST' && operation==='point-in-time/mcp') return 'read';
   if(method==='GET' && operation==='logs') return 'logs';
   if(method==='GET' && operation==='audit') return 'audit';
   if(operation==='secrets' && ['GET','PUT'].includes(method) || /^secrets\/[^/]+$/u.test(operation) && method==='DELETE') return 'secrets';
@@ -958,6 +1029,8 @@ type ProjectPermission =
   | "deploy"
   | "rollback"
   | "jobs"
+  | "incidents"
+  | "slo"
   | "secrets"
   | "tokens"
   | "audit"
@@ -1044,6 +1117,11 @@ const MAX_ACTIVE_RUNNER_ENROLLMENTS = 50;
 
 /** Opens Clank's self-hostable deployment control plane and release supervisor. */
 export async function openPlatform(options: ClankPlatformOptions): Promise<PlatformRuntime> {
+  if(options.pointInTime){
+    const configured=options.pointInTime;
+    const source=configured.source,restoreKey=configured.restoreKey;
+    options={...options,pointInTime:Object.freeze({source:typeof source==="function"?source.bind(configured):source,restoreKey:typeof restoreKey==="function"?restoreKey.bind(configured):restoreKey,maxArchiveBytes:configured.maxArchiveBytes,maxEntries:configured.maxEntries,maxArchivesPerProject:configured.maxArchivesPerProject,maxTotalArchiveBytes:configured.maxTotalArchiveBytes})};
+  }
   // Standby activation can be delayed indefinitely. Capture ordinary operator
   // configuration before the first await; changing the caller's input must not
   // turn off leadership or change the trust policy during later takeover.
@@ -1203,6 +1281,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     : undefined;
   const ingressEnabled = options.ingress?.enabled === true || Boolean(baseDomain);
   const canaryOptions = options.canary ? validateManagedCanary(options.canary) : undefined;
+  const shadowPolicy=options.shadowTraffic===undefined?undefined:normalizeShadowPolicy(options.shadowTraffic);
+  if(shadowPolicy && (!ingressEnabled || !leadership))throw new TypeError("Provider shadow traffic requires managed ingress and native supervisor leadership.");
   if (canaryOptions && !ingressEnabled) throw new TypeError("Managed canaries require managed ingress.");
   if (canaryOptions?.provider && !leadership) throw new TypeError("Provider canaries require native supervisor leadership in a dedicated coordinator process.");
   const defaultRuntimePolicy = normalizeRuntimePolicy(
@@ -1447,6 +1527,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
   if (providerPlacement && !ingressEnabled) {
     throw new TypeError("deploymentAgents.placement requires managed ingress.");
   }
+  if(shadowPolicy && !providerPlacement)throw new TypeError("Provider shadow traffic requires provider placement.");
   if (canaryOptions?.provider && !providerPlacement) throw new TypeError("Provider canaries require provider placement.");
   const runnerArtifactLimit = options.deploymentAgents
     ? integerInRange(
@@ -1477,6 +1558,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
   }
   const paths = await prepareDirectories(options.dataDirectory);
   await assertPlatformSupervisorMode(paths.controlDatabase,Boolean(leadership));
+  await assertPlatformRecoveryMode(paths.controlDatabase,paths.root+"/point-in-time",Boolean(options.pointInTime));
   const runtimeGuardianDirectory = await prepareRuntimeGuardians(paths.root);
   const masterKey = await resolveMasterKey(paths.root, options.masterKey);
   const signupMode = options.signup ?? "bootstrap";
@@ -1506,29 +1588,35 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       project_id TEXT PRIMARY KEY, protocol INTEGER NOT NULL, epoch INTEGER NOT NULL,
       operation TEXT NOT NULL, updated_at INTEGER NOT NULL);`);
   } catch (error) { storage.auth.close(); storage.database.close(); throw error; }
-  const providerCanaryRecord = (projectId: string): PlatformProviderCanaryRecord | null => {
+  const providerCandidateRecord = (projectId: string): PlatformProviderCandidateRecord | null => {
     const row = storage.internal.prepare("SELECT * FROM clank_platform_provider_canaries WHERE project_id=?").get(projectId);
     const project = storage.internal.prepare("SELECT provider_canary_epoch FROM clank_platform_projects WHERE id=?").get(projectId);
     if (!project) { if (row) throw new Error("Provider canary project receipt is missing."); return null; }
     const floor = project.provider_canary_epoch;
     if (!Number.isSafeInteger(floor) || Number(floor) < 0) throw new Error("Provider canary project receipt is invalid.");
-    const record = platformCanaryRecord(row, projectId);
+    const record = row?.protocol === 2 ? readShadowRecord(row, projectId, value => syncHash(value,"hex")) : platformCanaryRecord(row, projectId);
     if (record ? record.epoch !== floor : floor !== 0) throw new Error("Provider canary journal and project receipt differ; preserve them for recovery.");
+    if (record?.protocol === 2) assertShadowReplay(storage.internal,projectId,record,value => syncHash(value,"hex"));
     return record;
   };
+  const providerCanaryRecord = (projectId: string): PlatformProviderCanaryRecord | null => { const record=providerCandidateRecord(projectId);return record?.protocol===1?record:null; };
   const requireNoProviderCanary = (projectId: string) => {
-    const record = providerCanaryRecord(projectId);
-    if (record && !["retired", "activating", "complete"].includes(record.operation.phase)) throw new PlatformError(409, "PROVIDER_CANARY_RECOVERY_REQUIRED", "Retire the exact provider candidate before changing its authoritative writer.");
+    const record = providerCandidateRecord(projectId);
+    if (record && (record.protocol===2 ? record.operation.phase!=="complete" : !["retired", "activating", "complete"].includes(record.operation.phase))) throw new PlatformError(409, "PROVIDER_CANARY_RECOVERY_REQUIRED", "Retire the exact provider candidate before changing its authoritative writer.");
   };
   try {
     const retained = storage.internal.prepare("SELECT project_id FROM clank_platform_provider_canaries UNION SELECT id AS project_id FROM clank_platform_projects WHERE provider_canary_epoch<>0").all();
     for (const row of retained) {
-      providerCanaryRecord(String(row.project_id));
+      providerCandidateRecord(String(row.project_id));
       if (!leadership) throw new TypeError("Retained provider canary operations require native supervisor leadership.");
     }
     if (canaryOptions?.provider || retained.length) leadership!.enrollProviderCanaries();
+    if(storage.internal.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name='clank_platform_shadow_reports'").get()){
+      for(const row of storage.internal.prepare("SELECT id FROM clank_platform_projects WHERE shadow_replay_receipt IS NOT NULL UNION SELECT project_id AS id FROM clank_platform_shadow_reports").all())readShadowReplays(storage.internal,String(row.id),value=>syncHash(value,"hex"));
+    }
   } catch (error) { storage.auth.close(); storage.database.close(); throw error; }
   const machineResponseGuards = new WeakMap<Request, () => void>();
+  const shadowMcpResponseGuards = new WeakMap<Request, () => void>();
   const evacuations = openNodeEvacuations(storage.internal);
   const requireNoEvacuation = (projectId: string) => { if (evacuations.activeForProject(projectId)) throw new PlatformError(409, "PROJECT_EVACUATING", "Resume or cancel the node evacuation before changing this project."); };
   storage.internal.exec("CREATE TABLE IF NOT EXISTS clank_platform_release_attestations (release_id TEXT PRIMARY KEY REFERENCES clank_platform_releases(id) ON DELETE CASCADE, attestation TEXT NOT NULL, verified_at INTEGER NOT NULL)");
@@ -1570,12 +1658,103 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     },
   }) : undefined;
   const secretRotations = await openSecretRotations(storage.internal, { encrypt: value => encryptSecret(value, masterKey), decrypt: value => decryptSecret(value, masterKey), validate: options.validateSecret });
+  let projectIncidents: Awaited<ReturnType<typeof openProjectIncidents>>;
+  let projectSlos: ReturnType<typeof openProjectSlos>;
+  let statusPages: ReturnType<typeof openPlatformStatusPages> | undefined;
+  let closeProjectSlos: (() => void) | undefined;
   let serviceAccounts: ReturnType<typeof openPlatformServiceAccounts> | undefined;
+  let organizationSecurity: OrganizationSecurityPolicyController | undefined;
+  let temporaryAccess: ReturnType<typeof openPlatformTemporaryAccess> | undefined;
+  let pointInTime: Awaited<ReturnType<typeof openPlatformPointInTime>> | undefined;
+  const recoveryRestores=new Set<Promise<unknown>>();
   let auditExporter: Awaited<ReturnType<typeof openAuditExporter>> | undefined;
   let retentionController: Awaited<ReturnType<typeof createRetentionController>> | undefined;
+  let projectCosts: ReturnType<typeof openPlatformProjectCosts>;
   let invitationDeliveries: ReturnType<typeof createPlatformInvitationDeliveryScheduler>;
   const usageOpenedAt = Date.now();
   try {
+    assertOrganizationSecurityProtocol(storage.internal);
+    if (!options.organizationSecurity && storage.internal.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_organization_security_policies'").get()
+      && storage.internal.prepare('SELECT 1 FROM clank_organization_security_policies LIMIT 1').get()) throw new TypeError('Configure organization security before reopening this policy store.');
+    if (options.organizationSecurity) {
+      organizationSecurity = openOrganizationSecurityPolicies(storage.database, storage.auth, {
+        membership(organizationId,userId) {const row=storage.internal.prepare('SELECT role,created_at FROM clank_platform_memberships WHERE organization_id=? AND user_id=?').get(organizationId,userId); return row ? {role:validateOrganizationRole(String(row.role),true),createdAt:Number(row.created_at)} : null;},
+        members(organizationId) {const rows=storage.internal.prepare('SELECT user_id,role,created_at FROM clank_platform_memberships WHERE organization_id=? ORDER BY user_id LIMIT 1001').all(organizationId); return rows.map(row=>({userId:String(row.user_id),membership:{role:validateOrganizationRole(String(row.role),true),createdAt:Number(row.created_at)}}));},
+        exists(organizationId) {return !!storage.internal.prepare('SELECT 1 FROM clank_platform_organizations WHERE id=?').get(organizationId);},
+        audit(actorId,organizationId,action,metadata) {audit(storage.internal,actorId,null,null,action,{organizationId,...metadata});},
+        ...(options.organizationSecurity.operatorRecovery ? {
+          authorizeRecovery(current: AuthRequest<any>,organizationId: string) {
+            const live=storage.auth.refreshSession(current.session!.id);
+            if(live?.user?.id!==current.user?.id || live?.user?.role!==PLATFORM_ADMIN_ROLE) throw new AuthError('ORGANIZATION_POLICY_OPERATOR','Independent current platform operator authority is required.',403);
+            storage.auth.requireFreshAuthentication(live,300000);
+          },
+          recoverOwner(organizationId: string,userId: string) {
+            storage.internal.prepare(`INSERT INTO clank_platform_memberships VALUES(?,?,'owner',?,?) ON CONFLICT(organization_id,user_id) DO UPDATE SET role='owner',updated_at=excluded.updated_at`).run(organizationId,userId,Date.now(),Date.now());
+            markProvisioningManualOverride(storage.internal,organizationId,userId,'owner',provisioningOrganizations.has(organizationId));
+          },
+        } : {}),
+      });
+      organizationSecurityStores.set(storage.internal,{controller:organizationSecurity,auth:storage.auth});
+    }
+    if (options.temporaryAccess && !organizationSecurity) throw new TypeError('Temporary access requires native organization security enforcement.');
+    if (!options.temporaryAccess && storage.internal.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_platform_temporary_access_grants'").get()
+      && storage.internal.prepare("SELECT 1 FROM clank_platform_temporary_access_grants WHERE state='active' LIMIT 1").get()) throw new TypeError('Reopen with temporary access and explicitly revoke retained grants before disabling it.');
+    if (options.temporaryAccess) temporaryAccess = openPlatformTemporaryAccess(storage.internal, {
+      ...options.temporaryAccess,
+      membership(projectId,userId) {
+        const row = storage.internal.prepare(`SELECT p.organization_id,m.role,m.created_at,m.updated_at FROM clank_platform_projects p
+          JOIN clank_platform_memberships m ON m.organization_id=p.organization_id AND m.user_id=?
+          JOIN clank_auth_users u ON u.id=m.user_id AND u.disabled=0 WHERE p.id=? AND p.parent_project_id IS NULL`).get(userId,projectId);
+        if (!row) return null;
+        const policy = storage.internal.prepare('SELECT version FROM clank_organization_security_policies WHERE organization_id=?').get(row.organization_id);
+        return {organizationId:String(row.organization_id),role:String(row.role),createdAt:Number(row.created_at),updatedAt:Number(row.updated_at),policyVersion:Number(policy?.version??0)};
+      },
+      audit(actorId,projectId,action,metadata) {audit(storage.internal,actorId,null,projectId,action,{...metadata},true);},
+    });
+    projectIncidents = await openProjectIncidents(storage.internal, options.incidents ?? {}, {
+      // The SLO store is opened below before any reference can be requested.
+      release(projectId, releaseId) {
+        const row = storage.internal.prepare("SELECT id,digest,created_at,artifact_available FROM clank_platform_releases WHERE project_id=? AND id=?").get(projectId, releaseId);
+        return row ? {id: String(row.id), digest: String(row.digest), createdAt: Number(row.created_at), available: Number(row.artifact_available ?? 1) === 1} : null;
+      },
+      alert(projectId, id) {
+        const slo = projectSlos.alert(projectId, id);
+        if (slo) return {state: slo.state === "open" || slo.state === "resolved" ? slo.state : "unknown", observedAt: slo.observedAt};
+        if (!storage.internal.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_operational_incidents'").get()) return null;
+        const row = storage.internal.prepare("SELECT signal,active,updated_at FROM clank_operational_incidents WHERE key=?").get(id);
+        if (!row) return null;
+        try { return JSON.parse(String(row.signal)).resourceId === projectId ? {state: Number(row.active) === 1 ? "open" : "resolved", observedAt: Number(row.updated_at)} : null; } catch { return null; }
+      },
+    });
+    projectCosts = openPlatformProjectCosts(storage.internal, options.projectCosts);
+    if(options.pointInTime){
+      const registeredSource=options.pointInTime.source;
+      pointInTime=await openPlatformPointInTime({internal:storage.internal,directory:paths.root+"/point-in-time",onError:options.onError,
+        scheduledCapture(project,operation,current){return withProjectLock(project,()=>pointInTime!.capture(project,operation,()=>{current();requireRecoveryProjectLease(project);}));},
+        assertOwner(projectId,ownerId){
+          const project=projectById(storage.internal,projectId),user=storage.internal.prepare("SELECT disabled FROM clank_auth_users WHERE id=?").get(ownerId);
+          if(!project||project.parentProjectId||!user||user.disabled!==0)throw new PlatformError(403,"RECOVERY_OWNER_REVOKED","Recovery policy ownership is no longer current.");
+          const role=project.organizationId?organizationMembership(storage.internal,project.organizationId,ownerId).role:project.ownerId===ownerId?"owner":null;
+          if(role!=="owner"&&role!=="admin")throw new PlatformError(403,"RECOVERY_OWNER_REVOKED","Recovery policy ownership is no longer current.");
+        },
+        configuration:{...options.pointInTime,async source(projectId){
+          if(!providerPlacement)throw new PlatformError(409,"PROVIDER_PLACEMENT_DISABLED","Provider recovery is not configured.");
+          const project=projectById(storage.internal,projectId),release=project?.activeReleaseId?releaseById(storage.internal,project.activeReleaseId):null;
+          if(!project||project.placement!=="provider"||!release)throw new PlatformError(409,"RECOVERY_SOURCE_UNAVAILABLE","Recovery requires the exact active provider release.");
+          const expected=Object.freeze({projectId,nodeId:exactProviderRuntime(project,release).nodeId,releaseId:release.id,generation:exactProviderRuntime(project,release).generation}),origin=exactProviderOrigin(project,expected.nodeId);
+          const connection=await registeredSource(projectId),assertion=connection.assertCurrent;
+          const check=()=>{
+            const current=projectById(storage.internal,projectId),active=current?.activeReleaseId?releaseById(storage.internal,current.activeReleaseId):null;
+            if(!current||current.placement!=="provider"||!active||active.id!==expected.releaseId)throw new PlatformError(409,"RECOVERY_SOURCE_CHANGED","The active recovery source changed.");
+            const runtime=exactProviderRuntime(current,active);
+            if(runtime.generation!==expected.generation||runtime.nodeId!==expected.nodeId||exactProviderOrigin(current,runtime.nodeId)!==origin)throw new PlatformError(409,"RECOVERY_SOURCE_CHANGED","The active recovery source changed.");
+          };
+          check();
+          if(typeof assertion!=="function"||connection.binding.projectId!==expected.projectId||connection.binding.nodeId!==expected.nodeId||connection.binding.releaseId!==expected.releaseId||connection.binding.generation!==expected.generation||new URL(connection.origin).origin!==origin)throw new PlatformError(409,"RECOVERY_SOURCE_CHANGED","The registered recovery source does not match current native placement.");
+          return {...connection,binding:expected,assertCurrent(){check();const result=assertion.call(connection);check();return result;}};
+        }},
+      });
+    }
     serviceAccounts = options.serviceAccounts ? openPlatformServiceAccounts(storage.internal, options.serviceAccounts, {
     hash: syncHash, encrypt: value => encryptSecret(value, masterKey), decrypt: value => decryptSecret(value, masterKey),
     eligibleOwner(organizationId, ownerId, projectId, permissions) {
@@ -1586,6 +1765,29 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     },
   }) : undefined;
     if (options.auditExport) auditExporter = await openAuditExporter(storage.internal, options.auditExport);
+    projectSlos = openProjectSlos(storage.internal, options.slos ?? {}, {collecting: ingressEnabled, onError: options.onError});
+    closeProjectSlos = () => projectSlos.close();
+    statusPages = openPlatformStatusPages(storage.internal,options.statusPages??{}, {
+      hash:value=>Buffer.from(syncHash(value),'base64url').toString('hex'),
+      scope(projectId){const row=storage.internal.prepare('SELECT owner_id,organization_id,parent_project_id FROM clank_platform_projects WHERE id=?').get(projectId);return row?JSON.stringify([row.owner_id,row.organization_id,row.parent_project_id]):null;},
+      domainReserved(hostname){return hostname===publicHostname||hostname===customDomainTarget||hostname===baseDomain||Boolean(baseDomain&&hostname.endsWith('.'+baseDomain))||Boolean(storage.internal.prepare('SELECT 1 FROM clank_platform_domains WHERE hostname=?').get(hostname));},
+      incidentVersion(projectId,incidentId,authority){authority.authorize(true);if(storage.internal.prepare('SELECT protocol FROM clank_platform_incident_state WHERE singleton=1').get()?.protocol!==1)throw new CustomerStatusError(409,'STATUS_SOURCE_PROTOCOL','Private incident protocol changed.');const row=storage.internal.prepare('SELECT version FROM clank_platform_incidents WHERE project_id=? AND id=?').get(projectId,incidentId);if(!row)throw new CustomerStatusError(404,'STATUS_SOURCE_NOT_FOUND','Current private incident not found.');return Number(row.version);},
+      slo(projectId,policyId,authority){return projectSlos.snapshot(projectId,policyId,{userId:authority.userId,authorize(write){authority.authorize(write);},audit:authority.audit});},
+    });
+    storage.internal.exec('CREATE TABLE IF NOT EXISTS clank_platform_status_authority(scope TEXT PRIMARY KEY,version INTEGER NOT NULL CHECK(version>0)) STRICT');
+    const statusFence=(scope:string)=>`INSERT INTO clank_platform_status_authority VALUES(${scope},1) ON CONFLICT(scope) DO UPDATE SET version=version+1;`;
+    for(const [table,prefix,key,columns] of [
+      ['clank_auth_users','account','id','disabled,role'],
+      ['clank_auth_sessions','account','user_id','user_id,authenticated_at,authentication_method,expires_at,token_hash,csrf_token'],
+      ['clank_platform_memberships','organization','organization_id','role,user_id,organization_id,created_at,updated_at'],
+      ['clank_platform_project_members','project','project_id','permissions,user_id,project_id,created_at,updated_at'],
+      ['clank_platform_projects','project','id','owner_id,organization_id,parent_project_id'],
+    ] as const){
+      for(const event of ['INSERT','DELETE','UPDATE'] as const){
+        const generation=event==='INSERT'?statusFence(`'${prefix}:'||NEW.${key}`):event==='DELETE'?statusFence(`'${prefix}:'||OLD.${key}`):statusFence(`'${prefix}:'||OLD.${key}`)+statusFence(`'${prefix}:'||NEW.${key}`);
+        storage.internal.exec(`CREATE TRIGGER IF NOT EXISTS clank_status_fence_${table}_${event} AFTER ${event}${event==='UPDATE'?' OF '+columns:''} ON ${table} BEGIN ${generation} END`);
+      }
+    }
     if (options.retention) retentionController = await createRetentionController({ ...options.retention, native: storage.internal, kinds: ["audit"],
       refresh(userId, sessionId) { const auth = storage.auth.refreshSession(sessionId); return auth?.user?.id === userId ? auth : null; },
       scope(_context, resource) { return resource.organizationId ? `organization:${resource.organizationId}` : resource.ownerId ? `account:${resource.ownerId}` : "platform"; },
@@ -1610,6 +1812,13 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     pruneUsageStorage(storage.internal, usageOpenedAt, limits.usageRetentionMonths);
     reconcileBackupObjectBinding(storage.internal, backupObjects);
   } catch (error) {
+    await pointInTime?.close();
+    organizationSecurityStores.delete(storage.internal);
+    organizationSecurity?.close();
+    temporaryAccess?.close();
+    statusPages?.close();
+    closeProjectSlos?.();
+    projectCosts?.close();
     serviceAccounts?.close();
     retentionController?.close();
     await auditExporter?.close();
@@ -1626,7 +1835,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
   const nativeOrchestrator = openDeploymentOrchestrator(storage.database);
   const providerWriter = <Value>(projectId: string, write: () => Promise<Value>): Promise<Value> => {
     requireNoProviderCanary(projectId);
-    if (!providerCanaryRecord(projectId)) return write();
+    if (!providerCandidateRecord(projectId)) return write();
     const authority = captureProjectAuthority(projectId, true);
     const outer = providerWriterScope.getStore();
     const guard = () => { outer?.(); authority(); requireNoProviderCanary(projectId); };
@@ -1894,6 +2103,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     save(challenge) {
       storage.internal.transaction(() => {
         authorize?.();
+        if(statusPages?.reservedHostname(challenge.hostname))throw new PlatformError(409,'DOMAIN_UNAVAILABLE','This hostname is reserved for a customer status page.');
         const existing = storage.internal.prepare(
           "SELECT id, project_id FROM clank_platform_domains WHERE hostname = ?",
         ).get(challenge.hostname);
@@ -1974,17 +2184,26 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
   let lastMetricPrune = 0;
   let lastUsagePrune = usageOpenedAt;
   const admitIngressRequest = (request: Readonly<IngressAdmissionRequest>): IngressAdmissionDecision => {
+    if (projectCosts) {
+      try {
+        const decision = projectCosts.admission(request.projectId);
+        if (!decision.allowed) return {allowed: false, code: decision.code!, message: decision.message!, retryAfterSeconds: decision.retryAfterSeconds!};
+      } catch {
+        return {allowed: false, code: "PROJECT_COST_ADMISSION_UNAVAILABLE", message: "Project cost admission could not verify its retained policy.", retryAfterSeconds: 60};
+      }
+    }
     if (request.recordedAt - lastUsagePrune >= 60 * 60_000) {
       lastUsagePrune = request.recordedAt;
       pruneUsageStorage(storage.internal, request.recordedAt, limits.usageRetentionMonths);
     }
     return admitProjectUsage(storage.internal, request, quotaDefaults);
   };
-  const retainedCanary = storage.internal.prepare("SELECT project_id FROM clank_platform_provider_canaries LIMIT 1").get();
+  const retainedCanary = storage.internal.prepare("SELECT project_id FROM clank_platform_provider_canaries WHERE protocol=1 LIMIT 1").get();
   const reportPolicy = canaryOptions ?? (retainedCanary ? providerCanaryRecord(String(retainedCanary.project_id))?.operation.policy : undefined);
   const canaryHistory = reportPolicy ? createManagedCanary(storage.internal, reportPolicy) : undefined;
   const canaries = canaryOptions ? canaryHistory : undefined;
   const recordIngressMetric = (metric: IngressRequestMetric): void => {
+    projectSlos.record(metric);
     canaries?.record(metric);
     recordMetric(storage.internal, metric);
     if (metric.admitted) {
@@ -2020,6 +2239,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           ? { allowedUpstreamHosts: providerPlacement.allowedProviderHosts }
           : {}),
         admitRequest: admitIngressRequest,
+        shadow: { observe: (request, primary, metadata) => shadowController.observer.observe(request, primary, metadata) },
         assertCanaryCurrent: route => { if (!canaries) throw new Error("Canary routing is unavailable."); return canaries.assertCurrent(route); },
         prepareRoute: async (route) => {
           if (!prepareIngressRoute) throw new Error("Application runtime preparation is unavailable.");
@@ -2245,6 +2465,16 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     leadership?.assertCurrent();
     if (closed) throw new PlatformError(503, "PLATFORM_CLOSED", "Platform closed while the application was starting.");
     projectLeaseAssertions.get(projectId)?.();
+  };
+
+  const requireRecoveryProjectLease = (projectId: string): void => {
+    leadership?.assertCurrent();
+    const assertion = projectLeaseAssertions.get(projectId);
+    if (!assertion) throw new PlatformError(409, "PROJECT_LEASE_LOST", "Recovery no longer owns this project's native operation lease.");
+    // Consult the current native row at every asynchronous recovery boundary;
+    // the renewal timer and a final withProjectLock check cannot fence earlier
+    // filesystem publication or an already committed checkpoint receipt.
+    assertion();
   };
 
   const launchBackgroundProcesses = async (
@@ -3055,8 +3285,9 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     acceptance?: DeploymentAcceptance,
     assertCurrent?: () => void,
   ): Promise<Record<string, unknown>> => {
-    const retained = providerCanaryRecord(project.id);
-    if (retained && retained.operation.phase !== "complete" || canaryOptions?.provider && project.activeReleaseId && project.activeGeneration !== null) {
+    const retained = providerCandidateRecord(project.id);
+    if(retained?.protocol===2)requireNoProviderCanary(project.id);
+    if (retained?.protocol===1 && retained.operation.phase !== "complete" || canaryOptions?.provider && project.activeReleaseId && project.activeGeneration !== null) {
       return deployProviderCanary(principal, project, release, config, acceptance, assertCurrent ?? (() => { requireCurrentPlatformPrincipal(storage, principal); accessibleProject(storage.internal, project.id, principal, "deploy"); }));
     }
     return queueProviderRelease(principal, project, release, config, false, "deploy", assertCurrent,
@@ -3692,22 +3923,24 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     return origin;
   };
 
-  const assertCanaryRecord = (projectId: string, record: PlatformProviderCanaryRecord, authority: () => void) => {
+  const assertCanaryRecord = (projectId: string, record: PlatformProviderCandidateRecord, authority: () => void) => {
     authority();
-    const current = providerCanaryRecord(projectId);
+    const current = providerCandidateRecord(projectId);
     if (!current || current.epoch !== record.epoch || current.serialized !== record.serialized) throw new PlatformError(409, "PROVIDER_CANARY_SUPERSEDED", "The retained provider canary operation changed.");
   };
   const saveCanaryRecord = (projectId: string, prior: PlatformProviderCanaryRecord | null, operation: PlatformProviderCanaryOperation, authority: () => void): PlatformProviderCanaryRecord => {
-    const serialized = JSON.stringify(operation), epoch = canaryInteger(Math.max((prior?.epoch ?? 0) + 1, operation.retirementEpoch));
+    const retained = providerCandidateRecord(projectId);
+    const previous = prior ?? (retained?.protocol===2 && retained.operation.phase==="complete" ? retained : null);
+    const serialized = JSON.stringify(operation), epoch = canaryInteger(Math.max((previous?.epoch ?? 0) + 1, operation.retirementEpoch));
     const record = platformCanaryRecord({ project_id: projectId, protocol: 1, epoch, operation: serialized, updated_at: operation.updatedAt }, projectId)!;
     const write = () => {
       authority();
-      if (prior) assertCanaryRecord(projectId, prior, authority);
-      else if (providerCanaryRecord(projectId)) throw new Error("Provider canary identity was already reserved.");
+      if (previous) { assertCanaryRecord(projectId, previous, authority);if(previous.protocol===2)readShadowReplays(storage.internal,projectId,value=>syncHash(value,"hex")); }
+      else if (providerCandidateRecord(projectId)) throw new Error("Provider canary identity was already reserved.");
       const written = storage.internal.prepare(`INSERT INTO clank_platform_provider_canaries(project_id,protocol,epoch,operation,updated_at) VALUES(?,1,?,?,?)
         ON CONFLICT(project_id) DO UPDATE SET protocol=1,epoch=excluded.epoch,operation=excluded.operation,updated_at=excluded.updated_at`).run(projectId, epoch, serialized, operation.updatedAt);
       if (Number(written.changes) !== 1) throw new Error("Provider canary journal write was not applied.");
-      const marked = storage.internal.prepare("UPDATE clank_platform_projects SET provider_canary_epoch=? WHERE id=? AND provider_canary_epoch=?").run(epoch, projectId, prior?.epoch ?? 0);
+      const marked = storage.internal.prepare("UPDATE clank_platform_projects SET provider_canary_epoch=? WHERE id=? AND provider_canary_epoch=?").run(epoch, projectId, previous?.epoch ?? 0);
       if (Number(marked.changes) !== 1) throw new Error("Provider canary project receipt write was not applied.");
       const confirmed = providerCanaryRecord(projectId);
       if (!confirmed || confirmed.epoch !== epoch || confirmed.serialized !== serialized) throw new Error("Provider canary journal write was not retained exactly.");
@@ -3716,13 +3949,14 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     if (storage.internal.inTransaction) write(); else storage.internal.transaction(write);
     return record;
   };
-  const nextCanaryEpoch = (record: PlatformProviderCanaryRecord | null) => canaryInteger((record?.epoch ?? 0) + 1);
-  const canaryControlRequest = async (projectId: string, record: PlatformProviderCanaryRecord, action: "binding" | "prepare" | "inspect" | "retire", input: unknown, assertCurrent: () => void, capsule?: Uint8Array): Promise<unknown> => {
+  const nextCanaryEpoch = (record: PlatformProviderCandidateRecord | null) => canaryInteger((record?.epoch ?? 0) + 1);
+  const canaryControlRequest = async (projectId: string, record: {readonly operation: Pick<ShadowOperation,"origin"|"credentialGeneration">}, action: "binding" | "prepare" | "inspect" | "retire", input: unknown, assertCurrent: () => void, capsule?: Uint8Array, signal?:AbortSignal): Promise<unknown> => {
     assertCurrent();
     if (!providerPlacement || providerIngressOrigin(record.operation.origin, providerPlacement.allowedProviderHosts) !== record.operation.origin) throw new Error("The retained provider origin is unavailable.");
     const url = new URL(deploymentProviderCanaryPath(projectId, action), record.operation.origin).href;
     const controller = new AbortController(), started = performance.now(), wall = Date.now(), duration = providerPlacement.activationTimeoutMs;
     const timer = setTimeout(() => controller.abort(), duration);
+    const abort=()=>controller.abort();signal?.addEventListener("abort",abort,{once:true});if(signal?.aborted)abort();
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     const current = () => {
       assertCurrent();
@@ -3767,7 +4001,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       if (result.protocol !== DEPLOYMENT_PROVIDER_CANARY_CONTROL_PROTOCOL) throw new Error("Provider canary response protocol is unsupported.");
       return result[field];
     } finally {
-      controller.abort(); clearTimeout(timer); void reader?.cancel().catch(() => undefined);
+      controller.abort(); clearTimeout(timer);signal?.removeEventListener("abort",abort); void reader?.cancel().catch(() => undefined);
     }
   };
   const retireProviderCanary = async (projectId: string, input: PlatformProviderCanaryRecord, authority: () => void, outcome: "passed" | "failed" | "interrupted", reason: string | null): Promise<PlatformProviderCanaryRecord> => {
@@ -3800,6 +4034,82 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     return record;
     });
   };
+  const shadowLifecycle: ShadowLifecycleAdapter = {
+    read(projectId) { const record=providerCandidateRecord(projectId);return record?.protocol===2?record:null; },
+    save(projectId,prior,operation,current) { return saveShadowRecord(storage.internal,projectId,prior,operation,current,value=>syncHash(value,"hex")); },
+    async retire(projectId,record,current) {
+      const op=record.operation;
+      const raw=await canaryControlRequest(projectId,record,"retire",{primary:op.primary,operationId:op.operationId,controllerEpoch:op.controllerEpoch,
+        releaseId:op.releaseId,capsuleSha256:op.capsuleSha256,retirementEpoch:op.retirementEpoch},current);
+      current();return canaryRetirement(raw,op);
+    },
+  };
+  const assertShadowAdmission=(projectId:string,operation:ShadowOperation,current:()=>void)=>{
+    current();
+      if(!shadowPolicy || operation.policyRevision!==shadowPolicy.revision || operation.policyDigest!==syncHash(JSON.stringify(shadowPolicy),"hex"))throw new Error("Shadow policy is disabled or changed.");
+      if(JSON.stringify(narrowShadowPolicy(shadowPolicy,operation.policy))!==JSON.stringify(operation.policy))throw new Error("Shadow session policy differs from its approved bounds.");
+      if(storage.internal.prepare("SELECT 1 FROM clank_deployment_operations WHERE project_id=? AND state IN ('queued','retry','leased') LIMIT 1").get(projectId))throw new Error("The primary still has a pending operation.");
+      const project=projectById(storage.internal,projectId),candidate=releaseById(storage.internal,operation.releaseId);
+      if(!project || !candidate || candidate.projectId!==projectId || !shadowCandidateEligible(candidate) || !candidate.artifactAvailable
+        || candidate.digest!==operation.artifactSha256 || project.activeReleaseId!==operation.primaryReleaseId || project.activeGeneration!==operation.credentialGeneration)throw new Error("The shadow candidate or primary changed.");
+      const primary=releaseById(storage.internal,operation.primaryReleaseId);if(!primary)throw new Error("The shadow primary is absent.");requireDeploymentRelease(primary);
+      const runtime=exactProviderRuntime(project,primary);
+      if(runtime.nodeId!==operation.nodeId || exactProviderOrigin(project,runtime.nodeId)!==operation.origin || storage.internal.prepare("SELECT fence FROM clank_deployment_project_fences WHERE project_id=?").get(projectId)?.fence!==operation.primaryFence)throw new Error("The shadow runtime binding changed.");
+    current();
+  };
+  const shadowController=createShadowController({
+    ...shadowLifecycle,
+    lock:(projectId,work,wait=false)=>withProjectLock(projectId,work,wait),
+    authority:projectId=>captureProjectAuthority(projectId,true),
+    // Detached shadow tasks use the captured owner capability, never an ingress request's unrelated ALS scope.
+    scope:(current,work)=>providerWriterScope.run(current,work),
+    admit:(projectId,operation)=>assertShadowAdmission(projectId,operation,()=>{}),
+    begin(projectId,operation,current){
+      const admit=()=>assertShadowAdmission(projectId,operation,current);admit();
+      if(operation.report.protocol!==2)throw new Error("New shadow intent requires an enrolled version-two report.");
+      const prior=providerCandidateRecord(projectId);requireNoProviderCanary(projectId);
+      if(prior && prior.operation.phase!=="complete")throw new Error("A candidate still retains the shared project slot.");
+      if(operation.controllerEpoch!==nextCanaryEpoch(prior))throw new Error("Shadow controller epoch is not current.");
+      return saveShadowRecord(storage.internal,projectId,prior,operation,admit,value=>syncHash(value,"hex"));
+    },
+    replay:(projectId,key,current,bySession=false)=>readShadowReplayView(projectId,key,current,bySession),
+    history:(projectId,current)=>readShadowHistoryView(projectId,current),
+    async prepare(projectId,record,change,current,signal,reviewedPrimary){
+      const op=record().operation,project=projectById(storage.internal,projectId),candidate=releaseById(storage.internal,op.releaseId),primary=releaseById(storage.internal,op.primaryReleaseId);
+      if(!project || !candidate || !primary || candidate.config.jobs || !op.policy.readPaths.includes(candidate.config.health.path))throw new Error("Shadow candidates require an approved public health path and no declared jobs.");
+      current();await providerPromotionCertificate(project,op.nodeId);current();
+      const artifact=await readRunnerReleaseArtifact(paths.projects,candidate,signal,runnerArtifactObjects);current();
+      const previous=await readRunnerReleaseArtifact(paths.projects,primary,signal,runnerArtifactObjects);current();
+      if(!artifact || !previous || artifact.sha256!==op.artifactSha256 || previous.sha256!==primary.digest)throw new Error("The exact candidate or primary artifact is unavailable.");
+      const candidateBundle=await decodeDeploymentBundle(artifact.bytes);current();
+      const primaryBundle=await decodeDeploymentBundle(previous.bytes);current();
+      if(!samePromotionMigrations(candidateBundle,primaryBundle))throw new Error("Shadow candidates must preserve the primary database migrations and path.");
+      const capsule=await createDeploymentRuntimeCapsule({projectId,releaseId:op.releaseId,generation:1,artifact:artifact.bytes,environment:{},database:{path:candidate.config.database.path,mode:"preserve"},
+        ingress:{route:providerRuntimePath(projectId),token:providerIngressToken(masterKey,projectId,op.credentialGeneration)}},
+        {maxArtifactBytes:runnerArtifactLimit,maxDatabaseBytes:providerPlacement!.maxDatabaseBytes,maxCapsuleBytes:providerPlacement!.maxRuntimeBytes});current();
+      change(value=>({...value,capsuleSha256:capsule.sha256,updatedAt:Math.max(Date.now(),value.updatedAt)}));
+      const primaryBinding=canaryBinding(await canaryControlRequest(projectId,record(),"binding",null,current,undefined,signal));current();
+      if(primaryBinding.projectId!==projectId || primaryBinding.releaseId!==op.primaryReleaseId || primaryBinding.generation!==op.credentialGeneration || primaryBinding.fence!==op.primaryFence || reviewedPrimary && !samePlatformCanaryBinding(primaryBinding,reviewedPrimary))throw new Error("Shadow primary binding differs.");
+      change(value=>({...value,primary:primaryBinding,phase:"preparing",updatedAt:Math.max(Date.now(),value.updatedAt)}));
+      const raw=canaryObject(await canaryControlRequest(projectId,record(),"prepare",{primary:primaryBinding,operationId:op.operationId,controllerEpoch:op.controllerEpoch,releaseId:op.releaseId,
+        capsuleSha256:capsule.sha256,purpose:"shadow",stateProtocol:"clank-provider-canary/2"},current,capsule.bytes,signal),
+        ["protocol","purpose","operationId","primary","controllerEpoch","candidateProjectId","releaseId","capsuleSha256","phase","expiresAt","snapshot","route"]);current();
+      const snapshot=canaryObject(raw.snapshot,["sha256","bytes","startedAt","completedAt"]),route=canaryObject(raw.route,["projectId","releaseId","generation","path","token","readPaths"]);
+      if(raw.protocol!=="clank-provider-canary/2" || raw.purpose!=="shadow" || raw.phase!=="running" || !samePlatformCanaryBinding(canaryBinding(raw.primary),primaryBinding)
+        || raw.operationId!==op.operationId || raw.controllerEpoch!==op.controllerEpoch || raw.releaseId!==op.releaseId || raw.capsuleSha256!==capsule.sha256
+        || raw.candidateProjectId!==platformCanaryCandidateId(record().operation) || canaryInteger(raw.expiresAt)<op.expiresAt
+        || route.projectId!==raw.candidateProjectId || route.releaseId!==op.releaseId || route.generation!==1 || route.path!==providerRuntimePath(String(raw.candidateProjectId))
+        || typeof route.token!=="string" || !/^clanki_[A-Za-z0-9_-]{32,192}$/u.test(route.token) || !Array.isArray(route.readPaths)
+        || route.readPaths.length>128 || route.readPaths.some(path=>typeof path!=="string" || path.length>512) || op.policy.readPaths.some(path=>!(route.readPaths as string[]).includes(path)))throw new Error("Shadow provider proof is unavailable or differs.");
+      const checkpoint=Object.freeze({sha256:canaryDigest(snapshot.sha256),bytes:canaryInteger(snapshot.bytes),providerStartedAt:canaryInteger(snapshot.startedAt),providerCompletedAt:canaryInteger(snapshot.completedAt),platformObservedAt:Date.now()});
+      const candidateRoute=Object.freeze({projectId:String(route.projectId),releaseId:String(route.releaseId),path:String(route.path),token:route.token,generation:1,readPaths:Object.freeze([...op.policy.readPaths])});
+      const primaryRoute=Object.freeze({id:`route_${projectId}`,projectId,releaseId:op.primaryReleaseId,hosts:Object.freeze([] as string[]),active:true,upstream:op.origin,
+        runtime:Object.freeze({protocol:DEPLOYMENT_RUNTIME_PROTOCOL,generation:op.credentialGeneration,path:providerRuntimePath(projectId),token:providerIngressToken(masterKey,projectId,op.credentialGeneration)})});
+      return Object.freeze({snapshot:checkpoint,observation:Object.freeze({primary:primaryRoute,
+        request:createShadowCandidateRequest({...candidateRoute,origin:op.origin,protocol:DEPLOYMENT_RUNTIME_PROTOCOL,methods:op.policy.methods})})});
+    },
+    onError:error=>options.onError?.(error),
+  });
   const inspectCanaryState = (value: unknown, record: PlatformProviderCanaryRecord, preparing: boolean): DeploymentProviderCanaryState & { route?: Extract<IngressCanaryRoute, { runtime: object }> } => {
     const keys = ["protocol", "operationId", "primary", "controllerEpoch", "candidateProjectId", "releaseId", "capsuleSha256", "phase", "expiresAt"];
     const raw = canaryObject(value, preparing ? [...keys, "route"] : keys), primary = canaryBinding(raw.primary), op = record.operation;
@@ -3840,6 +4150,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
   const deployProviderCanary = async (principal: TokenPrincipal, project: ProjectRow, release: ReleaseRow, config: DeploymentBundle["config"], acceptance: DeploymentAcceptance | undefined, currentAdmission: () => void): Promise<Record<string, unknown>> => {
     const authority = captureProjectAuthority(project.id, true), outer = providerWriterScope.getStore();
     return providerWriterScope.run(() => { outer?.(); authority(); }, async () => {
+    const sharedCandidate=providerCandidateRecord(project.id);
+    if(sharedCandidate?.protocol===2)requireNoProviderCanary(project.id);
     let record = providerCanaryRecord(project.id);
     const admit = () => {
       authority(); currentAdmission(); requireFreshPlatformAuthenticationForCanary(principal);
@@ -3889,7 +4201,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     if (config.jobs || !canaryOptions.provider.readPaths.includes(config.health.path)) throw new PlatformError(409, "PROVIDER_CANARY_PROFILE_UNSUPPORTED", "Provider canaries require no declared jobs and an approved public health path.");
     const runtime = exactProviderRuntime(source, primaryRelease), origin = exactProviderOrigin(source, runtime.nodeId);
     const fence = canaryInteger(storage.internal.prepare("SELECT fence FROM clank_deployment_project_fences WHERE project_id=?").get(project.id)?.fence);
-    const epoch = nextCanaryEpoch(record), now = Date.now();
+    const epoch = nextCanaryEpoch(record ?? providerCandidateRecord(project.id)), now = Date.now();
     record = saveCanaryRecord(project.id, record, { operationId: `canary_${crypto.randomUUID()}`, releaseId: release.id, artifactSha256: release.digest, capsuleSha256: null,
       controllerEpoch: epoch, retirementEpoch: epoch, primary: null, primaryReleaseId: primaryRelease.id, primaryFence: fence, nodeId: runtime.nodeId, origin,
       credentialGeneration: runtime.generation, policy: canaryOptions, phase: "binding", outcome: null, reason: null, retirement: null, generation: null, createdAt: now, updatedAt: now }, quiescentPrimary);
@@ -5274,7 +5586,20 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     };
   };
 
+  const recoveryCatalog=()=>{
+    const tables=storage.internal.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name IN ('clank_platform_pitr_state','clank_platform_pitr_policies','clank_platform_pitr_operations','clank_platform_pitr_checkpoints','clank_platform_pitr_archives')").get()!.n;
+    if(tables===0)return false;
+    if(tables!==5||storage.internal.prepare("SELECT protocol FROM clank_platform_pitr_state WHERE id=1").get()?.protocol!==1)throw new PlatformError(409,"RECOVERY_PROTOCOL_UNAVAILABLE","Preserve the retained recovery protocol for operator recovery.");return true;
+  };
+  const recoveryPendingTarget=(projectId:string)=>recoveryCatalog()&&!!storage.internal.prepare("SELECT 1 FROM clank_platform_pitr_operations WHERE kind='restore' AND state='pending' AND json_extract(receipt,'$.intent.destinationId')=? LIMIT 1").get(projectId);
+  const recoveryPinned=(projectId:string,releaseId?:string)=>{
+    if(!recoveryCatalog())return false;
+    const checkpoints=storage.internal.prepare("SELECT binding FROM clank_platform_pitr_checkpoints WHERE project=? LIMIT 1001").all(projectId);if(checkpoints.length>1000)throw new PlatformError(409,"RECOVERY_PROTOCOL_UNAVAILABLE","Retained recovery metadata exceeds its bound.");
+    for(const row of checkpoints){const binding=JSON.parse(String(row.binding));if(binding?.projectId!==projectId||typeof binding.releaseId!=="string"||!/^[A-Za-z0-9_-]{1,128}$/u.test(binding.releaseId))throw new PlatformError(409,"RECOVERY_PROTOCOL_UNAVAILABLE","Preserve invalid retained recovery metadata.");if(releaseId===undefined||binding.releaseId===releaseId)return true;}
+    return !!storage.internal.prepare("SELECT 1 FROM clank_platform_pitr_operations WHERE project=? AND state='pending' AND (kind='export' AND (? IS NULL OR json_extract(receipt,'$.binding.releaseId')=?) OR kind='restore' AND (? IS NULL OR json_extract(receipt,'$.intent.sourceReleaseId')=?)) LIMIT 1").get(projectId,releaseId??null,releaseId??null,releaseId??null,releaseId??null);
+  };
   const requireNoInterruptedPromotion = (projectId: string, dependencyId?: string): void => {
+    if(recoveryPendingTarget(projectId))throw new PlatformError(409,"RECOVERY_DESTINATION_PENDING","The reserved recovery destination remains stopped until its exact restore is verified and accepted.");
     requireNoInterruptedDependencyActivation(projectId, dependencyId);
     if (storage.internal.prepare("SELECT 1 FROM clank_platform_promotions WHERE target_project_id=? AND state IN ('staging','recovery-required') LIMIT 1").get(projectId)) {
       throw new PlatformError(409, "PROMOTION_RECOVERY_REQUIRED", "The target has an interrupted promotion; verified recovery is required before starting another writer.");
@@ -5341,6 +5666,242 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     });
     // The supervisor uses its own native connection: never enroll inside the storage transaction.
     current(); leadership.enrollProviderShadow(); current();
+  };
+  const shadowHash=(value:string)=>syncHash(value,"hex");
+  const shadowCandidateEligible=(release:ReleaseRow)=>release.purpose==="shadow-upload" && release.status==="staged" || release.purpose==="deployment" && release.status==="inactive";
+  const shadowRequestId=(value:unknown)=>{if(typeof value!=="string" || !/^[A-Za-z0-9_-]{1,128}$/u.test(value))throw new PlatformError(422,"SHADOW_INPUT_INVALID","Shadow identity must be bounded ASCII.");return value;};
+  const shadowPrincipalDigest=(principal:TokenPrincipal,projectId:string)=>shadowHash(JSON.stringify({version:1,domain:"clank-shadow-principal",projectId,userId:principal.userId,sessionId:principal.sessionId}));
+  const requireShadowHuman=(principal:TokenPrincipal,projectId:string,fresh=true)=>{
+    requireCurrentPlatformPrincipal(storage,principal);
+    if(principal.machine || principal.tokenId || !principal.sessionId || principal.impersonation)throw new PlatformError(403,"HUMAN_AUTH_REQUIRED","Shadow control requires a current human browser session.");
+    accessibleProject(storage.internal,projectId,principal,"deploy");requireNoEvacuation(projectId);
+    if(fresh)requireFreshUploadAuthority(principal,projectId);
+  };
+  const shadowSignature=(canonical:string)=>process.getBuiltinModule("node:crypto").createHmac("sha256",masterKey).update("clank-shadow-review/1\n").update(canonical).digest();
+  const requireShadowPolicy=()=>{if(!shadowPolicy)throw new PlatformError(409,"SHADOW_DISABLED","Shadow observation is disabled.");return shadowPolicy;};
+  const readShadowReplayView=(projectId:string,key:string,current:()=>void,bySession=false):ShadowReplayView|null=>providerWriterScope.run(current,()=>storage.internal.transaction(()=>{
+    current();const record=providerCandidateRecord(projectId);
+    // No schema is created by a read-only replay. Ordinary catalogs remain ordinary.
+    if(!storage.internal.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_platform_shadow_reports' AND type='table'").get()){current();return null;}
+    const rows=readShadowReplays(storage.internal,projectId,shadowHash),replay=rows.find(row=>bySession?row.receipt.identity.sessionId===key:row.receipt.identity.idempotencyKeyDigest===key);
+    current();return replay?Object.freeze({replay,current:record?.protocol===2 && record.operation.sessionId===replay.receipt.identity.sessionId?record:null,epoch:record?.epoch??0}):null;
+  }));
+  const readShadowHistoryView=(projectId:string,current:()=>void):ShadowHistoryView=>providerWriterScope.run(current,()=>storage.internal.transaction(()=>{
+    current();
+    const catalog=storage.internal.prepare("SELECT name FROM sqlite_schema WHERE name IN ('clank_platform_shadow_state','clank_platform_shadow_reports')").all();
+    const project=storage.internal.prepare("SELECT * FROM clank_platform_projects WHERE id=?").get(projectId);
+    if(!project || catalog.length!==0 && catalog.length!==2 || catalog.length===0 && (shadowPolicy || project.shadow_replay_receipt!=null))throw new PlatformError(409,"SHADOW_STATE_INVALID","Retained shadow history is missing; preserve it for recovery.");
+    if(catalog.length)assertProviderShadowSchema({prepare:sql=>storage.internal.prepare(sql==="PRAGMA table_list"?"SELECT * FROM pragma_table_list":sql)});
+    const record=providerCandidateRecord(projectId),replays=catalog.length?readShadowReplays(storage.internal,projectId,shadowHash):Object.freeze([]);
+    const view=Object.freeze({replays,current:record?.protocol===2?record:null,epoch:record?.epoch??0});
+    selectShadowHistory(view,1);current();return view;
+  }));
+  const shadowSessionPayload=(view:ShadowReplayView):PlatformShadowSession=>{
+    const retained=view.replay.receipt.identity,op=view.current?.operation,identity=op??retained,snapshot=identity.snapshot;
+    return {sessionId:identity.sessionId,operationId:identity.operationId,controllerEpoch:identity.controllerEpoch,epoch:view.current?.epoch??retained.epoch,
+      policyRevision:identity.policyRevision,releaseId:identity.releaseId,artifactSha256:identity.artifactSha256,primary:{releaseId:identity.primaryReleaseId,generation:op?.credentialGeneration??retained.primaryGeneration},
+      phase:identity.phase,outcome:identity.outcome,stopRequested:identity.stopRequested,cleanupRequired:identity.phase!=="complete",reportAvailable:view.current!==null || view.replay.report!==null,
+      policy:identity.policy,snapshot:snapshot?{...snapshot,elapsedSinceObservationMs:shadowController.elapsed(retained.projectId,identity.sessionId),crossHostFreshness:"unknown" as const}:null,
+      report:op?.report??view.replay.report,createdAt:identity.createdAt,expiresAt:identity.expiresAt,updatedAt:identity.updatedAt,
+      nextAction:identity.phase==="complete"?"none":identity.phase==="retiring" || identity.phase==="retired"?"recover":identity.stopRequested?"wait":"stop"};
+  };
+  const shadowResponse=(view:ShadowReplayView):PlatformShadowResponse=>({ok:true,enabled:Boolean(shadowPolicy),epoch:view.epoch,session:shadowSessionPayload(view)});
+  const shadowCursorSignature=(canonical:string)=>process.getBuiltinModule("node:crypto").createHmac("sha256",masterKey).update("clank-shadow-cursor/1\n").update(canonical).digest();
+  const readShadowStatus=async(principal:TokenPrincipal,projectId:string,search:string,sessionId:string|undefined,request:Request,identity:Readonly<{url:string;method:string;headers:string}>)=>{
+    const {url:admittedUrl,method:admittedMethod,headers:admittedHeaders}=identity,supervisor=leadership;
+    const authorized=()=>{
+      if(closed || leadership!==supervisor)throw new PlatformError(503,"PLATFORM_CLOSED","Platform authority is unavailable.");
+      supervisor?.assertCurrent();
+      if(principal.impersonation)throw new PlatformError(403,"IMPERSONATION_FORBIDDEN","Shadow status requires the current account principal.");
+      requireCurrentPlatformPrincipal(storage,principal);
+      if(principal.tokenId && principal.projectId && !principal.permissions.includes("read"))throw new PlatformError(403,"TOKEN_SCOPE_DENIED","Shadow status requires explicit project read permission.");
+      accessibleProject(storage.internal,projectId,principal,"read");
+      if(request.url!==admittedUrl || request.method!==admittedMethod || JSON.stringify([...request.headers])!==admittedHeaders)throw new PlatformError(403,"SHADOW_REQUEST_CHANGED","Shadow request identity changed.");
+    };
+    authorized();let cursor:ShadowCursor|undefined,limit=20;
+    if(sessionId!==undefined){shadowRequestId(sessionId);if(search)throw new PlatformError(400,"SHADOW_CURSOR_INVALID","Shadow detail does not accept query fields.");}
+    else{
+      const query=shadowStatusQuery(search);limit=query.limit;
+      if(query.before){const parsed=parseShadowCursorToken(query.before),signature=shadowCursorSignature(parsed.canonical);
+        if(parsed.payload.projectId!==projectId || !process.getBuiltinModule("node:crypto").timingSafeEqual(signature,parsed.signature))throw new PlatformError(400,"SHADOW_CURSOR_INVALID","Refresh the shadow status cursor.");
+        cursor=parsed.payload;
+      }
+    }
+    const payload=(view:ShadowHistoryView)=>{
+      authorized();selectShadowHistory(view,limit,cursor);
+      let value:PlatformShadowResponse|PlatformShadowList;
+      if(sessionId!==undefined){const replay=view.replays.find(row=>row.receipt.identity.sessionId===sessionId);if(!replay)throw new PlatformError(404,"SHADOW_SESSION_NOT_FOUND","Shadow session not found.");
+        value=shadowResponse({replay,current:view.current?.operation.sessionId===sessionId?view.current:null,epoch:view.epoch});
+      }else{const selected=selectShadowHistory(view,limit,cursor);value={ok:true,enabled:Boolean(shadowPolicy),epoch:view.epoch,policy:shadowPolicy??null,sessions:selected.views.map(shadowSessionPayload),
+        nextBefore:selected.nextEpoch===null?null:shadowCursorToken({version:1,projectId,ceilingEpoch:selected.ceilingEpoch,beforeEpoch:selected.nextEpoch},shadowCursorSignature)};}
+      const sessions="session" in value?[value.session]:value.sessions;
+      if(sessions.some(session=>new TextEncoder().encode(JSON.stringify(session)).byteLength>32768))throw new PlatformError(409,"SHADOW_STATE_INVALID","Shadow status exceeds its retained bound.");
+      const body=JSON.stringify(value);if(new TextEncoder().encode(body).byteLength>1048576)throw new PlatformError(409,"SHADOW_STATE_INVALID","Shadow status exceeds its response bound.");
+      authorized();return body;
+    };
+    const owned=shadowController.history(projectId);
+    if(owned){const body=payload(owned.view);return{body,assertCurrent:()=>{authorized();owned.assertCurrent();authorized();}};}
+    const body=await withProjectLock(projectId,async()=>{authorized();const current=captureProjectAuthority(projectId);const view=readShadowHistoryView(projectId,current);const result=payload(view);current();return result;},false);
+    // This reader intentionally released its own project lease. The snapshot is
+    // point-in-time data, while principal and supervisor authority remain current.
+    authorized();return{body,assertCurrent:authorized};
+  };
+  const shadowMcp=async(request:Request,projectId:string,identity:Readonly<{url:string;method:string;headers:string}>)=>{
+    if(request.method!=="POST")throw new PlatformError(405,"SHADOW_MCP_METHOD","Shadow MCP accepts POST only.");
+    const transport=()=>{
+      if(normalizeHostname(new URL(request.url).hostname)!==publicHostname)throw new PlatformError(403,"SHADOW_MCP_HOST","Shadow MCP is available only on the control host.");
+      if(!hasCanonicalRequestTarget(request))throw new PlatformError(403,"SHADOW_MCP_TRANSPORT_UNAVAILABLE","Shadow MCP requires the native canonical request transport.");
+      if(request.url!==identity.url || request.method!==identity.method || JSON.stringify([...request.headers])!==identity.headers)throw new PlatformError(403,"SHADOW_REQUEST_CHANGED","Shadow request identity changed.");
+      if(request.headers.has("cookie") || !/^Bearer (?:clnk|prct|clsa)_[A-Za-z0-9_-]{40,200}$/u.test(request.headers.get("authorization")??""))throw new PlatformError(401,"SHADOW_MCP_BEARER_REQUIRED","Shadow MCP requires an explicit bearer credential without cookies.");
+      const origin=request.headers.get("origin"),site=request.headers.get("sec-fetch-site");
+      if(origin!==null && origin!==new URL(publicUrl).origin || site!==null && !["same-origin","same-site","none"].includes(site))throw new PlatformError(403,"ORIGIN_MISMATCH","Cross-origin request rejected.");
+    };
+    transport();const supervisor=leadership,principal=await requirePlatformPrincipal(storage,request,serviceAccounts);let publication:(()=>void)|undefined;
+    const current=()=>{
+      transport();if(closed || leadership!==supervisor)throw new PlatformError(503,"PLATFORM_CLOSED","Platform authority is unavailable.");supervisor?.assertCurrent();
+      requireCurrentPlatformPrincipal(storage,principal);
+      if(!principal.tokenId || principal.impersonation || principal.projectId && principal.projectId!==projectId)throw new PlatformError(403,"TOKEN_SCOPE_DENIED","Shadow MCP requires exact project read authority.");
+      if(principal.projectId && !principal.permissions.includes("read"))throw new PlatformError(403,"TOKEN_SCOPE_DENIED","Shadow MCP requires explicit read permission.");
+      accessibleProject(storage.internal,projectId,principal,"read");publication?.();
+    };
+    current();
+    // Request-local, stateless framework instance. Admission precedes its body
+    // parser, and no project lease is held while an authenticated body waits.
+    const server=createMcpServer({name:"clank-shadow-status",sessions:false,maxRequestBytes:8192,maxResponseBytes:1048576,
+      allowedOrigins:[new URL(publicUrl).origin],authenticate:async()=>{current();return{context:undefined,scopes:new Set(["agent:read"])};},
+      tools:[{name:"shadow_status",description:"Read retained shadow transport observations and exact cleanup status; never start, stop or promote.",requiredScope:"agent:read",
+        annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false},
+        inputSchema:{type:"object",properties:{sessionId:{type:"string",pattern:"^[A-Za-z0-9_-]{1,128}$"},limit:{type:"integer",minimum:1,maximum:20},before:{type:"string",maxLength:512}},additionalProperties:false,oneOf:[{required:["sessionId"],maxProperties:1},{not:{required:["sessionId"]}}]},
+        async invoke(value){
+          current();let sessionId:string|undefined,search="";
+          try {
+            const input=plainObject(value);
+            if(Object.hasOwn(input,"sessionId")){exact(input,["sessionId"]);sessionId=shadowRequestId(input.sessionId);}
+            else{exact(input,["limit","before"]);const fields:string[]=[];
+              if(Object.hasOwn(input,"limit")){if(!Number.isSafeInteger(input.limit) || Number(input.limit)<1 || Number(input.limit)>20)throw new Error();fields.push("limit="+input.limit);}
+              if(Object.hasOwn(input,"before")){if(typeof input.before!=="string" || !input.before || input.before.length>512 || !/^[A-Za-z0-9_.-]+$/u.test(input.before))throw new Error();fields.push("before="+input.before);}
+              search=fields.length?"?"+fields.join("&"):"";
+            }
+          }catch{throw new McpToolError("SHADOW_INPUT_INVALID","Use an exact sessionId or bounded limit/before fields.");}
+          const result=await readShadowStatus(principal,projectId,search,sessionId,request,identity);current();publication=result.assertCurrent;current();return JSON.parse(result.body);
+        }}]});
+    shadowMcpResponseGuards.set(request,current);
+    try{const response=await server.handle(request);current();return response;}
+    finally{server.close();}
+  };
+  const shadowReviewedArtifacts=async(project:ProjectRow,candidate:ReleaseRow,primary:ReleaseRow,policy:ShadowSessionPolicy,nodeId:string,current:()=>void)=>{
+    current();if(candidate.config.jobs || !policy.readPaths.includes(candidate.config.health.path))throw new PlatformError(409,"SHADOW_CANDIDATE_INELIGIBLE","Shadow requires a reviewed public health path and no declared jobs.");
+    await providerPromotionCertificate(project,nodeId);current();
+    const signal=AbortSignal.timeout(providerPlacement!.activationTimeoutMs);
+    const artifact=await readRunnerReleaseArtifact(paths.projects,candidate,signal,runnerArtifactObjects);current();signal.throwIfAborted();
+    const previous=await readRunnerReleaseArtifact(paths.projects,primary,signal,runnerArtifactObjects);current();signal.throwIfAborted();
+    if(!artifact || !previous || artifact.sha256!==candidate.digest || previous.sha256!==primary.digest)throw new PlatformError(409,"SHADOW_ARTIFACT_UNAVAILABLE","The exact candidate or primary artifact is unavailable.");
+    const candidateBundle=await decodeDeploymentBundle(artifact.bytes);current();const primaryBundle=await decodeDeploymentBundle(previous.bytes);current();
+    if(!samePromotionMigrations(candidateBundle,primaryBundle))throw new PlatformError(409,"SHADOW_CANDIDATE_INELIGIBLE","Shadow requires identical database paths and migrations.");
+  };
+  const inspectShadowReview=async(principal:TokenPrincipal,projectId:string,releaseId:string,expectedEpoch:number,policy:ShadowSessionPolicy,current:()=>void)=>{
+    const configured=requireShadowPolicy(),project=projectById(storage.internal,projectId),candidate=releaseById(storage.internal,releaseId),prior=providerCandidateRecord(projectId);
+    current();requireNoProviderCanary(projectId);requireNoInterruptedPromotion(projectId);
+    if((prior?.epoch??0)!==expectedEpoch)throw new PlatformError(409,"SHADOW_SUPERSEDED","The candidate slot changed; review it again.");
+    if(!project || project.placement!=="provider" || !project.activeReleaseId || !project.activeGeneration || !candidate || candidate.projectId!==projectId
+      || !shadowCandidateEligible(candidate) || !candidate.artifactAvailable || candidate.id===project.activeReleaseId)throw new PlatformError(409,"SHADOW_CANDIDATE_INELIGIBLE","Select an available staged upload or inactive deployment from this project.");
+    const primary=releaseById(storage.internal,project.activeReleaseId);if(!primary)throw new PlatformError(409,"SHADOW_PRIMARY_UNAVAILABLE","The active primary is unavailable.");requireDeploymentRelease(primary);
+    const runtime=exactProviderRuntime(project,primary),origin=exactProviderOrigin(project,runtime.nodeId),fence=canaryInteger(storage.internal.prepare("SELECT fence FROM clank_deployment_project_fences WHERE project_id=?").get(projectId)?.fence);
+    const captured={projectId,releaseId:candidate.id,artifactSha256:candidate.digest,primaryReleaseId:primary.id,primaryGeneration:project.activeGeneration,primaryArtifactSha256:primary.digest,
+      nodeId:runtime.nodeId,origin,credentialGeneration:project.activeGeneration,primaryFence:fence};
+    const stable=()=>{
+      current();requireShadowHuman(principal,projectId);const projectNow=projectById(storage.internal,projectId),candidateNow=releaseById(storage.internal,releaseId),primaryNow=releaseById(storage.internal,primary.id),now=providerCandidateRecord(projectId);
+      if(!projectNow || !candidateNow || !primaryNow || !shadowCandidateEligible(candidateNow) || !candidateNow.artifactAvailable || candidateNow.digest!==candidate.digest
+        || projectNow.activeReleaseId!==primary.id || projectNow.activeGeneration!==captured.primaryGeneration || primaryNow.digest!==primary.digest || (now?.epoch??0)!==expectedEpoch
+        || exactProviderRuntime(projectNow,primaryNow).nodeId!==captured.nodeId || exactProviderOrigin(projectNow,captured.nodeId)!==origin
+        || storage.internal.prepare("SELECT fence FROM clank_deployment_project_fences WHERE project_id=?").get(projectId)?.fence!==fence
+        || storage.internal.prepare("SELECT 1 FROM clank_deployment_operations WHERE project_id=? AND state IN ('queued','retry','leased') LIMIT 1").get(projectId))throw new PlatformError(409,"SHADOW_PRIMARY_CHANGED","The reviewed primary or candidate changed.");
+      requireNoProviderCanary(projectId);requireNoInterruptedPromotion(projectId);
+    };
+    stable();await shadowReviewedArtifacts(project,candidate,primary,policy,runtime.nodeId,stable);stable();
+    const binding=canaryBinding(await canaryControlRequest(projectId,{operation:captured},"binding",null,stable));stable();
+    if(binding.projectId!==projectId || binding.releaseId!==primary.id || binding.generation!==captured.primaryGeneration || binding.fence!==fence)throw new PlatformError(409,"SHADOW_PRIMARY_CHANGED","The provider primary differs from the reviewed runtime.");
+    return {...captured,binding,configured,providerBindingDigest:shadowHash(JSON.stringify({version:1,domain:"clank-shadow-provider-binding",nodeId:captured.nodeId,origin,credentialGeneration:captured.credentialGeneration,primary:binding,primaryArtifactSha256:primary.digest}))};
+  };
+  const previewShadow=async(principal:TokenPrincipal,projectId:string,input:Record<string,unknown>)=>{
+    requireShadowHuman(principal,projectId);exact(input,["releaseId","expectedEpoch","policy"]);
+    const configured=requireShadowPolicy(),releaseId=shadowRequestId(input.releaseId),expectedEpoch=integerInRange(input.expectedEpoch,"expectedEpoch",0,Number.MAX_SAFE_INTEGER),policy=narrowShadowPolicy(configured,input.policy);
+    return withProjectLock(projectId,async()=>{
+      const native=captureProjectAuthority(projectId,true),current=()=>{native();requireShadowHuman(principal,projectId);};
+      return providerWriterScope.run(current,async()=>{
+        const reviewed=await inspectShadowReview(principal,projectId,releaseId,expectedEpoch,policy,current);current();
+        const issuedAt=Date.now(),payload=normalizeShadowReview({version:1,projectId,releaseId,artifactSha256:reviewed.artifactSha256,primaryReleaseId:reviewed.primaryReleaseId,primaryGeneration:reviewed.primaryGeneration,
+          primaryFence:reviewed.primaryFence,primaryIncarnation:reviewed.binding.incarnation,primaryArtifactSha256:reviewed.primaryArtifactSha256,nodeId:reviewed.nodeId,providerBindingDigest:reviewed.providerBindingDigest,
+          credentialGeneration:reviewed.credentialGeneration,principalBindingDigest:shadowPrincipalDigest(principal,projectId),policyRevision:configured.revision,policyDigest:shadowHash(JSON.stringify(configured)),
+          selection:shadowReviewSelection(configured,policy),expectedEpoch,issuedAt,expiresAt:issuedAt+120000,nonce:base64Url(crypto.getRandomValues(new Uint8Array(16))),reviewDigest:"0".repeat(64)});
+        const signed=normalizeShadowReview({...payload,reviewDigest:shadowReviewDigest(payload,payload.principalBindingDigest,policy,shadowHash)}),reviewToken=shadowReviewToken(signed,shadowSignature);current();
+        return {ok:true,reviewToken,expiresAt:signed.expiresAt,review:{projectId,releaseId,artifactSha256:reviewed.artifactSha256,primary:{releaseId:reviewed.primaryReleaseId,generation:reviewed.primaryGeneration},expectedEpoch,policyRevision:configured.revision,policy}};
+      });
+    });
+  };
+  const startShadow=async(principal:TokenPrincipal,projectId:string,input:Record<string,unknown>)=>{
+    requireShadowHuman(principal,projectId);exact(input,["reviewToken","idempotencyKey"]);
+    const token=input.reviewToken,key=input.idempotencyKey;
+    if(typeof token!=="string" || token.length>4150 || typeof key!=="string" || !/^[A-Za-z0-9_-]{16,128}$/u.test(key))throw new PlatformError(422,"SHADOW_INPUT_INVALID","Use the exact bounded review token and ASCII idempotency key.");
+    const inputDigest=shadowHash(JSON.stringify({version:1,action:"shadow-start",projectId,reviewToken:token})),keyDigest=shadowHash(JSON.stringify({version:1,action:"shadow-start",projectId,idempotencyKey:key}));
+    const replay=(view:ShadowReplayView)=>{
+      requireShadowHuman(principal,projectId);
+      if(view.replay.receipt.identity.inputDigest!==inputDigest)throw new PlatformError(409,"SHADOW_REPLAY_CONFLICT","The original key has different reviewed input.");
+      const {payload}=parseShadowReviewToken(token);assertShadowReviewReplay(payload,view.replay.receipt.identity,shadowPrincipalDigest(principal,projectId),shadowHash);
+      return shadowResponse(view);
+    };
+    const owned=shadowController.replay(projectId,keyDigest);
+    if(owned!==undefined){if(owned)return replay(owned);throw new PlatformError(409,"SHADOW_BUSY","Another shadow session owns this project.");}
+    const admission=await withProjectLock(projectId,async()=>{
+      const native=captureProjectAuthority(projectId,true),current=()=>{native();requireShadowHuman(principal,projectId);};
+      return providerWriterScope.run(current,async()=>{
+        const retained=readShadowReplayView(projectId,keyDigest,current);if(retained)return {replayed:replay(retained)};
+        const configured=requireShadowPolicy(),parsed=parseShadowReviewToken(token),payload=parsed.payload,signature=shadowSignature(parsed.canonical),now=Date.now();current();
+        if(!process.getBuiltinModule("node:crypto").timingSafeEqual(signature,parsed.signature) || payload.projectId!==projectId || payload.principalBindingDigest!==shadowPrincipalDigest(principal,projectId)
+          || now<payload.issuedAt || now>=payload.expiresAt || payload.policyRevision!==configured.revision || payload.policyDigest!==shadowHash(JSON.stringify(configured)))throw new PlatformError(409,"SHADOW_REVIEW_EXPIRED","Refresh the exact shadow review.");
+        const policy=expandShadowReviewSelection(configured,payload.selection);
+        if(shadowReviewDigest(payload,shadowPrincipalDigest(principal,projectId),policy,shadowHash)!==payload.reviewDigest)throw new PlatformError(409,"SHADOW_REVIEW_INVALID","The reviewed identity differs.");
+        const reviewed=await inspectShadowReview(principal,projectId,payload.releaseId,payload.expectedEpoch,policy,current);current();
+        if(reviewed.artifactSha256!==payload.artifactSha256 || reviewed.primaryArtifactSha256!==payload.primaryArtifactSha256 || reviewed.providerBindingDigest!==payload.providerBindingDigest
+          || reviewed.binding.incarnation!==payload.primaryIncarnation || reviewed.primaryFence!==payload.primaryFence || reviewed.primaryReleaseId!==payload.primaryReleaseId
+          || reviewed.primaryGeneration!==payload.primaryGeneration || reviewed.nodeId!==payload.nodeId)throw new PlatformError(409,"SHADOW_PRIMARY_CHANGED","The reviewed provider binding changed.");
+        upgradeShadowReportSchema(storage.internal,current);leadership!.enrollProviderShadow();current();
+        const createdAt=Date.now(),epoch=canaryInteger(payload.expectedEpoch+1),operation:ShadowOperation={kind:"shadow",sessionId:"shadow_"+crypto.randomUUID(),operationId:"shadowop_"+crypto.randomUUID(),idempotencyKeyDigest:keyDigest,inputDigest,reviewDigest:payload.reviewDigest,
+          releaseId:payload.releaseId,artifactSha256:payload.artifactSha256,capsuleSha256:null,controllerEpoch:epoch,retirementEpoch:epoch,primary:null,primaryReleaseId:payload.primaryReleaseId,primaryFence:payload.primaryFence,
+          nodeId:payload.nodeId,origin:reviewed.origin,credentialGeneration:payload.credentialGeneration,policyRevision:payload.policyRevision,policyDigest:payload.policyDigest,policy,maxReports:configured.maxReports,
+          phase:"binding",outcome:null,stopRequested:false,snapshot:null,report:emptyShadowReport(2),reservations:[],retirement:null,createdAt,expiresAt:createdAt+policy.durationMs,updatedAt:createdAt};
+        return {operation,primary:reviewed.binding,primaryArtifactSha256:reviewed.primaryArtifactSha256,reviewIssuedAt:payload.issuedAt,reviewExpiresAt:payload.expiresAt};
+      });
+    });
+    if(admission.replayed)return admission.replayed;
+    requireShadowHuman(principal,projectId);
+    const ongoing=()=>{try{requireShadowHuman(principal,projectId,false);}catch{throw new PlatformError(403,"SHADOW_AUTHORITY_REVOKED","The initiating shadow principal is no longer current.");}const primary=releaseById(storage.internal,admission.operation!.primaryReleaseId);
+      if(!primary || primary.digest!==admission.primaryArtifactSha256)throw new PlatformError(409,"SHADOW_PRIMARY_CHANGED","The reviewed primary artifact changed.");};
+    await shadowController.start(projectId,admission.operation!,ongoing,admission.primary,()=>{requireShadowHuman(principal,projectId);if(Date.now()<admission.reviewIssuedAt! || Date.now()>=admission.reviewExpiresAt!)throw new PlatformError(409,"SHADOW_REVIEW_EXPIRED","Refresh the expired shadow review.");});
+    const accepted=shadowController.replay(projectId,keyDigest);
+    if(!accepted)throw new PlatformError(409,"SHADOW_ACCEPTANCE_UNCERTAIN","The durable intent is retained; retry this exact key.");
+    return replay(accepted);
+  };
+  const stopShadow=async(principal:TokenPrincipal,projectId:string,sessionId:string,input:Record<string,unknown>)=>{
+    requireShadowHuman(principal,projectId);exact(input,["operationId","controllerEpoch"]);
+    const operationId=shadowRequestId(input.operationId),controllerEpoch=integerInRange(input.controllerEpoch,"controllerEpoch",1,Number.MAX_SAFE_INTEGER),authorized=()=>requireShadowHuman(principal,projectId);
+    const matching=(view:ShadowReplayView|null)=>{
+      authorized();if(!view || view.replay.receipt.identity.operationId!==operationId || view.replay.receipt.identity.controllerEpoch!==controllerEpoch)throw new PlatformError(409,"SHADOW_SUPERSEDED","The exact shadow session differs.");return view;
+    };
+    const owned=shadowController.replay(projectId,sessionId,true);
+    if(owned!==undefined){const view=matching(owned);if(view.replay.receipt.identity.phase==="complete")return shadowResponse(view);
+      await shadowController.requestStop(projectId,sessionId,operationId,controllerEpoch,authorized);
+      const after=shadowController.replay(projectId,sessionId,true);if(after)return shadowResponse(matching(after));
+    }
+    return withProjectLock(projectId,async()=>{
+      const native=captureProjectAuthority(projectId,true),current=()=>{native();authorized();};
+      return providerWriterScope.run(native,async()=>{
+        const view=matching(readShadowReplayView(projectId,sessionId,current,true));if(view.replay.receipt.identity.phase==="complete")return shadowResponse(view);
+        const record=view.current;if(!record)throw new PlatformError(409,"SHADOW_CLEANUP_REQUIRED","The exact retained cleanup is unavailable.");
+        const stopped=shadowLifecycle.save(projectId,record,{...record.operation,stopRequested:true,updatedAt:Math.max(Date.now(),record.operation.updatedAt)},current);
+        await retireShadow(shadowLifecycle,projectId,stopped,native,"stopped");current();return shadowResponse(matching(readShadowReplayView(projectId,sessionId,current,true)));
+      });
+    });
   };
   const stagingProjects = new Set<string>();
   const stagingIntakes = new Set<ReturnType<typeof releaseUploadDeadline>>();
@@ -5468,7 +6029,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
   ): Promise<Record<string, unknown>> => withProjectLock(project.id, async () => {
     requireCurrentPlatformPrincipal(storage, principal);
     project = accessibleProject(storage.internal, project.id, principal, "deploy").project;
-    const retainedProviderCanary = providerCanaryRecord(project.id);
+    const retainedProviderCanary = providerCandidateRecord(project.id);
+    if(retainedProviderCanary?.protocol===2)requireNoProviderCanary(project.id);
     if (retainedProviderCanary && retainedProviderCanary.operation.phase !== "complete"
       && storage.internal.prepare("SELECT idempotency_key FROM clank_platform_releases WHERE id=?").get(retainedProviderCanary.operation.releaseId)?.idempotency_key !== idempotencyKey) requireNoProviderCanary(project.id);
     const originalAcceptance = acceptance;
@@ -7122,6 +7684,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     // Pinning holds this same source-project lease through artifact verification
     // and insertion. No new pin can race storage removal after this check.
     if (dependencyRecoveryPinned(project.id, release.id)) throw new PlatformError(409, "RELEASE_DEPENDENCY_RECOVERY_PINNED", "Retain the exact artifact until interrupted recovery or initialized provider data has a verified accepted writer.");
+    if(recoveryPinned(project.id,release.id))throw new PlatformError(409,"RELEASE_RECOVERY_PINNED","Retain this exact artifact while encrypted checkpoints or unresolved recovery operations reference it.");
     if (releaseChannelPinned(project.id, release.id)) {
       throw new PlatformError(409, "RELEASE_CHANNEL_PINNED", "Retire the release channels that retain this artifact before removing it.");
     }
@@ -7238,6 +7801,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     const current = () => { outer?.(); native?.(); if (native) authorize?.(metadataDeleted); };
     return providerWriterScope.run(current, async () => {
     current();
+    if(recoveryPendingTarget(project.id)||recoveryPinned(project.id))throw new PlatformError(409,"PROJECT_RECOVERY_PINNED","Resolve the reserved restore and retain its source checkpoints before deleting this project.");
     if (storage.internal.prepare("SELECT 1 FROM clank_platform_releases WHERE project_id=? AND purpose='shadow-upload' AND status='uploading' LIMIT 1").get(project.id)) throw new PlatformError(409, "RELEASE_UPLOAD_UNCERTAIN", "Finish the exact retained uploads before deleting this project.");
     if (storage.internal.prepare("SELECT 1 FROM clank_platform_release_windows WHERE (root_id=? OR source_project_id=? OR target_project_id=?) AND state IN ('pending','running','cancelling','recovery-required') LIMIT 1").get(project.id,project.id,project.id)) throw new PlatformError(409,"PROJECT_RELEASE_SCHEDULED","Cancel or recover scheduled promotions before deleting their projects.");
     if (releaseChannelPinned(project.id)) {
@@ -7547,6 +8111,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           || value.status === "projected_exhaustion" || value.status === "exhausted"),
         message: "Workspace usage is near its configured limit or projected to exhaust it this period." });
     }
+    if (projectCosts) signals.push(...projectCosts.signals());
     return signals;
   }, options.operations.restoreDrills ? async (projectId) => {
     const project = projectById(storage.internal, projectId);
@@ -7563,10 +8128,49 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     } finally { manager.close(); }
   } : undefined, options.onError) : undefined;
 
+  const statusAudit=(userId:string,projectId:string|null,action:string,metadata:Record<string,unknown>)=>{
+    const at=Date.now(),encoded=JSON.stringify(metadata),organizationId=projectId?projectById(storage.internal,projectId)?.organizationId??null:null;
+    const result=storage.internal.prepare('INSERT INTO clank_platform_audit(actor_user_id,actor_token_id,project_id,organization_id,action,metadata,created_at) VALUES(?,NULL,?,?,?,?,?)').run(userId,projectId,organizationId,action,encoded,at);
+    const saved=storage.internal.prepare('SELECT * FROM clank_platform_audit WHERE id=?').get(result.lastInsertRowid);
+    if(Number(result.changes)!==1||!saved||saved.actor_user_id!==userId||saved.actor_token_id!==null||saved.project_id!==projectId||saved.organization_id!==organizationId||saved.action!==action||saved.metadata!==encoded||saved.created_at!==at)throw new CustomerStatusError(409,'STATUS_ACKNOWLEDGEMENT','Native status audit was not retained exactly.');
+    return ()=>{if(JSON.stringify(storage.internal.prepare('SELECT * FROM clank_platform_audit WHERE id=?').get(result.lastInsertRowid))!==JSON.stringify(saved))throw new CustomerStatusError(409,'STATUS_ACKNOWLEDGEMENT','Native status audit changed before commit.');};
+  };
+  const statusAuthority=(principal:TokenPrincipal,projectId?:string):StatusPageAuthority=>{
+    const binding=()=>{
+      const project=projectId?projectById(storage.internal,projectId):null;
+      const keys=['account:'+principal.userId,...(projectId?['project:'+projectId]:[]),...(project?.organizationId?['organization:'+project.organizationId]:[])];
+      return JSON.stringify(keys.map(key=>[key,storage.internal.prepare('SELECT version FROM clank_platform_status_authority WHERE scope=?').get(key)?.version??0]));
+    };
+    const captured=binding();
+    return {
+      userId:principal.userId,binding,
+      authorize(write=false){
+        if(principal.machine||principal.tokenId!==null||!principal.sessionId||principal.impersonation)throw new PlatformError(403,'STATUS_HUMAN_REQUIRED','Use a current human browser session for status administration.');
+        requireCurrentPlatformPrincipal(storage,principal);
+        const current=storage.auth.refreshSession(principal.sessionId);if(!current?.user||current.user.id!==principal.userId)throw new PlatformError(401,'UNAUTHENTICATED','Sign in to continue.');
+        if(projectId){const access=accessibleProject(storage.internal,projectId,principal,'read');if(access.project.parentProjectId)throw new PlatformError(403,'STATUS_PARENT_REQUIRED','Use a production project for a customer status page.');requireOrganizationAdministration(access.role);}
+        if(binding()!==captured)throw new CustomerStatusError(409,'STATUS_AUTHORITY_CHANGED','Native account or workspace authority changed; inspect a new current review.');
+        if(write&&projectId)storage.auth.requireFreshAuthentication(current,300000);
+      },
+      audit(action,metadata){return statusAudit(principal.userId,projectId??null,action,metadata);},
+    };
+  };
+  const statusDomainBegin=(projectId:string,authority:StatusPageAuthority,input:unknown)=>statusPages!.beginDomain(projectId,authority,input,async existing=>{
+    let challenge=existing;const manager=createDomainManager({store:{save(value){challenge=value;},get(){return challenge;},byHostname(){return challenge;}},...(options.ingress?.resolveTxt?{resolveTxt:options.ingress.resolveTxt}:{})});return manager.begin(projectId,String((input as any).hostname));
+  });
+  const statusDomainVerify=(projectId:string,domainId:string,authority:StatusPageAuthority,input:unknown)=>statusPages!.verifyDomain(projectId,domainId,authority,input,async original=>{
+    let challenge=original;const manager=createDomainManager({store:{save(value){challenge=value;},get(){return challenge;},byHostname(){return challenge;}},...(options.ingress?.resolveTxt?{resolveTxt:options.ingress.resolveTxt}:{})});
+    const verified=original.status==='verified'?original:await withTimeout(manager.verify(original.id),domainRecheckTimeoutMs,'Domain ownership lookup timed out.');return {challenge:verified,report:await inspectRouting(verified.hostname)};
+  });
+  const statusResponse=(page:CustomerStatusSnapshot,head=false)=>new Response(head?null:statusPublicHtml(page,publicUrl),{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer','content-security-policy':"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"}});
+
   const handleRequest = async (request: Request): Promise<Response> => {
     if (closed) return problem(503, "PLATFORM_CLOSED", "Platform is closed.");
     try {
       const url = new URL(request.url);
+      const shadowMcpProject=/^\/api\/projects\/([A-Za-z0-9_-]{8,128})\/shadow\/mcp$/u.exec(url.pathname)?.[1];
+      const shadowReadIdentity=shadowMcpProject || request.method==="GET" && /^\/api\/projects\/[^/]+\/shadow(?:\/[^/]+)?$/u.test(url.pathname)
+        ?Object.freeze({url:request.url,method:request.method,headers:JSON.stringify([...request.headers])}):undefined;
       // Caddy calls this permission endpoint over loopback, so it must be
       // handled before Host-based application dispatch. The secret is still
       // required because the path can also arrive through a public listener.
@@ -7591,7 +8195,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           ? storage.internal.prepare(`SELECT id FROM clank_platform_projects
               WHERE slug = ? AND active_release_id IS NOT NULL`).get(builtInSlug)
           : undefined;
-        if (!allowed && !builtInAllowed) return new Response(null, { status: 403 });
+        let statusAllowed=false;try{statusAllowed=Boolean(statusPages?.publicHostname(hostname));}catch(error){if(!(error instanceof CustomerStatusError&&error.status===404))throw error;}
+        if (!allowed && !builtInAllowed && !statusAllowed) return new Response(null, { status: 403 });
         if (allowed) {
           storage.internal.prepare(`UPDATE clank_platform_domains SET certificate_status = 'eligible'
             WHERE id = ? AND certificate_status = 'pending'`).run(allowed.id);
@@ -7604,8 +8209,66 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       if (url.pathname === "/_clank/readyz" && request.method === "GET") {
         return readiness();
       }
+      if(normalizeHostname(url.hostname)!==publicHostname&&statusPages?.reservedHostname(normalizeHostname(url.hostname))){
+        if(request.method!=='GET'&&request.method!=='HEAD'||url.pathname!=='/'||url.search)return problem(404,'NOT_FOUND','Status page not found.');
+        const page=statusPages.publicHostname(normalizeHostname(url.hostname));return page?statusResponse(page,request.method==='HEAD'):problem(404,'NOT_FOUND','Status page not found.');
+      }
       if (ingress && normalizeHostname(url.hostname) !== publicHostname) {
         return await ingress.handle(request);
+      }
+      const statusAdmin=/^\/projects\/([A-Za-z0-9_-]{8,128})\/status$/u.exec(url.pathname),statusSubscriber=/^\/status\/([a-z][a-z0-9-]{2,63})\/preferences$/u.exec(url.pathname);
+      if(normalizeHostname(url.hostname)!==publicHostname&&(statusAdmin||/^\/(?:api\/)?status(?:\/|$)/u.test(url.pathname)||/^\/api\/projects\/[A-Za-z0-9_-]{8,128}\/status-page(?:\/|$)/u.test(url.pathname)))return problem(404,'NOT_FOUND','Status host not found.');
+      if((statusAdmin||statusSubscriber)&&(request.method==='GET'||request.method==='POST')){
+        if(url.search)throw new CustomerStatusError(422,'STATUS_INPUT_INVALID','Status forms do not accept query fields.');
+        if(request.headers.has('authorization'))throw new CustomerStatusError(403,'STATUS_HUMAN_REQUIRED','Use a current human browser session.');
+        const auth=await requireBrowserAuth(storage.auth,request);rejectActiveImpersonation(storage.internal,request,auth);
+        const principal:TokenPrincipal={userId:auth.user!.id,email:auth.user!.email,sessionId:auth.session!.id,tokenId:null,organizationId:null,projectId:null,permissions:[],previewName:null,impersonation:null};
+        const authority=statusAuthority(principal,statusAdmin?.[1]);authority.authorize();let preview:ReturnType<NonNullable<typeof statusPages>['preview']>|undefined;
+        if(request.method==='POST'){
+          if(request.headers.get('content-type')?.split(';')[0]!=='application/x-www-form-urlencoded')throw new CustomerStatusError(415,'STATUS_FORM_REQUIRED','Use the native bounded status form.');
+          const fields=new URLSearchParams(new TextDecoder('utf-8',{fatal:true}).decode(await readRequestBytes(request,128*1024)));
+          if([...fields].reduce((n,[key,value])=>n+new TextEncoder().encode(key+value).byteLength,0)>32768)throw new CustomerStatusError(413,'STATUS_INPUT_BOUND','The decoded status form exceeds its bound.');
+          const action=fields.get('action');const names=action==='create'?['action','csrf','operationId','configuration']:action==='configure'?['action','csrf','operationId','configuration','expectedVersion']:action==='preview'?['action','csrf','expectedVersion','publication']:action==='publish'?['action','csrf','expectedVersion','previewId','previewDigest','operationId']:action==='unpublish'?['action','csrf','expectedVersion','operationId']:action==='domain.begin'?['action','csrf','expectedVersion','operationId','hostname']:action==='domain.verify'?['action','csrf','expectedVersion','operationId','domainId']:action==='preferences'?['action','csrf','expectedVersion','operationId','subscribed','component']:[];
+          if(!names.length||[...fields.keys()].some(k=>!names.includes(k))||names.filter(k=>k!=='component').some(k=>fields.getAll(k).length!==1))throw new CustomerStatusError(422,'STATUS_INPUT_INVALID','Use exact native status form fields.');
+          const headers=new Headers(request.headers);headers.set('x-clank-csrf',fields.get('csrf')!);await storage.auth.verifyCsrf(new Request(request.url,{method:'POST',headers}),auth);authority.authorize(true);
+          const expectedVersion=Number(fields.get('expectedVersion')),operationId=fields.get('operationId')!,projectId=statusAdmin?.[1];
+          const json=(field:string)=>{try{return JSON.parse(fields.get(field)!);}catch{throw new CustomerStatusError(422,'STATUS_INPUT_INVALID','Keep the draft and correct its JSON syntax.');}};
+          if(projectId){
+            if(action==='create')statusPages!.create(projectId,authority,{configuration:json('configuration'),operationId});
+            else if(action==='configure')statusPages!.configure(projectId,authority,{configuration:json('configuration'),expectedVersion,operationId});
+            else if(action==='preview')preview=statusPages!.preview(projectId,authority,{expectedVersion,publication:json('publication')});
+            else if(action==='publish')statusPages!.publish(projectId,authority,{expectedVersion,previewId:fields.get('previewId'),previewDigest:fields.get('previewDigest'),operationId});
+            else if(action==='unpublish')statusPages!.unpublish(projectId,authority,{expectedVersion,operationId});
+            else if(action==='domain.begin')await statusDomainBegin(projectId,authority,{expectedVersion,hostname:fields.get('hostname'),operationId});
+            else if(action==='domain.verify')await statusDomainVerify(projectId,fields.get('domainId')!,authority,{expectedVersion,operationId});
+            else throw new CustomerStatusError(422,'STATUS_INPUT_INVALID','Choose a status administration form.');
+          }else{
+            if(action!=='preferences'||!['yes','no'].includes(fields.get('subscribed')!))throw new CustomerStatusError(422,'STATUS_INPUT_INVALID','Choose native subscriber preferences.');
+            statusPages!.subscribe(statusSubscriber![1]!,authority,{subscribed:fields.get('subscribed')==='yes',components:fields.getAll('component'),expectedVersion,operationId});
+          }
+          if(!preview)return new Response(null,{status:303,headers:{location:url.pathname,'cache-control':'no-store'}});
+        }
+        let content:string;
+        const e=statusEscape,hidden=(key:string,value:string|number)=>`<input type="hidden" name="${key}" value="${e(String(value))}">`,common=(action:string,version?:number)=>hidden('action',action)+hidden('csrf',auth.csrfToken!)+(version===undefined?'':hidden('expectedVersion',version)),op=()=>hidden('operationId',crypto.randomUUID());
+        if(statusAdmin){
+          const page=statusPages!.page(statusAdmin[1]!,authority),configuration=page?.configuration??{slug:'customer-health',title:'Customer health',description:'Approved customer information.',components:[{key:'service',label:'Service',source:{kind:'manual',health:'unknown',observedAt:Date.now(),expiresAt:Date.now()+60000}}]},domains=page?statusPages!.domains(statusAdmin[1]!,authority):[];
+          content=`<h1>Customer status page</h1><p>Verify with a passkey or MFA in the last five minutes before changing or publishing this page. Enter only copy approved for customers.</p><form method="post">${common(page?'configure':'create',page?.version)}${op()}<label for="configuration">Public labels and health sources</label><textarea id="configuration" name="configuration" rows="16" required>${e(JSON.stringify(configuration,null,2))}</textarea><button type="submit">${page?'Save configuration':'Create private draft'}</button></form>`;
+          if(page){
+            content+=`<p>Version ${page.version}. ${page.published?'Published':'Private draft'}.</p><form method="post">${common('preview',page.version)}<label for="publication">Publication to preview</label><textarea id="publication" name="publication" rows="10" required>${e(JSON.stringify({kind:'page'},null,2))}</textarea><p>To publish an update, choose kind “update” and provide dedicated title, message, state and component keys in copy, plus incident: null or a private id and expectedVersion. Private incident context is never copied automatically.</p><button type="submit">Review public preview</button></form>`;
+            if(preview)content+=`<section><h2>Review exactly what customers will see</h2><pre>${e(preview.page.title)}\n${e(preview.page.description)}\n\n${preview.page.components.map(c=>e(c.label)+": "+e(c.health.replace(/-/gu," "))+(c.complete?"":" · coverage unavailable")).join("\n")}${preview.update?"\n\n"+e(preview.update.title)+"\n"+e(preview.update.state)+"\n"+e(preview.update.message):""}</pre><form method="post">${common('publish',preview.expectedVersion)}${hidden('previewId',preview.id)}${hidden('previewDigest',preview.digest)}${op()}<button type="submit">Publish reviewed public copy</button></form></section>`;
+            if(page.published)content+=`<a href="/status/${e(page.configuration.slug)}">Open public status page</a><form method="post">${common('unpublish',page.version)}${op()}<button type="submit">Unpublish page</button></form>`;
+            content+=`<h2>Customer domains</h2><form method="post">${common('domain.begin',page.version)}${op()}<label for="hostname">Exact customer hostname</label><input id="hostname" name="hostname" required maxlength="253" placeholder="status.example.com"><button type="submit">Begin domain ownership check</button></form>${domains.map(d=>`<section><h3>${e(d.hostname)}</h3><p>Ownership: ${e(d.ownership)}. Routing: ${e(d.routing)}.</p><p>Add TXT ${e(d.recordName)} with value ${e(d.recordValue)} and point the hostname at the configured platform edge.</p><form method="post">${common('domain.verify',page.version)}${hidden('domainId',d.id)}${op()}<button type="submit">Verify ownership and routing</button></form></section>`).join('')}`;
+          }
+        }else{
+          const name=statusSubscriber![1]!;let page:Pick<CustomerStatusSnapshot,'title'|'components'>;try{page=statusPages!.publicPage(name);}catch(error){if(!(error instanceof CustomerStatusError&&error.status===404))throw error;page={title:'Status page unavailable',components:[]};}const preferences=statusPages!.preferences(name,authority),inbox=statusPages!.notifications(name,authority,0);
+          content=`<h1>${e(page.title)} notifications</h1><p>Notifications appear in this account’s native inbox. No email or SMS is sent.</p><form method="post">${common('preferences',preferences.version)}${op()}<label for="subscribed">Receive public updates</label><select id="subscribed" name="subscribed"><option value="yes"${preferences.subscribed?' selected':''}>Subscribed</option><option value="no"${!preferences.subscribed?' selected':''}>Unsubscribed</option></select><fieldset><legend>Components · leave all unchecked for every component</legend>${page.components.map(c=>`<label class="check"><input type="checkbox" name="component" value="${e(c.key)}"${preferences.components.includes(c.key)?' checked':''}>${e(c.label)}</label>`).join('')}</fieldset><button type="submit">Save subscriber preferences</button></form><h2>Your latest notifications</h2>${inbox.notifications.length?inbox.notifications.map(n=>`<article><h3>${e(n.update.title)}</h3><p class="copy">${e(n.update.message)}</p><time>${e(new Date(n.createdAt).toISOString())}</time></article>`).join(''):'<p>No notifications yet.</p>'}<a href="/status/${e(name)}">Return to public status</a>`;
+        }
+        return new Response(statusFormHtml(content),{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer','content-security-policy':"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"}});
+      }
+      const publicStatus=/^\/(api\/)?status\/([a-z][a-z0-9-]{2,63})$/u.exec(url.pathname);
+      if(publicStatus&&(request.method==='GET'||request.method==='HEAD')){
+        if(url.search)throw new CustomerStatusError(422,'STATUS_INPUT_INVALID','Public status pages do not accept query fields.');
+        const page=statusPages!.publicPage(publicStatus[2]!);return publicStatus[1]?new Response(request.method==='HEAD'?null:JSON.stringify(page),{headers:{'content-type':'application/json','cache-control':'no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer'}}):statusResponse(page,request.method==='HEAD');
       }
       if (url.pathname === "/livez" && request.method === "GET") {
         return api({ ok: true, status: "alive" });
@@ -7752,9 +8415,12 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           {
             platformRole,
             billingEnabled: billing !== null,
+            organizationSecurityEnabled: Boolean(organizationSecurity),
+            temporaryAccessEnabled: Boolean(temporaryAccess),
             hostingProfile,
             runnerKind: runner.kind,
             signupMode: signupPolicy,
+            projectCostsEnabled: !!projectCosts,
             impersonation: impersonation ? {
               id: impersonation.id,
               actor: {
@@ -7830,6 +8496,14 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
             (id, token_hash, user_id, name, created_at, last_used_at, expires_at, revoked_at)
             VALUES (?, ?, ?, ?, ?, NULL, ?, NULL)`)
             .run(tokenId, syncHash(rawToken), row.user_id, row.client_name, Date.now(), expiresAt);
+          if (organizationSecurity) {
+            const proofs=storage.internal.prepare('SELECT organization_id FROM clank_organization_security_delegations WHERE credential_id=? LIMIT 1001').all('device_'+deviceHash);
+            if(proofs.length>1000) throw new PlatformError(409,'ORGANIZATION_POLICY_CAPACITY','Device authorization exceeds its organization bound.');
+            for(const proof of proofs) {
+              try {organizationSecurity.continueDelegation(String(proof.organization_id),'device_'+deviceHash,'cli_'+tokenId,String(row.user_id));}
+              catch(error) {if(!(error instanceof AuthError && [401,403].includes(error.status))) throw error;}
+            }
+          }
           changes.record("__platform", String(row.user_id));
         });
         audit(storage.internal, String(row.user_id), tokenId, null, "token.create", {
@@ -8007,6 +8681,11 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
                 "The GitHub Actions identity is invalid or expired.",
               );
             }
+            assertOrganizationSecurityProtocol(storage.internal);
+            if (storage.internal.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_organization_security_policies' AND type='table'").get()
+              && storage.internal.prepare('SELECT 1 FROM clank_organization_security_policies WHERE organization_id=?').get(String(binding.organization_id))) {
+              throw new PlatformError(403,'ORGANIZATION_POLICY_DELEGATION','This workspace requires a credential authorized from its current human security session.');
+            }
             storage.internal.prepare(
               "DELETE FROM clank_platform_github_oidc_replay WHERE expires_at <= ?",
             ).run(now);
@@ -8094,12 +8773,25 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         exact(input, ["code"]);
         const code = normalizeUserCode(boundedString(input.code, "code", 8, 20));
         const status = url.pathname.endsWith("/approve") ? "approved" : "denied";
+        storage.internal.transaction(() => {
+        const current=storage.auth.refreshSession(auth.session!.id);
+        if(current?.user?.id!==auth.user!.id) throw new PlatformError(401,'UNAUTHENTICATED','Sign in to approve this device.');
+        const device=storage.internal.prepare('SELECT device_hash FROM clank_platform_device_codes WHERE user_code=?').get(code);
         const result = storage.internal.prepare(`UPDATE clank_platform_device_codes
           SET status = ?, user_id = ?
           WHERE user_code = ? AND status = 'pending' AND expires_at > ?`)
           .run(status, auth.user!.id, code, Date.now());
         if (Number(result.changes) !== 1) throw new PlatformError(409, "CODE_UNAVAILABLE", "Device code is expired or already handled.");
+        if(status==='approved' && organizationSecurity) {
+          const rows=storage.internal.prepare('SELECT organization_id FROM clank_platform_memberships WHERE user_id=? ORDER BY organization_id LIMIT 1001').all(current.user!.id);
+          if(rows.length>1000) throw new PlatformError(409,'ORGANIZATION_POLICY_CAPACITY','Device authorization exceeds its organization bound.');
+          for(const row of rows) {
+            try {organizationSecurity.captureDelegation(String(row.organization_id),'device_'+String(device!.device_hash),current);}
+            catch(error) {if(!(error instanceof AuthError && [401,403].includes(error.status))) throw error;}
+          }
+        }
         audit(storage.internal, auth.user!.id, null, null, `device.${status}`, { code });
+        });
         return api({ ok: true, status });
       }
       if (url.pathname === "/api/admin/impersonation" && request.method === "POST") {
@@ -8794,13 +9486,41 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         });
       }
 
+      if(shadowMcpProject)return await shadowMcp(request,shadowMcpProject,shadowReadIdentity!);
+
       const principal = await requirePlatformPrincipal(storage, request, serviceAccounts);
+      const subscriberStatus=/^\/api\/status\/([a-z][a-z0-9-]{2,63})\/(preferences|notifications)$/u.exec(url.pathname);
+      if(subscriberStatus){
+        const authority=statusAuthority(principal);authority.authorize();
+        if(subscriberStatus[2]==='preferences'){
+          if(url.search)throw new CustomerStatusError(422,'STATUS_INPUT_INVALID','Preferences do not accept query fields.');
+          if(request.method==='GET')return api({ok:true,preferences:statusPages!.preferences(subscriberStatus[1]!,authority)});
+          if(request.method==='POST')return api({ok:true,preferences:statusPages!.subscribe(subscriberStatus[1]!,authority,await readJsonRequest(request,32768))});
+        }else if(request.method==='GET'){
+          if([...url.searchParams.keys()].some(k=>k!=='after')||url.searchParams.getAll('after').length>1||url.searchParams.has('after')&&!/^(0|[1-9][0-9]{0,15})$/u.test(url.searchParams.get('after')!))throw new CustomerStatusError(422,'STATUS_INPUT_INVALID','Choose one bounded notification cursor.');
+          return api({ok:true,page:statusPages!.notifications(subscriberStatus[1]!,authority,Number(url.searchParams.get('after')??0))});
+        }
+        throw new PlatformError(404,'NOT_FOUND','Status subscriber endpoint not found.');
+      }
       if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) requireCurrentPlatformPrincipal(storage, principal);
       if (principal.machine) {
         requireCurrentPlatformPrincipal(storage,principal);
         machineResponseGuards.set(request,()=>requireCurrentPlatformPrincipal(storage,principal));
         if (url.pathname==="/api/service-account" && request.method==="GET") return api({ok:true,identity:principal.machine.identity});
         if (!(url.pathname==="/api/projects" && request.method==="GET") && !url.pathname.startsWith('/api/projects/')) throw new PlatformError(403,"SERVICE_ACCOUNT_SCOPE_DENIED","Service credentials are limited to their project operations.");
+      }
+      const securityPolicyRoute=/^\/api\/organizations\/([A-Za-z0-9_-]{8,128})\/security-policy(?:\/(preview|recover))?$/u.exec(url.pathname);
+      if (securityPolicyRoute) {
+        if (!organizationSecurity) throw new PlatformError(404,'NOT_FOUND','Organization security is not configured.');
+        if (principal.tokenId || principal.impersonation || !principal.sessionId || url.search) throw new PlatformError(403,'ORGANIZATION_POLICY_BROWSER','Use your current human browser session.');
+        const current=storage.auth.refreshSession(principal.sessionId);
+        if(current?.user?.id!==principal.userId) throw new PlatformError(401,'UNAUTHENTICATED','Sign in to continue.');
+        const organizationId=securityPolicyRoute[1]!,operation=securityPolicyRoute[2];
+        if(request.method==='GET' && !operation) return api({ok:true,policy:organizationSecurity.read(organizationId,current)});
+        if(request.method!=='POST') throw new PlatformError(404,'NOT_FOUND','Organization security endpoint not found.');
+        const input=await readJsonRequest(request,16*1024);
+        if(operation==='preview') {const fields=plainObject(input);exact(fields,['requirements']);return api({ok:true,preview:organizationSecurity.preview(organizationId,current,fields.requirements as any)});}
+        return api({ok:true,policy:operation==='recover' ? organizationSecurity.recover(organizationId,current,input as any) : organizationSecurity.change(organizationId,current,input as any)});
       }
       const serviceAccountRoute=/^\/api\/organizations\/([A-Za-z0-9_-]{8,128})\/service-accounts(?:\/([A-Za-z0-9_-]{8,128})(?:\/(change|credentials))?)?$/u.exec(url.pathname);
       if(serviceAccountRoute) {
@@ -8811,6 +9531,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         const authority:ServiceAccountAuthority={userId:principal.userId,
           authorize(id,write) {
             requireCurrentPlatformPrincipal(storage,principal);
+            authorizeOrganizationPolicy(storage.internal,principal,id);
             const role=storage.internal.prepare('SELECT role FROM clank_platform_memberships WHERE organization_id=? AND user_id=?').get(id,principal.userId)?.role;
             if(role!=="owner" && role!=="admin") throw new PlatformError(404,"ORGANIZATION_NOT_FOUND","Organization administration is unavailable.");
             if(write) {
@@ -8907,6 +9628,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
             throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "Project tokens cannot select a workspace audit feed.");
           }
           const membership = organizationMembership(storage.internal, organizationId, principal.userId);
+          authorizeOrganizationPolicy(storage.internal, principal, organizationId);
           if (!roleAllows(membership.role, "audit")) {
             throw new PlatformError(403, "ROLE_DENIED", `The ${membership.role} role cannot perform audit operations.`);
           }
@@ -8995,6 +9717,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "This token is scoped to another workspace.");
         }
         organizationMembership(storage.internal, organizationId, principal.userId);
+        authorizeOrganizationPolicy(storage.internal, principal, organizationId);
         const usageAsOf = Date.now();
         const month = usageMonth(
           url.searchParams.get("month"),
@@ -9069,7 +9792,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           FROM clank_platform_organizations o
           JOIN clank_platform_memberships m ON m.organization_id = o.id
           WHERE m.user_id = ? ORDER BY o.created_at`).all(principal.userId);
-        return api({ ok: true, organizations: rows.map((row) => ({
+        return api({ ok: true, organizations: rows.filter(row=>organizationPolicyAllows(storage.internal,principal,String(row.id))).map((row) => ({
           id: String(row.id),
           name: String(row.name),
           slug: String(row.slug),
@@ -9144,6 +9867,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       if (organizationMatch) {
         if (principal.projectId) throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "Project tokens cannot administer organizations.");
         const organizationId = organizationMatch[1]!;
+        authorizeOrganizationPolicy(storage.internal,principal,organizationId);
         const membership = organizationMembership(storage.internal, organizationId, principal.userId);
         const operation = organizationMatch[2] ?? "";
         if (!operation && request.method === "GET") {
@@ -9406,7 +10130,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         if (principal.projectId && !principal.permissions.includes("read")) {
           throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "This token cannot read project metadata.");
         }
-        const rows = visibleProjectRows(storage.internal, principal.userId, principal.projectId);
+        const rows = visibleProjectRows(storage.internal, principal.userId, principal.projectId).filter(row=>!row.organization_id || organizationPolicyAllows(storage.internal,principal,String(row.organization_id)));
         const usageRows = storage.internal.prepare(`SELECT organization_id, count(*) AS count
           FROM clank_platform_projects WHERE organization_id IN (
             SELECT organization_id FROM clank_platform_memberships WHERE user_id = ?
@@ -9419,7 +10143,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
             options.maxArtifactBytes,
             limits.metricRetentionDays,
           ),
-          usage: Object.fromEntries(usageRows.map((row) => [String(row.organization_id), Number(row.count)])),
+          usage: Object.fromEntries(usageRows.filter(row=>organizationPolicyAllows(storage.internal,principal,String(row.organization_id))).map((row) => [String(row.organization_id), Number(row.count)])),
         });
       }
       if (url.pathname === "/api/projects" && request.method === "POST") {
@@ -9438,6 +10162,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
               () => requireCurrentPlatformPrincipal(storage, principal))
           : boundedString(input.organizationId, "organizationId", 8, 128);
         const membership = organizationMembership(storage.internal, organizationId, principal.userId);
+        authorizeOrganizationPolicy(storage.internal, principal, organizationId);
         requireOrganizationAdministration(membership.role);
         const id = await randomId(18);
         let port = 0;
@@ -9509,8 +10234,28 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       const matched = /^\/api\/projects\/([A-Za-z0-9_-]{8,128})(?:\/(.*))?$/.exec(url.pathname);
       if (!matched) throw new PlatformError(404, "NOT_FOUND", "Platform endpoint not found.");
       const operation = matched[2] ?? "";
+      const temporaryAuthority = (): TemporaryAccessAuthority => ({userId:principal.userId,assertCurrent(fresh) {
+        if (principal.machine || principal.tokenId || principal.impersonation || !principal.sessionId) throw new PlatformError(403,'HUMAN_AUTH_REQUIRED','Temporary access requires your current human browser session.');
+        requireCurrentPlatformPrincipal(storage,principal);
+        const current=storage.auth.refreshSession(principal.sessionId);
+        if (current?.user?.id!==principal.userId) throw new PlatformError(401,'UNAUTHENTICATED','Sign in with your current account.');
+        const target=projectById(storage.internal,matched[1]!);
+        if (!target?.organizationId || target.parentProjectId) throw new PlatformError(404,'PROJECT_NOT_FOUND','Parent project not found.');
+        authorizeOrganizationPolicy(storage.internal,principal,target.organizationId);
+        if (fresh) storage.auth.requireFreshAuthentication(current,300000);
+      }});
+      const elevationHeader = request.headers.get('x-clank-temporary-access');
+      if (elevationHeader !== null) {
+        if (!temporaryAccess || operation!=='previews' || request.method!=='POST') throw new PlatformError(403,'TEMPORARY_ACCESS_SCOPE','Temporary access permits only a new preview creation.');
+        accessibleProject(storage.internal,matched[1]!,principal,'read');
+        admittedTemporaryAccess.set(principal,{projectId:matched[1]!,grantId:elevationHeader,assertCurrent:temporaryAccess.capture(matched[1]!,temporaryAuthority(),elevationHeader)});
+      }
       const requiredPermission: ProjectPermission = !operation && request.method === "DELETE"
         ? "tokens"
+        : operation === "slo-policies" || operation.startsWith("slo-policies/")
+          ? request.method === "GET" || request.method === "HEAD" ? "read" : "slo"
+        : operation === "incidents" || operation.startsWith("incidents/")
+          ? "incidents"
         : operation === "members" || operation.startsWith("members/")
           ? "tokens"
         : operation === "logs"
@@ -9519,6 +10264,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           ? "tokens"
         : operation.startsWith("dependencies")
           ? operation === "dependencies" && request.method === "PUT" ? "tokens" : operation.startsWith("dependencies/activations/") && request.method === "POST" ? "rollback" : "read"
+        : operation === "shadow" || operation.startsWith("shadow/")
+          ? request.method === "GET" ? "read" : "deploy"
         : operation.startsWith("environments") || operation.startsWith("channels")
           ? request.method === "GET" ? "read" : "deploy"
         : operation.startsWith("previews")
@@ -9554,13 +10301,299 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         accessibleProject(storage.internal,project.id,principal,permission);
         machineResponseGuards.set(request,()=>{requireCurrentPlatformPrincipal(storage,principal);accessibleProject(storage.internal,project.id,principal,permission);});
       }
-      if (request.method !== "GET" && request.method !== "HEAD") requireNoEvacuation(project.id);
+      const incidentOperation = operation === "incidents" || operation.startsWith("incidents/");
+      const sloOperation = operation === "slo-policies" || operation.startsWith("slo-policies/");
+      const statusOperation=operation==='status-page'||operation.startsWith('status-page/');
+      const metadataOperation = incidentOperation || sloOperation || statusOperation;
+      const incidentCredentialHash = metadataOperation && principal.tokenId !== null
+        ? syncHash((request.headers.get("authorization") ?? "").slice(7)) : null;
+      if (request.method !== "GET" && request.method !== "HEAD" && !(operation==="point-in-time/mcp"&&request.method==="POST")) {
+        if(recoveryPendingTarget(project.id))throw new PlatformError(409,"RECOVERY_DESTINATION_PENDING","The reserved recovery destination remains stopped until its exact restore is verified and accepted.");
+        if(!metadataOperation)requireNoEvacuation(project.id);
+      }
       const requireCurrentProjectAuthority = () => {
-        if (request.method !== "GET" && request.method !== "HEAD") requireNoEvacuation(project.id);
+        if (request.method !== "GET" && request.method !== "HEAD" && !(operation==="point-in-time/mcp"&&request.method==="POST")) {
+          if(recoveryPendingTarget(project.id))throw new PlatformError(409,"RECOVERY_DESTINATION_PENDING","The reserved recovery destination remains stopped until its exact restore is verified and accepted.");
+          if(!metadataOperation)requireNoEvacuation(project.id);
+        }
         requireCurrentPlatformPrincipal(storage, principal);
+        if (incidentCredentialHash !== null && !storage.internal.prepare("SELECT 1 FROM clank_platform_tokens WHERE id=? AND user_id=? AND token_hash=?").get(principal.tokenId, principal.userId, incidentCredentialHash)) {
+          throw new PlatformError(401, "INVALID_TOKEN", "The CLI access token is invalid or expired.");
+        }
         accessibleProject(storage.internal, project.id, principal, requiredPermission);
         if (/^backups\/[^/]+\/restore$/u.test(operation) || (!operation && request.method === "DELETE")) requireFreshPlatformAuthentication(principal);
       };
+      if (operation==='temporary-access' && request.method==='GET' || operation==='temporary-access' && request.method==='POST' || operation==='temporary-access/revoke' && request.method==='POST') {
+        if (!temporaryAccess) throw new PlatformError(503,'TEMPORARY_ACCESS_DISABLED','Temporary access is not configured.');
+        for (const key of url.searchParams.keys()) throw new PlatformError(422,'TEMPORARY_ACCESS_INPUT',`Unexpected query field: ${key}.`);
+        const authority=temporaryAuthority();
+        if (request.method==='GET') return api({ok:true,snapshot:temporaryAccess.read(project.id,authority)});
+        const input=plainObject(await readJsonRequest(request,8192));requireCurrentProjectAuthority();
+        const result=operation.endsWith('/revoke') ? temporaryAccess.revoke(project.id,authority,input as unknown as import('./temporary-access.ts').TemporaryAccessRevoke)
+          : temporaryAccess.create(project.id,authority,input as unknown as import('./temporary-access.ts').TemporaryAccessCreate);
+        return api({ok:true,result},operation.endsWith('/revoke')?200:201);
+      }
+      if(statusOperation){
+        if(url.search)throw new CustomerStatusError(422,'STATUS_INPUT_INVALID','Status administration does not accept query fields.');
+        const authority=statusAuthority(principal,project.id);authority.authorize(request.method!=='GET');
+        if(operation==='status-page'&&request.method==='GET')return api({ok:true,page:statusPages!.page(project.id,authority)});
+        if(operation==='status-page/domains'&&request.method==='GET')return api({ok:true,domains:statusPages!.domains(project.id,authority)});
+        if(request.method==='POST'){
+          const input=await readJsonRequest(request,32768);
+          if(operation==='status-page/create')return api({ok:true,page:statusPages!.create(project.id,authority,input)},201);
+          if(operation==='status-page/configure')return api({ok:true,page:statusPages!.configure(project.id,authority,input)});
+          if(operation==='status-page/preview')return api({ok:true,preview:statusPages!.preview(project.id,authority,input)});
+          if(operation==='status-page/publish')return api({ok:true,page:statusPages!.publish(project.id,authority,input)});
+          if(operation==='status-page/unpublish')return api({ok:true,page:statusPages!.unpublish(project.id,authority,input)});
+          if(operation==='status-page/domains/begin')return api({ok:true,domain:await statusDomainBegin(project.id,authority,input)},201);
+          const domain=/^status-page\/domains\/([A-Za-z0-9_-]{8,128})\/verify$/u.exec(operation);
+          if(domain)return api({ok:true,domain:await statusDomainVerify(project.id,domain[1]!,authority,input)});
+        }
+        throw new PlatformError(404,'NOT_FOUND','Status administration endpoint not found.');
+      }
+      if (sloOperation) {
+        if (url.searchParams.size) throw new PlatformError(422, "SLO_INPUT_INVALID", "SLO endpoints do not accept query fields.");
+        const authority: SloAuthority = {
+          userId: principal.userId,
+          authorize(write) {requireCurrentProjectAuthority(); if (write) accessibleProject(storage.internal, project.id, principal, "slo");},
+          audit(action, metadata) {audit(storage.internal, principal.userId, principal.tokenId, project.id, action, metadata);},
+        };
+        if (operation === "slo-policies" && request.method === "GET") return api({ok: true, policies: projectSlos.list(project.id, authority)});
+        if (operation === "slo-policies" && request.method === "POST") return api({ok: true, policy: projectSlos.create(project.id, authority, await readJsonRequest(request, 16 * 1024))}, 201);
+        const policy = /^slo-policies\/([A-Za-z0-9_-]{8,128})(?:\/(change))?$/u.exec(operation);
+        if (policy && !policy[2] && request.method === "GET") return api({ok: true, assessment: projectSlos.read(project.id, policy[1]!, authority)});
+        if (policy?.[2] === "change" && request.method === "POST") return api({ok: true, policy: projectSlos.change(project.id, policy[1]!, authority, await readJsonRequest(request, 16 * 1024))});
+        throw new PlatformError(404, "NOT_FOUND", "SLO endpoint not found.");
+      }
+      if (incidentOperation) {
+        const ownerAllowed = (userId: string) => Boolean(storage.internal.prepare("SELECT 1 FROM clank_auth_users WHERE id=? AND disabled=0").get(userId)) && projectMembershipAllows(storage.internal, project, userId, "incidents");
+        const authority: IncidentAuthority = {
+          userId: principal.userId,
+          authorize(permission) { requireCurrentProjectAuthority(); if (permission) accessibleProject(storage.internal, project.id, principal, permission); },
+          mayRead(permission) { requireCurrentProjectAuthority(); try { accessibleProject(storage.internal, project.id, principal, permission); return true; } catch (error) { if (error instanceof PlatformError && error.status === 403) return false; throw error; } },
+          ownerAllowed,
+          owners() {
+            const rows = project.organizationId
+              ? storage.internal.prepare("SELECT u.id,u.email FROM clank_platform_memberships m JOIN clank_auth_users u ON u.id=m.user_id WHERE m.organization_id=? AND u.disabled=0 ORDER BY u.email LIMIT 1001").all(project.organizationId)
+              : storage.internal.prepare("SELECT id,email FROM clank_auth_users WHERE id=? AND disabled=0").all(project.ownerId);
+            if (rows.length > 1000) throw new ProjectIncidentError(409, "INCIDENT_OWNER_CAPACITY", "Project member capacity is unavailable.");
+            return rows.filter(row => ownerAllowed(String(row.id))).map(row => ({userId: String(row.id), label: String(row.email).slice(0, 254)}));
+          },
+          audit(action, metadata) { audit(storage.internal, principal.userId, principal.tokenId, project.id, action, metadata); },
+        };
+        if (operation === "incidents" && request.method === "GET") return api({ok: true, ...projectIncidents.list(project.id, authority, url.searchParams)});
+        if (operation === "incidents" && request.method === "POST") return api({ok: true, incident: projectIncidents.create(project.id, authority, await readJsonRequest(request, 16 * 1024))}, 201);
+        if (operation === "incidents/owners" && request.method === "GET") return api({ok: true, owners: projectIncidents.owners(authority)});
+        const incident = /^incidents\/([A-Za-z0-9_-]{8,128})(?:\/(change))?$/u.exec(operation);
+        if (incident && !incident[2] && request.method === "GET") return api({ok: true, detail: await projectIncidents.read(project.id, incident[1]!, authority, url.searchParams)});
+        if (incident?.[2] === "change" && request.method === "POST") return api({ok: true, incident: await projectIncidents.change(project.id, incident[1]!, authority, await readJsonRequest(request, 16 * 1024))});
+        throw new PlatformError(404, "NOT_FOUND", "Incident endpoint not found.");
+      }
+      if (operation === "costs" || operation.startsWith("costs/")) {
+        if (!projectCosts) throw new PlatformError(404, "NOT_FOUND", "Project costs are not configured.");
+        const authority: ProjectCostAuthority = {
+          actorId: principal.userId,
+          authorize(admin) {
+            requireCurrentProjectAuthority();
+            const current = accessibleProject(storage.internal, project.id, principal, "read");
+            if (admin) {
+              if (principal.tokenId || principal.impersonation || !principal.sessionId || !["owner", "admin"].includes(current.role)) throw new PlatformError(403, "COST_HUMAN_REQUIRED", "Cost changes require a current project administrator browser session.");
+              const session = storage.auth.refreshSession(principal.sessionId);
+              if (session?.user?.id !== principal.userId) throw new PlatformError(401, "UNAUTHENTICATED", "Sign in to continue.");
+              storage.auth.requireFreshAuthentication(session, freshAuthenticationAge);
+            }
+          },
+          audit(action, metadata) { audit(storage.internal, principal.userId, principal.tokenId, project.id, action, metadata, true); },
+        };
+        if (request.method === "GET" && operation === "costs" && [...url.searchParams.keys()].every(key => key === "month") && url.searchParams.getAll("month").length <= 1) return api({ok: true, report: projectCosts.read(project.id, authority, url.searchParams.get("month") ?? undefined)});
+        if (request.method === "GET" && operation === "costs/history" && url.searchParams.size === 1 && url.searchParams.getAll("month").length === 1) return api({ok: true, snapshots: projectCosts.history(project.id, authority, url.searchParams.get("month")!)});
+        if (request.method !== "POST" || url.searchParams.size || !["costs/reconcile", "costs/policy", "costs/override"].includes(operation)) throw new PlatformError(422, "COST_INPUT", "Choose a supported cost endpoint and exact fields.");
+        authority.authorize(true);
+        const input = await readJsonRequest(request, 8_192);
+        authority.authorize(true);
+        if (operation === "costs/reconcile") return api({ok: true, snapshot: await projectCosts.reconcile(project.id, authority, input)});
+        if (operation === "costs/policy") return api({ok: true, policy: projectCosts.changePolicy(project.id, authority, input)});
+        return api({ok: true, override: projectCosts.changeOverride(project.id, authority, input)});
+      }
+      if(operation==="point-in-time"||operation.startsWith("point-in-time/")){
+        if(!pointInTime)throw new PlatformError(404,"RECOVERY_NOT_CONFIGURED","Point-in-time recovery is not configured.");
+        const controller=pointInTime;
+        const authority=(fresh=false)=>{
+          requireCurrentProjectAuthority();
+          if(request.method!=="GET"&&operation!=="point-in-time/mcp"){
+            if(principal.machine||principal.impersonation)throw new PlatformError(403,"HUMAN_AUTH_REQUIRED","Recovery changes require current human authority.");
+            requireOrganizationAdministration(accessibleProject(storage.internal,project.id,principal,operation==="point-in-time"||operation==="point-in-time/resolve"?"tokens":"rollback").role);
+          }
+          if(fresh){
+            const current=principal.sessionId?storage.auth.refreshSession(principal.sessionId):null;
+            if(!current?.user||current.user.id!==principal.userId)throw new PlatformError(403,"FRESH_AUTH_REQUIRED","Verify a passkey or MFA in the current browser session.");
+            storage.auth.requireFreshAuthentication(current,freshAuthenticationAge);
+          }
+        };
+        const perform=async<T>(work:()=>Promise<T>|T):Promise<T>=>{try{return await work();}catch(error){if(error instanceof PlatformError||error instanceof AuthError)throw error;try{void Promise.resolve(options.onError?.(error)).catch(()=>undefined);}catch{}throw new PlatformError(409,"RECOVERY_CONFLICT","Recovery state or provider authority changed; refresh its status or recover the retained operation.");}};
+        const metadata=()=>{
+          authority();const restores=storage.internal.prepare("SELECT id,state,receipt FROM clank_platform_pitr_operations WHERE project=? AND kind='restore' ORDER BY created_at DESC,id DESC LIMIT 100").all(project.id).map(row=>{
+            const value=JSON.parse(String(row.receipt));return row.state==="accepted"?value:{operationId:row.id,state:row.state,checkpointId:value.intent.checkpointId,destinationProjectId:value.intent.destinationId,sequence:value.intent.throughSequence,error:value.error??null};
+          });const result={ok:true,policy:controller.policy(project.id),checkpoints:controller.checkpoints(project.id),restores};authority();return result;
+        };
+        if(operation==="point-in-time"&&request.method==="GET")return api(metadata());
+        if(operation==="point-in-time/mcp"&&request.method==="POST"){
+          if(url.searchParams.size)throw new PlatformError(422,"INVALID_RECOVERY_INPUT","Recovery MCP does not accept query parameters.");
+          authority();
+          const annotations={readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false};
+          const transport=createMcpServer({name:"clank-project-recovery",version:"1.0.0",sessions:false,allowedOrigins:[publicUrl],maxRequestBytes:16384,maxResponseBytes:1024*1024,
+            instructions:"Inspect current recovery metadata and prepare an exact browser-only restore request. These tools cannot change recovery state or create a destination. A current human administrator must review and submit the restore with fresh browser authentication.",
+            authenticate:async()=>{authority();return{context:null,scopes:new Set(["agent:read"])};},tools:[{
+              name:"recovery.status",description:"Inspect this project's current recovery policy, retained checkpoint horizons and bounded restore receipts.",inputSchema:{type:"object",properties:{},additionalProperties:false},annotations,
+              invoke(input){exact(plainObject(input),[]);return metadata();},
+            },{
+              name:"recovery.restore_plan",description:"Prepare an exact human browser restore into a new suspended project from a currently retained checkpoint. No mutation is submitted.",annotations,
+              inputSchema:{type:"object",properties:{operationId:{type:"string",minLength:1,maxLength:128},checkpointId:{type:"string",minLength:69,maxLength:69},expectedVersion:{type:"integer",minimum:1},throughSequence:{type:"integer",minimum:0},name:{type:"string",minLength:1,maxLength:100},slug:{type:"string",minLength:1,maxLength:50}},required:["operationId","checkpointId","expectedVersion","throughSequence","name","slug"],additionalProperties:false},
+              invoke(raw){
+                authority();const input=plainObject(raw);exact(input,["operationId","checkpointId","expectedVersion","throughSequence","name","slug"]);
+                const body={operationId:boundedString(input.operationId,"operationId",1,128),checkpointId:boundedString(input.checkpointId,"checkpointId",69,69),expectedVersion:integerInRange(input.expectedVersion,"expectedVersion",1,Number.MAX_SAFE_INTEGER),throughSequence:integerInRange(input.throughSequence,"throughSequence",0,Number.MAX_SAFE_INTEGER),name:boundedString(input.name,"name",1,100),slug:normalizeSlug(boundedString(input.slug,"slug",1,50))};
+                if(!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(body.operationId)||!/^pitr_[0-9a-f]{64}$/u.test(body.checkpointId)||body.slug!==input.slug)throw new PlatformError(422,"INVALID_RECOVERY_INPUT","Use exact recovery identifiers and a canonical destination slug.");
+                const policy=controller.policy(project.id),checkpoint=controller.checkpoints(project.id).find(item=>item.id===body.checkpointId);
+                if(!policy||policy.version!==body.expectedVersion||!checkpoint||body.throughSequence>checkpoint.sequence)throw new PlatformError(409,"RECOVERY_POINT_UNAVAILABLE","Review the current policy version and retained checkpoint horizon.");
+                authority();return{browserOnly:true,method:"POST",path:`/api/projects/${project.id}/point-in-time/restores`,request:{...body,confirmation:`restore-recovery ${project.slug} ${checkpoint.id} ${body.throughSequence} ${body.slug}`},authorization:"Current human workspace administration and fresh browser passkey or MFA verification are required. No restore was submitted."};
+              },
+            }]});
+          const response=await transport.handle(request);authority();return response;
+        }
+        if(operation==="point-in-time"&&request.method==="PUT"){
+          const input=plainObject(await readJsonRequest(request,4096));exact(input,["operationId","expectedVersion","enabled","intervalMs","confirmation"]);authority(true);
+          if(input.confirmation!==`configure-recovery ${project.slug}`)throw new PlatformError(400,"CONFIRMATION_REQUIRED",`Pass confirmation "configure-recovery ${project.slug}".`);
+          const configured={operationId:boundedString(input.operationId,"operationId",1,128),expectedVersion:integerInRange(input.expectedVersion,"expectedVersion",0,Number.MAX_SAFE_INTEGER-1),enabled:input.enabled as boolean,intervalMs:integerInRange(input.intervalMs,"intervalMs",1000,86400000)};
+          if(typeof configured.enabled!=="boolean")throw new PlatformError(422,"INVALID_RECOVERY_POLICY","Recovery enabled must be boolean.");
+          const policyAuthority=()=>{authority(true);if(configured.enabled){
+            const latest=accessibleProject(storage.internal,project.id,principal,"tokens").project,release=latest.activeReleaseId?releaseById(storage.internal,latest.activeReleaseId):null;
+            if(latest.placement!=="provider"||!release)throw new PlatformError(409,"RECOVERY_SOURCE_UNAVAILABLE","Enable recovery only for an exact active provider release.");
+            exactProviderOrigin(latest,exactProviderRuntime(latest,release).nodeId);
+          }};
+          const policy=await perform(()=>storage.internal.transaction(changes=>{
+            policyAuthority();const prior=storage.internal.prepare("SELECT 1 FROM clank_platform_pitr_operations WHERE project=? AND id=? AND kind='configure' AND state='accepted'").get(project.id,configured.operationId);
+            const result=controller.configure(project.id,principal.userId,configured,policyAuthority);
+            if(!prior){audit(storage.internal,principal.userId,principal.tokenId,project.id,"recovery.policy",{operationId:configured.operationId,version:result.version,enabled:result.enabled});changes.record("__platform",project.id);}return result;
+          }));return api({ok:true,receipt:policy,policy:controller.policy(project.id)});
+        }
+        if(operation==="point-in-time/checkpoints"&&request.method==="POST"){
+          const input=plainObject(await readJsonRequest(request,4096));exact(input,["operationId","expectedVersion"]);authority();const operationId=boundedString(input.operationId,"operationId",1,128),version=integerInRange(input.expectedVersion,"expectedVersion",1,Number.MAX_SAFE_INTEGER);
+          const current=()=>{authority();requireRecoveryProjectLease(project.id);if(controller.policy(project.id)?.version!==version)throw new PlatformError(409,"RECOVERY_POLICY_STALE","Review the current recovery policy version.");};
+          const checkpoint=await perform(()=>withProjectLock(project.id,async()=>{current();const result=await controller.capture(project.id,operationId,current);current();return result;}));return api({ok:true,checkpoint},201);
+        }
+        if(operation==="point-in-time/restores"&&request.method==="POST"){
+          const input=plainObject(await readJsonRequest(request,8192));exact(input,["operationId","checkpointId","expectedVersion","throughSequence","name","slug","confirmation"]);authority(true);
+          if(principal.projectId)throw new PlatformError(403,"TOKEN_SCOPE_DENIED","Creating a separate recovery project requires organization-scoped human authority.");
+          const requested={operationId:boundedString(input.operationId,"operationId",1,128),checkpointId:boundedString(input.checkpointId,"checkpointId",69,69),expectedVersion:integerInRange(input.expectedVersion,"expectedVersion",1,Number.MAX_SAFE_INTEGER),throughSequence:integerInRange(input.throughSequence,"throughSequence",0,Number.MAX_SAFE_INTEGER),name:boundedString(input.name,"name",1,100),slug:normalizeSlug(boundedString(input.slug,"slug",1,50))};
+          if(!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(requested.operationId)||!/^pitr_[0-9a-f]{64}$/u.test(requested.checkpointId))throw new PlatformError(422,"INVALID_RECOVERY_RESTORE","Review the exact checkpoint and operation identifiers.");
+          const confirmation=`restore-recovery ${project.slug} ${requested.checkpointId} ${requested.throughSequence} ${requested.slug}`;
+          if(input.confirmation!==confirmation)throw new PlatformError(400,"CONFIRMATION_REQUIRED",`Pass confirmation "${confirmation}".`);
+          if(!options.pointInTime?.restoreKey)throw new PlatformError(409,"RECOVERY_KEY_UNAVAILABLE","Configure independent recovery key resolution before restoring a project.");
+          const fingerprint=JSON.stringify({owner:principal.userId,...requested});
+          const action=perform(()=>withProjectLock(project.id,async()=>{
+            authority(true);requireRecoveryProjectLease(project.id);if(closed)throw new PlatformError(409,"PLATFORM_CLOSING","Recovery cannot publish while the platform closes.");
+            const prior=storage.internal.prepare("SELECT kind,state,fingerprint,receipt FROM clank_platform_pitr_operations WHERE project=? AND id=?").get(project.id,requested.operationId);
+            if(prior&&(prior.kind!=="restore"||prior.fingerprint!==fingerprint||!["pending","accepted"].includes(String(prior.state))))throw new PlatformError(409,"RECOVERY_RETRY_CONFLICT","This recovery operation names a different request.");
+            if(prior?.state==="accepted"){
+              const receipt=JSON.parse(String(prior.receipt));accessibleProject(storage.internal,String(receipt.destinationProjectId),principal,"read");return receipt;
+            }
+            const policyCurrent=()=>{authority(true);requireRecoveryProjectLease(project.id);if(closed||controller.policy(project.id)?.version!==requested.expectedVersion)throw new PlatformError(409,"RECOVERY_POLICY_STALE","Review the current recovery policy before retrying the reserved restore.");};
+            policyCurrent();const checkpoint=controller.checkpoints(project.id).find(value=>value.id===requested.checkpointId);
+            if(!checkpoint||requested.throughSequence>checkpoint.sequence)throw new PlatformError(409,"RECOVERY_POINT_UNAVAILABLE","The chosen point is outside the retained checkpoint horizon.");controller.archive(project.id,checkpoint.id,policyCurrent);
+            const source=releaseById(storage.internal,checkpoint.binding.releaseId);
+            if(!source||source.projectId!==project.id||!source.artifactAvailable)throw new PlatformError(409,"RECOVERY_ARTIFACT_UNAVAILABLE","Retain the exact checkpoint release artifact before restoring it.");
+            const sourceCurrent=()=>{policyCurrent();const release=releaseById(storage.internal,source.id);if(!release||release.projectId!==project.id||!release.artifactAvailable||release.digest!==source.digest)throw new PlatformError(409,"RECOVERY_ARTIFACT_UNAVAILABLE","The exact retained checkpoint artifact changed.");};
+            const original=await readRunnerReleaseArtifact(paths.projects,source,new AbortController().signal,runnerArtifactObjects);sourceCurrent();
+            if(!original||original.sha256!==source.digest)throw new PlatformError(409,"RECOVERY_ARTIFACT_UNAVAILABLE","The retained source upload is unavailable or corrupt.");
+            const bundle=await decodeDeploymentBundle(original.bytes,{maxTotalBytes:options.maxArtifactBytes??100*1024*1024});sourceCurrent();
+            const previous=prior?JSON.parse(String(prior.receipt)):null,lease=await randomId(24);sourceCurrent();
+            if(previous?.leaseUntil!==null&&previous?.leaseUntil!==undefined&&Number(previous.leaseUntil)>Date.now())throw new PlatformError(409,"RECOVERY_RESTORE_BUSY","This reserved restore still has a live native operation lease.");
+            const destinationId=previous?.intent.destinationId??await randomId(18),releaseId=previous?.intent.releaseId??await randomId(18);sourceCurrent();
+            const intent={...requested,destinationId,releaseId,sourceReleaseId:source.id,digest:source.digest,organizationId:project.organizationId,databasePath:bundle.config.database.path};
+            if(previous&&JSON.stringify(previous.intent)!==JSON.stringify(intent))throw new PlatformError(409,"RECOVERY_RETRY_CONFLICT","The original reserved destination or source artifact changed.");
+            const claimed=JSON.stringify({intent,lease,leaseUntil:Date.now()+120000,error:null});
+            storage.internal.transaction(changes=>{
+              sourceCurrent();const current=storage.internal.prepare("SELECT kind,state,fingerprint,receipt FROM clank_platform_pitr_operations WHERE project=? AND id=?").get(project.id,requested.operationId);
+              if(current){if(current.kind!=="restore"||current.state!=="pending"||current.fingerprint!==fingerprint||current.receipt!==prior?.receipt)throw new PlatformError(409,"RECOVERY_RETRY_CONFLICT","The retained recovery operation changed.");}
+              else{
+                if(Number(storage.internal.prepare("SELECT count(*) AS n FROM clank_platform_pitr_operations").get()!.n)>=10000)throw new PlatformError(409,"RECOVERY_CAPACITY","Retained recovery operation capacity is full.");
+                if(!project.organizationId)throw new PlatformError(409,"RECOVERY_ORGANIZATION_REQUIRED","A recovery destination requires a current organization.");requireOrganizationAdministration(organizationMembership(storage.internal,project.organizationId,principal.userId).role);
+                if(Number(storage.internal.prepare("SELECT count(*) AS n FROM clank_platform_projects WHERE owner_id=?").get(principal.userId)!.n)>=accountQuotas(storage.internal,principal.userId,quotaDefaults).projectsPerAccount||Number(storage.internal.prepare("SELECT count(*) AS n FROM clank_platform_projects WHERE organization_id=?").get(project.organizationId)!.n)>=workspaceQuotas(storage.internal,project.organizationId,quotaDefaults).projectsPerOrganization)throw new PlatformError(409,"RECOVERY_PROJECT_CAPACITY","There is no quota for a new recovery project.");
+                const port=allocatePort(storage.internal,appPortStart,appPortEnd,unavailableApplicationPorts()),now=Date.now();
+                storage.internal.prepare("INSERT INTO clank_platform_projects(id,owner_id,organization_id,name,slug,port,active_release_id,database_path,placement,runtime_policy,idle_timeout_ms,created_at,updated_at) VALUES(?,?,?,?,?,?,NULL,?,'local','suspended',?,?,?)").run(destinationId,principal.userId,project.organizationId,requested.name,requested.slug,port,bundle.config.database.path,defaultIdleTimeoutMs,now,now);
+                storage.internal.prepare("INSERT INTO clank_platform_pitr_operations VALUES(?,?,'restore',?,'pending',?,0,?)").run(project.id,requested.operationId,fingerprint,claimed,now);changes.record("__platform",destinationId);
+                audit(storage.internal,principal.userId,principal.tokenId,project.id,"recovery.restore.reserve",{operationId:requested.operationId,checkpointId:checkpoint.id,destinationProjectId:destinationId,throughSequence:requested.throughSequence});
+              }
+              if(current)storage.internal.prepare("UPDATE clank_platform_pitr_operations SET receipt=? WHERE project=? AND id=? AND state='pending'").run(claimed,project.id,requested.operationId);
+              const reserved=storage.internal.prepare("SELECT state,receipt FROM clank_platform_pitr_operations WHERE project=? AND id=?").get(project.id,requested.operationId),destination=projectById(storage.internal,destinationId);
+              if(reserved?.state!=="pending"||reserved.receipt!==claimed||!destination||destination.ownerId!==principal.userId||destination.organizationId!==intent.organizationId||destination.activeReleaseId!==null||destination.runtimePolicy!=="suspended"||destination.databasePath!==intent.databasePath)throw new PlatformError(409,"RECOVERY_RESERVATION_CHANGED","The exact native recovery destination reservation changed.");
+            });
+            const current=()=>{
+              sourceCurrent();requireRecoveryProjectLease(destinationId);const native=storage.internal.prepare("SELECT state,receipt FROM clank_platform_pitr_operations WHERE project=? AND id=?").get(project.id,requested.operationId),destination=accessibleProject(storage.internal,destinationId,principal,"deploy").project;
+              if(native?.state!=="pending"||native.receipt!==claimed||Date.now()>=JSON.parse(claimed).leaseUntil||destination.placement!=="local"||destination.runtimePolicy!=="suspended"||destination.activeReleaseId!==null||destination.databasePath!==intent.databasePath||destination.organizationId!==intent.organizationId||destination.ownerId!==principal.userId||active.has(destinationId))throw new PlatformError(409,"RECOVERY_DESTINATION_CHANGED","The exact reserved stopped destination or operation lease changed.");
+            };
+            return withProjectLock(destinationId,async()=>{
+              try{
+                current();const directory=await newReleaseDirectory(paths.projects,destinationId,releaseId);current();const dataRoot=await projectDataDirectory(paths.projects,destinationId);current();const stage=await safeProjectDataPath(dataRoot,".pitr-"+syncHash(requested.operationId)+".sqlite");current();const databasePath=await safeProjectDataPath(dataRoot,bundle.config.database.path);current();if(stage===databasePath)throw new PlatformError(409,"RECOVERY_STAGING_CONFLICT","The retained database path conflicts with private recovery staging.");
+                const restored=await controller.restore(project.id,checkpoint.id,{targetPath:stage,throughSequence:requested.throughSequence},current);current();const databaseBytes=await regularFileBytes(stage);current();
+                const runtimeBytes=bundle.files.reduce((total,file)=>total+file.size,0),storageBytes=runtimeBytes+original.bytes.byteLength+databaseBytes,destination=projectById(storage.internal,destinationId)!;
+                assertReleaseCapacity(storage.internal,destinationId,storageBytes,projectQuotas(storage.internal,destination,quotaDefaults));
+                await extractReservedRecoveryBundle(bundle,directory,requested.operationId,current);current();
+                await writeRunnerReleaseArtifact(paths.projects,{projectId:destinationId,releaseId,digest:source.digest,bytes:original.bytes.byteLength,store:"local",key:null},original.bytes,null);current();
+                await restoreSQLiteBackup(stage,databasePath,current);current();
+                const receipt={operationId:requested.operationId,state:"accepted",checkpointId:checkpoint.id,destinationProjectId:destinationId,releaseId,digest:source.digest,epoch:restored.epoch,sequence:restored.sequence,committedAt:restored.committedAt};
+                storage.internal.transaction(changes=>{
+                  current();assertReleaseCapacity(storage.internal,destinationId,storageBytes,projectQuotas(storage.internal,destination,quotaDefaults));
+                  const inserted=storage.internal.prepare("INSERT INTO clank_platform_releases(id,project_id,previous_release_id,status,digest,artifact_bytes,runtime_bytes,runner_artifact_bytes,runner_artifact_store,runner_artifact_key,snapshot_bytes,storage_bytes,artifact_available,framework_version,node_version,config,directory,backup_path,idempotency_key,created_at) VALUES(?,?,NULL,'active',?,?,?,?,'local',NULL,0,?,1,?,?,?,?,NULL,?,?)").run(releaseId,destinationId,source.digest,original.bytes.byteLength,runtimeBytes,original.bytes.byteLength,storageBytes,bundle.provenance.frameworkVersion,bundle.provenance.nodeVersion,JSON.stringify(bundle.config),directory,"recovery_"+requested.operationId,Date.now());
+                  const selected=storage.internal.prepare("UPDATE clank_platform_projects SET active_release_id=?,updated_at=? WHERE id=?").run(releaseId,Date.now(),destinationId),published=projectById(storage.internal,destinationId),retained=releaseById(storage.internal,releaseId);
+                  if(Number(inserted.changes)!==1||Number(selected.changes)!==1||!published||published.activeReleaseId!==releaseId||published.runtimePolicy!=="suspended"||published.placement!=="local"||!retained||retained.projectId!==destinationId||retained.digest!==source.digest||retained.status!=="active"||!retained.artifactAvailable)throw new PlatformError(409,"RECOVERY_ACKNOWLEDGMENT_CHANGED","The stopped native project or retained release acknowledgment changed.");
+                  const acknowledged=storage.internal.prepare("UPDATE clank_platform_pitr_operations SET state='accepted',receipt=? WHERE project=? AND id=? AND state='pending' AND receipt=?").run(JSON.stringify(receipt),project.id,requested.operationId,claimed);if(Number(acknowledged.changes)!==1)throw new PlatformError(409,"RECOVERY_ACKNOWLEDGMENT_CHANGED","The reserved recovery acknowledgment changed.");
+                  audit(storage.internal,principal.userId,principal.tokenId,project.id,"recovery.restore.accept",receipt);sourceCurrent();requireRecoveryProjectLease(destinationId);const accepted=storage.internal.prepare("SELECT state,receipt FROM clank_platform_pitr_operations WHERE project=? AND id=?").get(project.id,requested.operationId);if(accepted?.state!=="accepted"||accepted.receipt!==JSON.stringify(receipt))throw new PlatformError(409,"RECOVERY_ACKNOWLEDGMENT_CHANGED","The exact native restore receipt was not retained.");changes.record("__platform",destinationId);
+                });try{await removeDatabaseFiles(stage);}catch(error){try{reportDeploymentError(error);}catch{}}authority(true);accessibleProject(storage.internal,destinationId,principal,"read");return receipt;
+              }catch(error){
+                storage.internal.transaction(()=>{const row=storage.internal.prepare("SELECT state,receipt FROM clank_platform_pitr_operations WHERE project=? AND id=?").get(project.id,requested.operationId);if(row?.state==="pending"&&row.receipt===claimed)storage.internal.prepare("UPDATE clank_platform_pitr_operations SET receipt=? WHERE project=? AND id=? AND state='pending'").run(JSON.stringify({intent,lease:null,leaseUntil:null,error:"Recovery restore needs exact retry or operator recovery."}),project.id,requested.operationId);});throw error;
+              }
+            });
+          }));recoveryRestores.add(action);try{return api({ok:true,receipt:await action},201);}finally{recoveryRestores.delete(action);}
+        }
+        if(operation==="point-in-time/resolve"&&request.method==="POST"){
+          const input=plainObject(await readJsonRequest(request,4096));exact(input,["operationId","pendingOperationId","expectedVersion","confirmation"]);authority(true);
+          const configured={operationId:boundedString(input.operationId,"operationId",1,128),pendingOperationId:boundedString(input.pendingOperationId,"pendingOperationId",1,128),expectedVersion:integerInRange(input.expectedVersion,"expectedVersion",1,Number.MAX_SAFE_INTEGER-1)};
+          if(input.confirmation!==`abandon-recovery ${project.slug} ${configured.pendingOperationId}`)throw new PlatformError(400,"CONFIRMATION_REQUIRED",`Pass confirmation "abandon-recovery ${project.slug} ${configured.pendingOperationId}".`);
+          const receipt=await perform(()=>storage.internal.transaction(changes=>{
+            authority(true);const prior=storage.internal.prepare("SELECT 1 FROM clank_platform_pitr_operations WHERE project=? AND id=? AND kind='resolve' AND state='accepted'").get(project.id,configured.operationId);
+            const result=controller.resolve(project.id,principal.userId,configured,()=>authority(true));
+            if(!prior){audit(storage.internal,principal.userId,principal.tokenId,project.id,"recovery.resolve",{...result});changes.record("__platform",project.id);}return result;
+          }));return api({ok:true,receipt,policy:controller.policy(project.id)});
+        }
+        throw new PlatformError(404,"NOT_FOUND","Recovery endpoint not found.");
+      }
+      const shadowDetail=/^shadow\/([A-Za-z0-9_-]{1,128})$/u.exec(operation);
+      if(request.method==="GET" && (operation==="shadow" || shadowDetail)){
+        try{
+          if(!shadowReadIdentity || url.hash)throw new PlatformError(400,"SHADOW_CURSOR_INVALID","Shadow status requires an exact request target.");
+          const result=await readShadowStatus(principal,project.id,url.search || (shadowReadIdentity.url.includes("?")?"?":""),shadowDetail?.[1],request,shadowReadIdentity);
+          const current=()=>{try{result.assertCurrent();}catch(error){const code=String((error as {code?:string})?.code??"");if(code.startsWith("SHADOW_"))throw new PlatformError(409,code,"Shadow status authority changed.");throw error;}};
+          current();machineResponseGuards.set(request,current);
+          return new Response(result.body,{headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store","x-content-type-options":"nosniff"}});
+        }
+        catch(error){if(error instanceof PlatformError)throw error;const code=String((error as {code?:string})?.code??"");if(code.startsWith("SHADOW_"))throw new PlatformError(code==="SHADOW_CURSOR_INVALID"?400:409,code,"Shadow status refused the input or retained state.");throw error;}
+      }
+      const shadowStop=/^shadow\/([A-Za-z0-9_-]{1,128})\/stop$/u.exec(operation);
+      if(request.method==="POST" && (operation==="shadow/preview" || operation==="shadow/start" || shadowStop)) {
+        requireShadowHuman(principal,project.id);
+        if(url.searchParams.size)throw new PlatformError(422,"SHADOW_INPUT_INVALID","Shadow mutations do not accept query fields.");
+        const input=plainObject(await readJsonRequest(request,8192));requireShadowHuman(principal,project.id);
+        try{
+          const result=operation==="shadow/preview"?await previewShadow(principal,project.id,input):operation==="shadow/start"?await startShadow(principal,project.id,input):await stopShadow(principal,project.id,shadowStop![1]!,input);
+          requireShadowHuman(principal,project.id);return api(result,operation==="shadow/preview"?200:202);
+        }catch(error){
+          if(error instanceof PlatformError)throw error;
+          const code=String((error as {code?:string})?.code??"");
+          if(code.startsWith("SHADOW_"))throw new PlatformError(code==="SHADOW_POLICY_INVALID" || code==="SHADOW_REVIEW_INVALID"?422:409,code,"Shadow control refused the current input or retained state.");
+          throw error;
+        }
+      }
       if (operation === "dependencies" && request.method === "GET") {
         requireCurrentProjectAuthority();
         const configuration = dependencyConfiguration(project.id);
@@ -9848,6 +10881,10 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           activeRelease: release ? publicRelease(release) : null,
           access: {
             role: access.role,
+            canUseIncidents: projectMembershipAllows(storage.internal, project, principal.userId, "incidents", access.role)
+              && (!principal.projectId || principal.permissions.includes("incidents")),
+            canManageSlos: projectMembershipAllows(storage.internal, project, principal.userId, "slo", access.role)
+              && (!principal.projectId || principal.permissions.includes("slo")),
             canDelete: principal.projectId === null && (access.role === "owner" || access.role === "admin"),
             canOperateJobs: roleAllows(access.role, "jobs")
               && (!principal.projectId || principal.permissions.includes("jobs")),
@@ -10188,6 +11225,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           const existingRow = storage.internal.prepare(`SELECT * FROM clank_platform_projects
             WHERE parent_project_id = ? AND preview_name = ?`).get(current.id, previewName);
           if (existingRow) {
+            if (admittedTemporaryAccess.has(principal)) throw new PlatformError(409,"TEMPORARY_ACCESS_NEW_PREVIEW","This grant permits a new isolated preview; it cannot refresh an existing preview.");
             const existingId = projectRow(existingRow).id;
             const refreshed = await withProjectLock(existingId, async () => {
               requireCurrentProjectAuthority();
@@ -10247,7 +11285,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
                 );
               }
               port = allocatePort(storage.internal, appPortStart, appPortEnd, unavailableApplicationPorts());
-              storage.internal.prepare(`INSERT INTO clank_platform_projects
+              const insertedPreview = storage.internal.prepare(`INSERT INTO clank_platform_projects
                 (id, owner_id, organization_id, name, slug, port, active_release_id, database_path,
                   placement, parent_project_id, preview_name, preview_expires_at,
                   runtime_policy, idle_timeout_ms, created_at, updated_at)
@@ -10268,6 +11306,13 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
                   now,
                   now,
                 );
+              if (admittedTemporaryAccess.has(principal)) {
+                const saved=projectById(storage.internal,id);
+                if (Number(insertedPreview.changes)!==1 || !saved || saved.ownerId!==principal.userId || saved.organizationId!==current.organizationId || saved.parentProjectId!==current.id || saved.previewName!==previewName || saved.previewExpiresAt!==expiresAt || saved.slug!==slug || saved.port!==port || saved.activeReleaseId!==null || saved.databasePath!==null) throw new PlatformError(503,'TEMPORARY_ACCESS_WRITE','The isolated preview was not stored as reviewed.');
+                requireCurrentProjectAuthority();
+                audit(storage.internal,principal.userId,null,id,'preview.create',{organizationId:current.organizationId,parentProjectId:current.id,previewName,slug,port,placement:current.placement,expiresAt,isolatedData:true,temporaryAccessGrantId:admittedTemporaryAccess.get(principal)!.grantId},true);
+                requireCurrentProjectAuthority();
+              }
               changes.record("__platform", current.organizationId!);
             });
           } catch (error) {
@@ -10278,7 +11323,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
             throw error;
           }
           const preview = projectById(storage.internal, id)!;
-          audit(storage.internal, principal.userId, principal.tokenId, id, "preview.create", {
+          if (!admittedTemporaryAccess.has(principal)) audit(storage.internal, principal.userId, principal.tokenId, id, "preview.create", {
             organizationId: current.organizationId,
             parentProjectId: current.id,
             previewName,
@@ -10456,16 +11501,17 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           ok: true,
           releases: rows.map((row) => {
             const release = releaseRow(row);
-            const channelPinned = releaseChannelPinned(project.id, release.id), dependencyPinned = dependencyRecoveryPinned(project.id, release.id);
+            const channelPinned = releaseChannelPinned(project.id, release.id), dependencyPinned = dependencyRecoveryPinned(project.id, release.id), recoveryRetentionPinned=recoveryPinned(project.id,release.id);
             return {
               ...publicRelease(release),
               cleanup: {
                 allowed: release.artifactAvailable
                   && release.id !== project.activeReleaseId
                   && release.status !== "staging"
-                  && !channelPinned && !dependencyPinned,
+                  && !channelPinned && !dependencyPinned && !recoveryRetentionPinned,
                 channelPinned,
                 dependencyPinned,
+                recoveryPinned:recoveryRetentionPinned,
                 rollbackProtected: release.id === activeRelease?.previousReleaseId,
               },
             };
@@ -10938,6 +11984,15 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
               JSON.stringify(permissions),
               principal.previewName,
             );
+          if(project.organizationId && organizationSecurity) {
+            if(principal.sessionId) {
+              const current=storage.auth.refreshSession(principal.sessionId);
+              if(!current) throw new PlatformError(401,'UNAUTHENTICATED','Sign in before issuing this scoped credential.');
+              organizationSecurity.captureDelegation(project.organizationId,'cli_'+tokenId,current);
+            } else if(principal.tokenId && storage.internal.prepare('SELECT 1 FROM clank_organization_security_delegations WHERE organization_id=? AND credential_id=?').get(project.organizationId,'cli_'+principal.tokenId)) {
+              organizationSecurity.continueDelegation(project.organizationId,'cli_'+principal.tokenId,'cli_'+tokenId,principal.userId);
+            } else if(storage.internal.prepare('SELECT 1 FROM clank_organization_security_policies WHERE organization_id=?').get(project.organizationId)) throw new AuthError('ORGANIZATION_POLICY_DELEGATION','Authorize this scoped credential from a current human session.',401);
+          }
         });
         audit(storage.internal, principal.userId, principal.tokenId, project.id, "project-token.create", {
           tokenId,
@@ -11305,9 +12360,14 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       }
       throw new PlatformError(404, "NOT_FOUND", "Platform endpoint not found.");
     } catch (error) {
+      if(error instanceof CustomerStatusError)return problem(error.status,error.code,error.message);
+      if(error instanceof DomainVerificationError)return problem(422,'STATUS_DOMAIN_OWNERSHIP_PENDING',error.message);
+      if (error instanceof ProjectCostError) return problem(error.status, error.code, error.message);
       if (error instanceof ServiceAccountError) return problem(error.status,error.code,error.message);
       if (error instanceof BackendActionError) return problem(error.status, error.code, error.message);
       if (error instanceof PlatformError) return problem(error.status, error.code, error.message, error.retryAfter);
+      if (error instanceof ProjectIncidentError) return problem(error.status, error.code, error.message);
+      if (error instanceof ProjectSloError) return problem(error.status, error.code, error.message);
       if (error instanceof RequestInputError) return problem(error.status, error.code, error.message);
       if (error instanceof AuthError) return problem(error.status, error.code, error.message, error.retryAfter);
       if (error instanceof BillingWebhookError) {
@@ -11320,8 +12380,9 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
 
   const handle = async (request: Request): Promise<Response> => {
     const response = await handleRequest(request);
-    if(response.status<400) {
-      try {machineResponseGuards.get(request)?.();} catch(error) {
+    const responseGuard=shadowMcpResponseGuards.get(request)??(response.status<400?machineResponseGuards.get(request):undefined);
+    if(responseGuard) {
+      try {responseGuard();} catch(error) {
         if(error instanceof ServiceAccountError || error instanceof PlatformError) return problem(error.status,error.code,error.message);
         return problem(401,'SERVICE_ACCOUNT_INVALID_CREDENTIAL','Refresh service account authority before continuing.');
       }
@@ -11337,16 +12398,19 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     });
   };
 
+  if(shadowPolicy)prepareShadowUploads(()=>{if(closed || !leadership)throw new Error("Shadow startup authority is unavailable.");leadership.assertCurrent();});
   const pendingCanaryProjects = new Set<string>(canaryHistory?.pendingProjects() ?? []);
   for (const row of storage.internal.prepare("SELECT project_id FROM clank_platform_provider_canaries").all()) {
-    const record = providerCanaryRecord(String(row.project_id))!;
+    const record = providerCandidateRecord(String(row.project_id))!;
     if (record.operation.phase !== "complete") pendingCanaryProjects.add(String(row.project_id));
   }
   const pendingCanaries = [...pendingCanaryProjects]; let canaryCursor = 0;
   await Promise.all(Array.from({ length: Math.min(4, pendingCanaries.length) }, async () => {
     while (canaryCursor < pendingCanaries.length) {
       const id = pendingCanaries[canaryCursor++]!;
-      try { await withProjectLock(id, async () => {
+      try {
+        if(providerCandidateRecord(id)?.protocol===2){await shadowController.recover(id);continue;}
+        await withProjectLock(id, async () => {
         const record = providerCanaryRecord(id), authority = captureProjectAuthority(id, Boolean(record));
         canaryHistory?.interrupt(id, authority);
         if (record?.operation.phase === "activating") {
@@ -11408,14 +12472,17 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
   scheduleRuntimeSweep();
   scheduleReleaseWindows();
   backupScheduler.start();
+  pointInTime?.start();
   invitationDeliveries.start();
   auditExporter?.start();
   if (options.retention?.intervalMs !== undefined && options.retention.intervalMs !== false) retentionController?.start();
   operationsMonitor?.start();
+  projectSlos.start();
 
   return {
     handle,
     authenticateServiceAccount(request) {
+      assertOrganizationSecurityProtocol(storage.internal);
       if(!serviceAccounts) throw new PlatformError(401,"INVALID_TOKEN","Service account credentials are unavailable.");
       const header=request.headers.get('authorization');
       if(!header || !/^Bearer clsa_[A-Za-z0-9_-]{43}$/u.test(header)) throw new PlatformError(401,"INVALID_TOKEN","Supply a current service account credential.");
@@ -11426,13 +12493,18 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     hostingProfile,
     runnerKind: runner.kind ?? "process",
     async close() {
+      statusPages?.close();
+      projectSlos.close();
+      projectIncidents.close();
       if (closed) return;
       closed = true;
       for (const intake of stagingIntakes) intake.abort();
       if (stagingIntakes.size) await Promise.all([...locks.values()].map(pending => pending.catch(() => undefined)));
+      projectCosts?.close();
       if (releaseWindowTimer) clearTimeout(releaseWindowTimer);
       releaseWindowTimer = undefined;
       await releaseWindowFlight?.catch(()=>undefined);
+      await shadowController.close();
       canaryHistory?.close();
       if (canaryHistory) await Promise.all([...locks.values()].map((pending) => pending.catch(() => undefined)));
       if (runtimeSweepTimer) clearTimeout(runtimeSweepTimer);
@@ -11444,8 +12516,13 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       if (previewCleanupTimer) clearTimeout(previewCleanupTimer);
       previewCleanupTimer = undefined;
       await previewCleanupFlight?.catch(() => undefined);
+      await pointInTime?.close();
+      await Promise.allSettled([...recoveryRestores]);
       await operationsMonitor?.close();
       serviceAccounts?.close();
+      organizationSecurityStores.delete(storage.internal);
+      organizationSecurity?.close();
+    temporaryAccess?.close();
       retentionController?.close();
       await auditExporter?.close();
       await invitationDeliveries.close();
@@ -11475,6 +12552,17 @@ async function assertPlatformSupervisorMode(path:string,enabled:boolean):Promise
   }catch(error){if((error as {code?:string}).code!=="ENOENT")throw error;}
 }
 
+async function assertPlatformRecoveryMode(databasePath:string,directory:string,enabled:boolean):Promise<void>{
+  if(enabled)return;
+  const fsName="node:fs/promises",sqliteName="node:sqlite",fs=await import(fsName);
+  const required=()=>new PlatformError(409,"RECOVERY_MODE_REQUIRED","This enrolled catalog requires its registered recovery configuration; preserve its marker, archives and pending destinations for operator recovery.");
+  try{const stat=await fs.lstat(directory);if(!stat.isDirectory()||stat.isSymbolicLink()||(await fs.readdir(directory)).length!==0)throw required();}catch(error){if((error as {code?:string}).code!=="ENOENT")throw error;}
+  try{
+    await fs.stat(databasePath);const sqlite=await import(sqliteName),observer=new sqlite.DatabaseSync(databasePath,{readOnly:true});
+    try{observer.exec("PRAGMA busy_timeout=5000");if(observer.prepare("SELECT 1 FROM sqlite_schema WHERE name IN ('clank_platform_pitr_state','clank_platform_pitr_policies','clank_platform_pitr_operations','clank_platform_pitr_checkpoints','clank_platform_pitr_archives') LIMIT 1").get())throw required();}finally{observer.close();}
+  }catch(error){if((error as {code?:string}).code!=="ENOENT")throw error;}
+}
+
 async function openPlatformDatabase(path: string, masterKey: Uint8Array,
   authentication: { concurrency: number; maxQueue: number },leadership?:SupervisorLease, providerWriteAuthority?: () => void): Promise<PlatformDatabase> {
   // Check the persisted topology marker before ordinary platform bootstrap can
@@ -11488,6 +12576,7 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array,
   catch(error){database.close();throw error;}
   try {
     assertServiceAccountProtocol(internal);
+    assertOrganizationSecurityProtocol(internal);
     if (leadership && internal.prepare("SELECT protocol FROM clank_platform_supervisor_state WHERE singleton=1").get()?.protocol === 2) {
       if (!internal.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_platform_provider_canaries'").get())
         throw new Error("The enrolled provider canary journal is missing; preserve the catalog for recovery.");
@@ -12683,11 +13772,14 @@ async function requireToken(internal: SQLiteInternal, request: Request, allowMac
     impersonation: null,
   };
   admittedTokenAuthority.set(principal, tokenAuthorityFingerprint(row));
+  const organizationId = principal.organizationId ?? (principal.projectId ? projectById(internal,principal.projectId)?.organizationId : null);
+  if (organizationId && !matched[1]!.startsWith('clsa_')) authorizeOrganizationPolicy(internal,principal,organizationId);
   return principal;
 }
 
 function requireCurrentPlatformPrincipal(storage: PlatformDatabase, principal: TokenPrincipal): void {
   principal.machine?.assertCurrent();
+  for (const organizationId of admittedOrganizationScopes.get(principal) ?? []) authorizeOrganizationPolicy(storage.internal,principal,organizationId);
   if (principal.tokenId !== null) {
     const active = storage.internal.prepare(`SELECT t.token_hash, t.organization_id, t.project_id,
       t.permissions, t.preview_name, t.expires_at FROM clank_platform_tokens t
@@ -12698,6 +13790,8 @@ function requireCurrentPlatformPrincipal(storage: PlatformDatabase, principal: T
     if (!active || (admitted !== undefined && tokenAuthorityFingerprint(active) !== admitted)) {
       throw new PlatformError(401, "INVALID_TOKEN", "The CLI access token is invalid or expired.");
     }
+    const organizationId=principal.organizationId ?? (principal.projectId ? projectById(storage.internal,principal.projectId)?.organizationId : null);
+    if(organizationId) authorizeOrganizationPolicy(storage.internal,principal,organizationId);
   } else {
     const current = principal.sessionId ? storage.auth.refreshSession(principal.sessionId) : null;
     if (!current?.user || current.user.id !== principal.userId || principal.impersonation !== null) {
@@ -12874,6 +13968,7 @@ function accessibleProject(
     throw new PlatformError(404, "PROJECT_NOT_FOUND", "Project not found.");
   }
   const project = projectRow(row);
+  if(project.organizationId) authorizeOrganizationPolicy(internal,principal,project.organizationId);
   const role = validateOrganizationRole(String(row.membership_role), true);
   const scopedPreview = Boolean(
     principal.projectId
@@ -12903,8 +13998,11 @@ function accessibleProject(
   ) {
     throw new PlatformError(403, "TOKEN_SCOPE_DENIED", `This token cannot perform ${permission} operations.`);
   }
+  const elevation = admittedTemporaryAccess.get(principal);
+  if (elevation && elevation.projectId===id && permission==='previews') elevation.assertCurrent();
   if (!projectMembershipAllows(internal, project, principal.userId, permission, role)) {
-    throw new PlatformError(403, "ROLE_DENIED", `The ${role} role cannot perform ${permission} operations.`);
+    if (!elevation || elevation.projectId!==id || permission!=='previews') throw new PlatformError(403, "ROLE_DENIED", `The ${role} role cannot perform ${permission} operations.`);
+    elevation.assertCurrent();
   }
   if ((permission === "deploy" || permission === "rollback") && role !== "owner" && role !== "admin"
     && internal.prepare("SELECT 1 FROM clank_platform_environments WHERE project_id=? AND name='production'").get(project.id)) {
@@ -15569,7 +16667,7 @@ function dashboardPayload(
       FROM clank_platform_organizations o
       JOIN clank_platform_memberships m ON m.organization_id = o.id
       WHERE m.user_id = ? ORDER BY o.created_at`).all(principal.userId);
-  const organizations = organizationRows.map((row) => {
+  const organizations = organizationRows.filter(row=>organizationPolicyAllows(internal,principal,String(row.id))).map((row) => {
     const effective = workspaceQuotas(internal, String(row.id), defaults, quotaSnapshot);
     return {
       id: String(row.id),
@@ -15581,7 +16679,7 @@ function dashboardPayload(
       usage: { projects: Number(row.project_count), limit: effective.projectsPerOrganization },
     };
   });
-  const projectRows = visibleProjectRows(internal, principal.userId, principal.projectId);
+  const projectRows = visibleProjectRows(internal, principal.userId, principal.projectId).filter(row=>!row.organization_id || organizationPolicyAllows(internal,principal,String(row.organization_id)));
   const projectUsage = dashboardProjectUsage(internal, projectRows.map((row) => String(row.id)));
   const projects = projectRows.map((source) => {
     const project = projectRow(source);
@@ -15650,6 +16748,9 @@ function dashboardPayload(
     },
     limits: publicLimits(accountLimits, maxArtifactBytes, metricRetentionDays),
     organizations,
+    // A noncompliant human administrator may discover only remediation. CLI,
+    // support impersonation and ordinary members receive no bypass metadata.
+    securityRemediation: principal.sessionId && !principal.impersonation ? organizationRows.filter(row=>['owner','admin'].includes(String(row.role)) && !organizations.some(org=>org.id===String(row.id))).map(row=>({id:String(row.id),name:String(row.name),slug:String(row.slug),role:String(row.role)})) : [],
     projects,
     totals: {
       projects: projects.length,
@@ -15785,6 +16886,7 @@ function audit(
   projectId: string | null,
   action: string,
   metadata: Record<string, unknown>,
+  verifyStored = false,
 ): void {
   if(tokenId && internal.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_platform_machine_credentials'").get()) {
     const machine=internal.prepare('SELECT account_id,generation FROM clank_platform_machine_credentials WHERE token_id=?').get(tokenId);
@@ -15799,10 +16901,17 @@ function audit(
       ? metadata.organizationId
       : null
     : String(projectOrganization.organization_id);
-  internal.prepare(`INSERT INTO clank_platform_audit
+  const encoded = JSON.stringify(metadata), createdAt = Date.now();
+  const inserted = internal.prepare(`INSERT INTO clank_platform_audit
     (actor_user_id, actor_token_id, project_id, organization_id, action, metadata, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)`)
-    .run(userId, tokenId, projectId, organizationId, action, JSON.stringify(metadata), Date.now());
+    .run(userId, tokenId, projectId, organizationId, action, encoded, createdAt);
+  if (verifyStored) {
+    const row = internal.prepare("SELECT actor_user_id,actor_token_id,project_id,organization_id,action,metadata,created_at FROM clank_platform_audit WHERE id=?").get(inserted.lastInsertRowid);
+    if (Number(inserted.changes) !== 1 || !row || row.actor_user_id !== userId || row.actor_token_id !== tokenId
+      || row.project_id !== projectId || row.organization_id !== organizationId || row.action !== action
+      || row.metadata !== encoded || Number(row.created_at) !== createdAt) throw new PlatformError(503, "AUDIT_WRITE_FAILED", "The reviewed operation audit was not durably stored.");
+  }
 }
 
 function runnerIdentity(value: unknown, name: string, maximum: number): string {
@@ -15911,6 +17020,11 @@ function workspaceAuditEvents(
       ORDER BY a.id DESC LIMIT ?`)
       .all(principal.projectId, before, before, limit);
   } else {
+    const candidateOrganizations = internal.prepare(`SELECT organization_id FROM clank_platform_memberships
+      WHERE user_id=? AND role IN ('owner','admin','developer') AND (? IS NULL OR organization_id=?)
+      AND (? IS NULL OR organization_id=?) LIMIT 1001`).all(principal.userId,organizationId,organizationId,principal.organizationId,principal.organizationId);
+    if(candidateOrganizations.length>1000) throw new PlatformError(409,'ORGANIZATION_POLICY_CAPACITY','The complete audit scope exceeds its supported membership bound.');
+    const admitted = candidateOrganizations.filter(row=>organizationPolicyAllows(internal,principal,String(row.organization_id))).map(row=>String(row.organization_id));
     rows = internal.prepare(`SELECT a.id, a.organization_id, a.project_id, a.action, a.metadata,
       a.created_at, a.actor_user_id, a.actor_token_id, u.email AS actor_email,
         m.role AS reader_role,
@@ -15937,10 +17051,11 @@ function workspaceAuditEvents(
       LEFT JOIN clank_platform_organizations o ON o.id = a.organization_id
       LEFT JOIN clank_platform_projects p ON p.id = a.project_id
       WHERE m.role IN ('owner', 'admin', 'developer')
+        AND a.organization_id IN (SELECT value FROM json_each(?))
         AND (? IS NULL OR a.organization_id = ?)
         AND (? IS NULL OR a.id < ?)
       ORDER BY a.id DESC LIMIT ?`)
-      .all(principal.userId, organizationId, organizationId, before, before, limit);
+      .all(principal.userId, JSON.stringify(admitted), organizationId, organizationId, before, before, limit);
   }
   const events = rows.map((row) => {
     const metadata = JSON.parse(String(row.metadata)) as Record<string, unknown>;
@@ -17332,6 +18447,40 @@ async function newReleaseDirectory(projectsRoot: string, projectId: string, rele
   return directory;
 }
 
+/** Reuses only verified files inside a natively reserved, never-started restore destination. */
+async function extractReservedRecoveryBundle(bundle:DeploymentBundle,directory:string,operationId:string,current:()=>void):Promise<void>{
+  const fsName="node:fs/promises",nativeFsName="node:fs",pathName="node:path",cryptoName="node:crypto";
+  const [fs,{constants},path,crypto]=await Promise.all([import(fsName),import(nativeFsName),import(pathName),import(cryptoName)]);current();
+  const root=await fs.realpath(directory);current();if((await fs.lstat(directory)).isSymbolicLink())throw new Error("Reserved release directory cannot be a symbolic link.");current();
+  const expectedFiles=new Set(bundle.files.map(file=>file.path)),expectedDirectories=new Set<string>();
+  for(const file of bundle.files){const segments=file.path.split("/");for(let i=1;i<segments.length;i++)expectedDirectories.add(segments.slice(0,i).join("/"));}
+  const parents=async(relative:string)=>{
+    let parent=root;for(const segment of relative.split("/").slice(0,-1)){
+      parent=path.join(parent,segment);try{await fs.mkdir(parent,{mode:0o700});}catch(error){if((error as {code?:string}).code!=="EEXIST")throw error;}current();const stat=await fs.lstat(parent);current();if(!stat.isDirectory()||stat.isSymbolicLink())throw new Error("Reserved release parents must remain private directories.");
+    }
+  };
+  for(const file of bundle.files){
+    current();await parents(file.path);current();const target=path.resolve(root,file.path);if(!target.startsWith(root+path.sep))throw new Error("Recovery artifact path escapes its reserved release.");
+    const temporary=path.join(path.dirname(target),".pitr-"+syncHash(operationId)+"-"+file.sha256+".tmp");
+    try{
+      const existing=await fs.open(target,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
+      try{current();const stat=await existing.stat();current();if(!stat.isFile()||stat.nlink!==1||stat.size!==file.size)throw new Error("Retained recovery release file is invalid.");const bytes=await existing.readFile();current();if(crypto.createHash("sha256").update(bytes).digest("hex")!==file.sha256||(stat.mode&0o777)!==file.mode)throw new Error("Retained recovery release file changed.");}finally{await existing.close();}
+      // Only this request's deterministic staging file can be left by a kill.
+      const stale=await fs.lstat(temporary).catch((error:unknown)=>{if((error as {code?:string}).code==="ENOENT")return null;throw error;});current();if(stale){if(!stale.isFile()||stale.isSymbolicLink()||stale.nlink!==1)throw new Error("Recovery staging file is not owned regular data.");await fs.rm(temporary);current();}continue;
+    }catch(error){if((error as {code?:string}).code!=="ENOENT")throw error;}
+    const handle=await fs.open(temporary,constants.O_WRONLY|constants.O_CREAT|constants.O_NOFOLLOW|constants.O_NONBLOCK,0o600);
+    try{
+      current();const stat=await handle.stat();current();if(!stat.isFile()||stat.nlink!==1)throw new Error("Recovery staging file is not owned regular data.");await handle.truncate(0);current();await handle.writeFile((globalThis as any).Buffer.from(file.content,"base64"));current();await handle.chmod(file.mode);current();await handle.sync();current();
+    }finally{await handle.close();}
+    current();await fs.rename(temporary,target);current();
+  }
+  let visited=0;
+  const inspect=async(relative:string)=>{
+    const names=await fs.readdir(path.join(root,relative));current();for(const name of names){if(++visited>bundle.files.length+expectedDirectories.size)throw new Error("Recovery release contains foreign files.");const item=relative?relative+"/"+name:name,stat=await fs.lstat(path.join(root,item));current();if(stat.isSymbolicLink())throw new Error("Recovery release contains a symbolic link.");if(stat.isDirectory()){if(!expectedDirectories.has(item))throw new Error("Recovery release contains a foreign directory.");await inspect(item);}else if(!stat.isFile()||stat.nlink!==1||!expectedFiles.has(item))throw new Error("Recovery release contains foreign files.");}
+  };
+  await inspect("");current();const parent=await fs.open(root,constants.O_RDONLY|constants.O_DIRECTORY);try{await parent.sync();}finally{await parent.close();}current();
+}
+
 interface RunnerArtifactObjects {
   namespace: string;
   store: ObjectStore;
@@ -18047,7 +19196,9 @@ const PLATFORM_PROJECT_SECTIONS = new Set([
   "storage",
   "logs",
   "jobs",
+  "incidents",
   "settings",
+  "slo",
 ]);
 
 function canonicalPlatformConsolePath(pathname: string): string | null {
@@ -18382,7 +19533,9 @@ const PROJECT_PERMISSIONS: readonly ProjectPermission[] = [
   "deploy",
   "rollback",
   "jobs",
+  "incidents",
   "secrets",
+  "slo",
   "tokens",
   "audit",
   "previews",
@@ -18619,12 +19772,12 @@ function canaryBinding(value: unknown): DeploymentProviderCanaryBinding {
 function samePlatformCanaryBinding(left: DeploymentProviderCanaryBinding, right: DeploymentProviderCanaryBinding): boolean {
   return left.projectId === right.projectId && left.releaseId === right.releaseId && left.generation === right.generation && left.fence === right.fence && left.incarnation === right.incarnation;
 }
-function platformCanaryCandidateId(operation: PlatformProviderCanaryOperation): string {
+function platformCanaryCandidateId(operation: Pick<PlatformProviderCanaryOperation,"primary"|"capsuleSha256"|"controllerEpoch"|"operationId">): string {
   if (!operation.primary || !operation.capsuleSha256) throw new Error("Provider canary preparation identity is incomplete.");
   const crypto = (globalThis as any).process.getBuiltinModule("node:crypto");
   return `canary_${crypto.createHash("sha256").update([operation.primary.projectId, operation.primary.incarnation, operation.controllerEpoch, operation.operationId, operation.capsuleSha256].join("\n")).digest("hex")}`;
 }
-function canaryRetirement(value: unknown, operation: PlatformProviderCanaryOperation): DeploymentProviderCanaryRetirement {
+function canaryRetirement(value: unknown, operation: Pick<PlatformProviderCanaryOperation,"primary"|"capsuleSha256"|"controllerEpoch"|"operationId"|"releaseId"|"retirementEpoch">): DeploymentProviderCanaryRetirement {
   const input = canaryObject(value, ["protocol", "primary", "operationId", "controllerEpoch", "releaseId", "capsuleSha256", "candidateProjectId", "retirementEpoch", "phase"]);
   const primary = canaryBinding(input.primary);
   if (!operation.primary || !samePlatformCanaryBinding(primary, operation.primary) || input.protocol !== "clank-provider-canary-retirement/1" || input.phase !== "retired"
@@ -18666,7 +19819,7 @@ function platformCanaryRecord(row: Record<string, unknown> | undefined, projectI
     || ["retiring", "retired"].includes(operation.phase) && operation.outcome === null
     || operation.phase === "retiring" && operation.retirement !== null
     || operation.generation !== null && (canaryInteger(operation.generation) <= operation.credentialGeneration || !["activating", "complete"].includes(operation.phase))) throw new Error("Provider canary phase is inconsistent.");
-  return { epoch, operation: Object.freeze(operation), serialized: row.operation };
+  return { protocol: 1, epoch, operation: Object.freeze(operation), serialized: row.operation };
 }
 function canaryPublicStatus(record: PlatformProviderCanaryRecord | null): Record<string, unknown> | null {
   if (!record) return null;
@@ -19476,3 +20629,11 @@ function fromBase64Url(value: string): Uint8Array {
 function safeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+function statusEscape(value:string):string{return value.replace(/[&<>"']/gu,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));}
+function statusPublicHtml(page:CustomerStatusSnapshot,canonical:string):string{
+  const e=statusEscape;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${e(page.title)}</title><style>body{font:16px/1.55 system-ui,sans-serif;margin:0;color:#182528;background:#f6f8f7}main{max-width:680px;margin:auto;padding:32px 20px}h1{line-height:1.15;font-size:2rem}section,article{background:white;border:1px solid #d5dfdc;border-radius:10px;padding:18px;margin:16px 0;overflow-wrap:anywhere}ul{list-style:none;padding:0}li{padding:14px 0;border-bottom:1px solid #d5dfdc;display:flex;gap:18px;justify-content:space-between;flex-wrap:wrap}a{display:inline-flex;min-height:44px;align-items:center;color:#155e51}a:focus-visible{outline:3px solid #155e51;outline-offset:4px}.copy{white-space:pre-wrap}time{color:#465958}</style></head><body><main><h1>${e(page.title)}</h1><p>${e(page.description)}</p><section aria-label="Component health"><h2>Current component health</h2><ul>${page.components.map(c=>`<li><strong>${e(c.label)}</strong><span>${e(c.health.replace(/-/gu,' '))}${c.complete?'':' · coverage unavailable'}</span></li>`).join('')}</ul></section><h2>Public updates</h2>${page.updates.length?page.updates.map(u=>`<article><h3>${e(u.title)}</h3><p>${e(u.state)}</p><p class="copy">${e(u.message)}</p><time datetime="${new Date(u.publishedAt).toISOString()}">${e(new Date(u.publishedAt).toISOString())}</time></article>`).join(''):'<p>No public updates have been published.</p>'}<a href="${e(new URL('/status/'+page.slug+'/preferences',canonical).href)}">Subscriber preferences and notifications</a></main></body></html>`;
+}
+
+function statusFormHtml(content:string):string{return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Customer status administration</title><style>body{font:16px/1.55 system-ui,sans-serif;margin:0;color:#182528;background:#f6f8f7}main{max-width:760px;margin:auto;padding:32px 20px;overflow-wrap:anywhere}h1{line-height:1.15}form,section,article{margin:20px 0;padding:18px;border:1px solid #cbd8d2;border-radius:10px;background:white}label{display:block;margin:12px 0 6px}input,textarea,select,button{font:inherit;box-sizing:border-box;max-width:100%}input,textarea,select{width:100%;min-height:44px;padding:10px;border:1px solid #73847e;border-radius:5px}textarea,pre{white-space:pre-wrap;overflow-wrap:anywhere}button{min-height:44px;padding:10px 16px;margin-top:14px;background:#155e51;color:white;border:0;border-radius:6px;cursor:pointer}button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible,a:focus-visible{outline:3px solid #177766;outline-offset:4px}.check{display:flex;gap:12px;align-items:center;min-height:44px}.check input{width:22px;min-height:22px}a{display:inline-flex;align-items:center;min-height:44px;color:#155e51}.copy{white-space:pre-wrap}</style></head><body><main>${content}</main></body></html>`;}

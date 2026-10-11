@@ -73,6 +73,7 @@ export const groups = [
       ["conversational-build", "docs/conversational-build.md"],
       ["workbench", "docs/workbench.md"],
       ["governance", "docs/governance.md"],
+      ["approval-quorums", "docs/approval-quorums.md"],
       ["browser-journeys", "docs/browser-journeys.md"],
       ["admin-studio", "docs/admin-studio.md"],
       ["blueprints", "docs/blueprints.md"],
@@ -95,6 +96,7 @@ export const groups = [
       ["release-lifecycle", "docs/release-lifecycle.md"],
       ["release-attestations", "docs/release-attestations.md"],
       ["usage-and-limits", "docs/usage-and-limits.md"],
+      ["project-costs", "docs/project-costs.md"],
       ["hosted-plans-and-billing", "docs/hosted-plans-and-billing.md"],
       ["platform-dashboard", "docs/platform-dashboard.md"],
       ["organizations", "docs/organizations.md"],
@@ -121,7 +123,9 @@ export const groups = [
       ["security", "docs/security.md"],
       ["platform-security", "docs/platform-security.md"],
       ["organization-security", "docs/organization-security.md"],
+      ["organization-security-policies", "docs/organization-security-policies.md"],
       ["service-accounts", "docs/service-accounts.md"],
+      ["temporary-access", "docs/temporary-access.md"],
       ["sqlite-isolation", "docs/sqlite-isolation.md"],
       ["linux-provider-isolation", "docs/linux-provider-isolation.md"],
       ["linux-host-certification", "docs/linux-host-certification.md"],
@@ -132,7 +136,10 @@ export const groups = [
       ["chaos-testing", "docs/chaos-testing.md"],
       ["conformance", "docs/conformance.md"],
       ["recovery", "docs/recovery.md"],
-      ["operational-recovery", "docs/operational-recovery.md"]
+      ["operational-recovery", "docs/operational-recovery.md"],
+      ["project-incidents", "docs/project-incidents.md"],
+      ["service-objectives", "docs/service-objectives.md"],
+      ["customer-status-pages", "docs/customer-status-pages.md"]
     ]
   },
   {

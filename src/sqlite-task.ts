@@ -1,6 +1,7 @@
+import { SQLITE_INTERNAL } from "./sqlite-internal.ts";
 // Tenant-controlled schemas, triggers and SQL must never execute on the shared
 // control-plane event loop. Linux workers default to a private filesystem namespace.
-import { prepareSQLiteSandbox, SQLITE_RESOURCE_LIMITS, type PinnedSQLiteDirectory } from "./sqlite-sandbox.ts";
+import { prepareSQLiteSandbox, assertPinnedSQLiteDirectory, SQLITE_RESOURCE_LIMITS, type PinnedSQLiteDirectory } from "./sqlite-sandbox.ts";
 type SQLiteTaskIsolation = "namespace" | "trusted-process";
 interface TaskContext {
   run<T>(isolation: SQLiteTaskIsolation, callback: () => T): T;
@@ -132,38 +133,60 @@ export async function runSQLiteTask<T>(
   operation: string,
   args: readonly unknown[],
   directories: readonly PinnedSQLiteDirectory[] = [],
+  sourceToken?:object,
 ): Promise<T> {
-  const release = await scheduler.acquire(await taskTenant(module, operation, args));
+  const authority=sourceToken===undefined?undefined:((await import("./backend.ts")).openBackend as any)[SQLITE_INTERNAL].sourceContext(sourceToken);
+  const current=()=>authority?.current();
+  current();const tenant=await taskTenant(module,operation,args);current();
+  const release = await scheduler.acquire(tenant);
   let sandbox: Awaited<ReturnType<typeof prepareSQLiteSandbox>> | undefined;
   try {
+    current();
     const moduleName = "node:child_process";
-    const { spawn } = await import(moduleName);
+    const { spawn } = await import(moduleName);current();
     const process = (globalThis as any).process;
+    if(sourceToken!==undefined&&(process.platform!=="linux"||context?.getStore()==="trusted-process"))throw new Error("Private source workers require default Linux namespace isolation.");
     let executable = process.execPath;
+    let trustedArguments: readonly unknown[] | undefined, trustedDescriptors:number[]=[];
     const childArguments = ["--jitless", "--max-old-space-size=128", "--input-type=module", "--eval", BOOTSTRAP];
     if (process.platform === "linux" && context?.getStore() === "trusted-process") {
       // Explicit trusted hosting still keeps native SQLite off the event loop,
       // clears inherited/ambient capabilities and preloads/secrets, and enforces
       // the same kernel limits.
       // This mode makes no filesystem or network isolation claim.
+      // Preserve exact retained directory capabilities even without a filesystem namespace.
+      // Child descriptor numbers are assigned by spawn, not inferred from parent numbers.
+      const pathName="node:path",path=await import(pathName);
+      const retained=directories.map((directory,index)=>{assertPinnedSQLiteDirectory(directory);return {directory,descriptor:3+index};}).sort((a,b)=>b.directory.path.length-a.directory.path.length);
+      trustedDescriptors=directories.map(directory=>directory.fd);
+      const map=(value:any):any=>{
+        if(typeof value==="string"){
+          const found=retained.find(({directory})=>path.dirname(value)===directory.path);
+          return found?`/proc/self/fd/${found.descriptor}/${path.basename(value)}`:value;
+        }
+        if(Array.isArray(value))return value.map(map);
+        if(value&&typeof value==="object")return Object.fromEntries(Object.entries(value).map(([key,item])=>[key,map(item)]));
+        return value;
+      };
+      trustedArguments=map(args);
       executable = "/usr/bin/setpriv";
       childArguments.unshift("--inh-caps=-all", "--ambient-caps=-all", "--no-new-privs",
         "/usr/bin/prlimit", ...SQLITE_RESOURCE_LIMITS, "--", process.execPath);
     } else if (process.platform === "linux") {
-      sandbox = await prepareSQLiteSandbox(module, operation, args, childArguments, directories);
+      sandbox = await prepareSQLiteSandbox(module, operation, args, childArguments, directories,sourceToken);current();
       executable = sandbox.executable;
       childArguments.splice(0, childArguments.length, ...sandbox.arguments);
     }
     const request = JSON.stringify({
       module: sandbox?.moduleUrl ?? new URL(WORKER_MODULES[module], import.meta.url).href,
       operation,
-      arguments: sandbox?.argumentsValue ?? args,
+      arguments: sandbox?.argumentsValue ?? trustedArguments ?? args,
     });
     if (new TextEncoder().encode(request).byteLength > MAX_MESSAGE_BYTES) {
       throw new Error("SQLite task request exceeds its limit.");
     }
-    const child = spawn(executable, childArguments, {
-      stdio: ["pipe", "pipe", "pipe", ...(sandbox?.descriptors ?? [])],
+    current();const child = spawn(executable, childArguments, {
+      stdio: ["pipe", "pipe", "pipe", ...(sandbox?.descriptors ?? trustedDescriptors)],
       windowsHide: true,
       env: {
         NODE_NO_WARNINGS: "1",
@@ -172,7 +195,7 @@ export async function runSQLiteTask<T>(
         ...(process.env.NODE_V8_COVERAGE ? { NODE_V8_COVERAGE: process.env.NODE_V8_COVERAGE } : {}),
       },
     });
-    return await new Promise<T>((resolve, reject) => {
+    const result=await new Promise<T>((resolve, reject) => {
       let output = "";
       let outputBytes = 0;
       let diagnostics = "";
@@ -222,8 +245,9 @@ export async function runSQLiteTask<T>(
           reject(error);
         }
       });
-      child.stdin.end(request);
+      try{current();child.stdin.end(request);}catch(error){child.stdin.destroy();terminate(error as Error);}
     });
+    current();await sandbox?.close();sandbox=undefined;current();return result;
   } finally {
     try { await sandbox?.close(); } finally { release(); }
   }

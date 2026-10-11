@@ -1,0 +1,478 @@
+{
+  "disposition": "Combined reviewed code delivery; protected publication checks pending; feature acceptance remains29/11",
+  "priorProtectedMain": {
+    "head": "95f332233fb56feb08993853f765ba26df081999",
+    "tree": "5882fe2dae0720cdc8b667c4ff952568a46a555c",
+    "mergedMaintenancePRs": [
+      365,
+      366,
+      367,
+      368
+    ],
+    "preservedLocalFiles": 23
+  },
+  "reviewedSource": {
+    "head": "f2c07860ba3ee747132d39dd40b6dc232a482ac2",
+    "tree": "e093bb245bb2c3d39731024d6938b8065b8b2252",
+    "sourceInputs": 1337,
+    "emittedOutputs": 320,
+    "pairedOutputsIdentical": true
+  },
+  "originalPRs": [
+    301,
+    303,
+    310,
+    316,
+    318,
+    323,
+    325,
+    326,
+    329,
+    343,
+    347,
+    349,
+    350
+  ],
+  "localSelectedEachRuntime": {
+    "nativeTransfer": 2,
+    "consoleCli": 265,
+    "quorum": 27,
+    "taskBudgetClientCanaryLayoutPerformance": 69,
+    "totalPassed": 363,
+    "failures": 0,
+    "cancellations": 0,
+    "skips": 0
+  },
+  "sourceTypes": {
+    "existing": 149,
+    "new": 0,
+    "baseline": 154,
+    "packedFixtures": 54
+  },
+  "package": {
+    "files": 449,
+    "unpackedBytes": 6940183,
+    "fixedCeilingBytes": 8388608,
+    "dependencies": 0
+  },
+  "priorBroaderRun": {
+    "runtime": "26.10",
+    "reported": 1376,
+    "passed": 1366,
+    "failures": 1,
+    "explicitExistingPrivilegedSkips": 9,
+    "failure": "Isolated actual-route VM omitted temporaryAccessView; preserved and corrected with inactive context, assertions unchanged."
+  },
+  "immutableEvidence": {
+    "path": "/tmp/clank-review-2026-10-08/feature-composition-merge-delivery-02/evidence-composition-01.json",
+    "sha256": "7e363d90e906380ac55f245eff484bf5d401c7a20142fcf75e021366e6b84976"
+  },
+  "remainingAcceptance": {
+    "accepted": 29,
+    "remaining": 11,
+    "features": [
+      7,
+      9,
+      10,
+      13,
+      14,
+      17,
+      30,
+      36,
+      37,
+      38,
+      40
+    ]
+  },
+  "qualification": "Original branch source reviews and failed-before proofs retain their named revisions. Local source publication is not browser, production provider, source-wide stop/activation or privileged host certification. Required final hosted checks and protected main merge remain pending.",
+  "hostedFixtureCorrection": {
+    "sourceHeadBeforeFixtureCorrection": "ca92d8be4e6c1f22ce38f9ea1bd6a2b41cbc534a",
+    "testPath": "tests/managed-shadow-observer.test.mjs",
+    "testSHA256": "03d785eca66082e50024d41f58183c747eb2b908eb1d94c33a02ac4c66b91e7d",
+    "selectedEachRuntime": {
+      "observerLifecycleStatusPlatformTarget": 101,
+      "admissionFaultDeadlineCases": 2,
+      "heldParallelFaultCase": 1,
+      "failures": 0,
+      "cancellations": 0,
+      "skips": 0
+    },
+    "outputsUnchanged": 320,
+    "hostedBefore": {
+      "head": "ca92d8be4e6c1f22ce38f9ea1bd6a2b41cbc534a",
+      "passed": 5,
+      "cancelledAt15Minutes": 3,
+      "knownAssertion": "parallel candidate comparable count1!=2 on Node24 and packaged Node22",
+      "stall": "No subsequent test progress after missing-handoff case; original next header/body fixtures unconditionally await admission marker."
+    },
+    "beforeFaultQualification": "A declared250ms scheduling delay reproduces indefinite admission waits: two deadline tests time out on Node26; Node22 file timeout occurs during the same selected cases. A declared1100ms held interval after native skip flush reproduces0!=2 on both. These are explicit fixture faults, not exact measured hosted delays. Initial before01 import preparation did not execute tests.",
+    "afterEvidence": {
+      "path": "/tmp/clank-review-2026-10-08/shadow-observer-ci-deadline-01/after-results-03.json",
+      "sha256": "91c6e118c56338a3c0fec592f4dc5adffd2e0c680e4e53010fce4479f51ec7b2"
+    },
+    "parallelEvidence": {
+      "path": "/tmp/clank-review-2026-10-08/shadow-observer-ci-deadline-01/parallel-results-04.json",
+      "sha256": "47e9fac2bb0d11d1713d89a2b85695f982034092a173d164aa2653af9edf8d4a"
+    },
+    "qualification": "One fixture file only. All original assertions, production source/limits,320 outputs, runtime/types/package contract,15minute hosted job limits and main protection unchanged. No feature acceptance increment.",
+    "immutableEvidence": {
+      "path": "/tmp/clank-review-2026-10-08/shadow-observer-ci-deadline-01/publication-test-fix-05.json",
+      "sha256": "60e307687fa78f4b2adaa0c7e4d408ccf548efe58c9a304476d0b2c7c904ab01"
+    }
+  },
+  "hostedCapacityCorrection": {
+    "priorHead": "f7d393afe41e9a29a5fe25e0dbbfb29521128f93",
+    "testSHA256": "6ad0151f930b62905d342281b6c6b0d35a3e1d152d484a22705a8ca151479126",
+    "workflowSHA256": "c4fbeae19bdf0821cac4905d1c14aeea4c83c1237dec34e41dfa8e45e867b74e",
+    "unchangedAssertions": 178,
+    "unchangedOutputs": 320,
+    "qualification": "Five selected modules pass 101/101 on both runtimes with actual coverage, zero failures/cancellations/skips. Original first-batch 6s completion fault and 350ms secondary admission pacing fail before and pass after. The first after04 probe also delayed the unrelated fresh seventeenth request and failed its separate observation; it is retained and qualified in probe-scope-correction-05.json. Production limits/source, exported types, package/dependencies and main protections unchanged. Runtime/conformance job limits increase from15 to25 minutes; native PostgreSQL/type limits remain10. No feature acceptance increment.",
+    "evidence": {
+      "path": "/tmp/clank-review-2026-10-08/shadow-observer-capacity-01/publication-capacity-fix-06.json",
+      "sha256": "f384c80b8d76a96430912ef7256b36a766d750f7f8fc841d1ad55440c9c533f3"
+    },
+    "hostedBefore": {
+      "head": "f7d393afe41e9a29a5fe25e0dbbfb29521128f93",
+      "successful": 5,
+      "runtimeCancelledAt15Minutes": 2,
+      "packageConclusion": "failure",
+      "packageFailures": [
+        "Timed out: all real candidates completed",
+        "secondary native cancellations16!==15"
+      ],
+      "qualification": "Package tests completed in approximately13minutes; Node24 was still progressing when its15minute limit expired; Node22 stalled at an unbounded cancellation marker."
+    }
+  },
+  "hostedPhaseAndCloseCorrection": {
+    "priorHead": "85c2f38e435f8356796501d628b278a5640f2f68",
+    "unchangedAssertions": 298,
+    "unchangedOutputs": 320,
+    "testHashes": {
+      "tests/managed-shadow-observer.test.mjs": "724c3ac2b72f7ab0e7d876cbde263629276fd17033556ff0c395e958fc26fea4",
+      "tests/provider-handoff-runtime.test.mjs": "f17bb4fd4d31352e269caf6c447bc36e7c358b71604601896be48fa997281a62"
+    },
+    "runtimes": [
+      "22.16",
+      "24.21",
+      "26.10"
+    ],
+    "actualCoverageEachRuntime": {
+      "observerLifecycleStatusPlatformTarget": 101,
+      "handoffRuntime": 87
+    },
+    "controlledBeforeAfterEachRuntime": {
+      "admissionDeadlineCases": 4,
+      "secondaryBatchCompletion": 1,
+      "nativeCloseLock": 1
+    },
+    "hostedBefore": {
+      "successfulChecks": 5,
+      "node24": {
+        "reported": 3462,
+        "passed": 3424,
+        "failed": 1,
+        "cancelled": 0,
+        "skipped": 37
+      },
+      "node22": {
+        "reported": 3462,
+        "passed": 3422,
+        "failed": 3,
+        "cancelled": 0,
+        "skipped": 37
+      },
+      "package": {
+        "reported": 3462,
+        "passed": 3419,
+        "failed": 6,
+        "cancelled": 0,
+        "skipped": 37
+      },
+      "qualification": "All three complete jobs finished within the increased25minute window; failures retained. Node24 failed the independent SQLite read racing child close. Node22 also failed secondary cleanup observation and late native header setup. Package additionally observed primary ECONNRESET, rejected-response setup before cancellation and both reader/cancel setup deadlines."
+    },
+    "qualification": "Fixture-only changes. Native independent persisted state reads now follow confirmed child exit. Actual2s deadline scenarios and bounded10s observations separate native setup from held cancellation/batch completion; strict16/15/1capacity, independent read/cancel completion, late-header no-reader and all298assertions unchanged. Primary fixture HTTP requests use dedicated connections, avoiding shared keep-alive pool dependence; exact hosted ECONNRESET cause is not established. Controlled750ms actual owned candidate fetch delay and6s secondary response completion fail before and pass after. Explicit rollback-journal exclusive lock until child stdin EOF fails before and passes after; initial WAL lock probe passed and remains qualified. Production source/limits,320outputs, exported types/package/dependencies,25minuteCI windows and main protections unchanged. No feature acceptance increment.",
+    "evidence": {
+      "shadow": {
+        "path": "/tmp/clank-review-2026-10-08/shadow-observer-phase-races-01/results-02.json",
+        "sha256": "ef3c116614510fc6022c0c12224e08086739414db41ba820ee193de8ab0fc85d"
+      },
+      "handoff": {
+        "path": "/tmp/clank-review-2026-10-08/handoff-bootstrap-close-race-01/verified-boundary-04.json",
+        "sha256": "cdb5eeb2ca77f06b27961a0e83433944648c215f5f383b413b1760b96fe7edfa"
+      },
+      "assertions": {
+        "path": "/tmp/clank-review-2026-10-08/shadow-observer-phase-races-01/assertion-parity-03.json",
+        "sha256": "632535d49d84225e532dd55537ccdd9b87a9185f3a179eabf36423fe994b7d68"
+      }
+    },
+    "immutableBoundary": {
+      "path": "/tmp/clank-review-2026-10-08/shadow-observer-phase-races-01/publication-boundary-04.json",
+      "sha256": "a3e931cdd6cfb2d366c068098ddd5ae96d59efb8ffd17862f67e442070bc4b21"
+    }
+  },
+  "finalCostAcknowledgmentRepair": {
+    "priorHead": "64946f334008c962978fec3c4861d05da7b1d9e8",
+    "changedSource": "src/platform-project-costs.ts",
+    "changedOutput": "dist/platform-project-costs.js",
+    "sourceSHA256": "24b7995dc6dc77398e6c62bbaff3ab3eab501edb7ddeff5a09db87200e51da16",
+    "testSHA256": "72358d630cba4a830f4f66b91933ccb93d4ee3dd09d94f35d5fc2c539bab89e4",
+    "runtimes": [
+      "22.16",
+      "24.21",
+      "26.10"
+    ],
+    "selectedEachRuntime": {
+      "tests": 57,
+      "passed": 57,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0
+    },
+    "beforeNativeFaults": {
+      "tested": 7,
+      "failedProtection": 7,
+      "qualification": "Old production native HTTP acknowledged all seven injected audit-side mutations; each failed Missing expected rejection. The later after04 run returned503 but its new test incorrectly expected a client error.code; after05 checks actual HTTP response code and public client status. Both failed records are retained."
+    },
+    "finalReadbacks": [
+      "root protocol",
+      "affected policy/override",
+      "operation receipt",
+      "new observation",
+      "accepted rate",
+      "prior observation",
+      "override-bound policy"
+    ],
+    "boundedScope": "Only rows acknowledged or used by the current native transaction; final native readbacks run after audit and authority callbacks, before commit. Throwing rolls back mutations, receipt and audit together. Same unchanged intent/operation ID succeeds exactly once after the fault is removed. No schema/public API/dependency/production quota/profile change.",
+    "review": "Root inspected all three mutation paths, original insert/update readback checks, final ordering, synchronous transaction rollback, bound queries and finally restoration. No additional actionable finding in this scope.",
+    "pairedBuildsIdentical": true,
+    "emittedFiles": 320,
+    "changedFromReviewedComposition": [
+      "dist/platform-project-costs.js"
+    ],
+    "docs": {
+      "markdown": 109,
+      "links": 375,
+      "indexedGuides": 104,
+      "declarations": 146,
+      "exports": 162
+    },
+    "types": {
+      "existing": 149,
+      "new": 0,
+      "baseline": 154,
+      "packedFixtures": 54
+    },
+    "package": {
+      "files": 449,
+      "unpackedBytes": 6941695,
+      "fixedCeilingBytes": 8388608,
+      "runtimeDependencies": 0
+    },
+    "evidence": {
+      "finding-before-boundary-02.json": {
+        "path": "/tmp/clank-review-2026-10-08/cost-final-ack-review-01/finding-before-boundary-02.json",
+        "sha256": "5ff009dc6a94e8a39f8e3dbee4b9c9efbf961ffe3be9d995c37733fa1f1ebede"
+      },
+      "regression-boundary-03.json": {
+        "path": "/tmp/clank-review-2026-10-08/cost-final-ack-review-01/regression-boundary-03.json",
+        "sha256": "e6b39f992356c34a8d5207bbb9ffa62aed5c883cd1e6e36b7e68fa6f3b86a025"
+      },
+      "focused-after-native26-04.log": {
+        "path": "/tmp/clank-review-2026-10-08/cost-final-ack-review-01/focused-after-native26-04.log",
+        "sha256": "031eb243aded67584783befb2f80ededf6a7e982ca510f18618edcfe4bce52df"
+      },
+      "focused-results-05.json": {
+        "path": "/tmp/clank-review-2026-10-08/cost-final-ack-review-01/focused-results-05.json",
+        "sha256": "af8fd39e71d4da6965cd2af6627fb0c41c0292817db3c381da3d7329ed506eda"
+      },
+      "paired-build-boundary-07.json": {
+        "path": "/tmp/clank-review-2026-10-08/cost-final-ack-review-01/paired-build-boundary-07.json",
+        "sha256": "e9b465925980add24e12cb94f080f7888a32f6ba41eb62da6b6437947b58464f"
+      },
+      "audits-08.json": {
+        "path": "/tmp/clank-review-2026-10-08/cost-final-ack-review-01/audits-08.json",
+        "sha256": "7df55e773c2a34bd132f239b2777a802acc114c48bcc393a357415993316360f"
+      }
+    },
+    "remainingAcceptance": {
+      "accepted": 29,
+      "remaining": 11
+    },
+    "qualification": "Focused native HTTP/SQLite rollback evidence; not production provider/browser acceptance. Fresh hosted checks and protected merge still required for this changed production module.",
+    "immutableBoundary": {
+      "path": "/tmp/clank-review-2026-10-08/cost-final-ack-review-01/publication-boundary-09.json",
+      "sha256": "f71773639c85dd10c27ecac271fb883d79891ce61f901e6ca9f5171ae37fa158"
+    }
+  },
+  "hostedFixtureFollowupSuccess": {
+    "head": "64946f334008c962978fec3c4861d05da7b1d9e8",
+    "successfulChecks": 8,
+    "eachCompleteSuite": {
+      "reported": 3462,
+      "passed": 3425,
+      "failed": 0,
+      "cancelled": 0,
+      "explicitExistingSkips": 37
+    },
+    "packageConformancePassed": true,
+    "qualification": "Success before the final production cost repair; fresh hosted checks required for the changed head."
+  },
+  "freshCandidateConnectionFollowup": {
+    "priorHead": "2145a92d5844aefc52b5de50f6d333b28a1faa4d",
+    "testPath": "tests/managed-shadow-observer.test.mjs",
+    "testSHA256": "123cb98d4a59e2c874e7fbffef7160b58c60b4116db36265f202a24fa8aa4c7b",
+    "unchangedAssertionExpressions": 178,
+    "unchangedEmittedOutputs": 320,
+    "changedProductionSource": false,
+    "hostedBefore": {
+      "successfulChecks": 7,
+      "node22": {
+        "reported": 3469,
+        "passed": 3432,
+        "failed": 0,
+        "cancelled": 0,
+        "existingSkips": 37
+      },
+      "node24": {
+        "reported": 3469,
+        "passed": 3432,
+        "failed": 0,
+        "cancelled": 0,
+        "existingSkips": 37
+      },
+      "package": {
+        "reported": 3469,
+        "passed": 3431,
+        "failed": 1,
+        "cancelled": 0,
+        "existingSkips": 37,
+        "failure": "Native leader-wide capacity fixture expected fresh server event17, observed16 after the fresh attempt settled."
+      }
+    },
+    "nativeFault": {
+      "beforeNode22": "One actual native stale-socket disconnect causes candidate-error settlement and16!=17.",
+      "beforeNode24And26": "Both passed; not failed-before evidence.",
+      "afterEachRuntime": "One fault case passes; all strict first16, blocked17th and fresh17thserver event assertions retained.",
+      "qualification": "Declared fault destroys first-batch server sockets at native fresh fetch dispatch. Exact hosted transport reason remains unknown. Initial runner expecting every before runtime to fail exited1; mixed results and qualification retained."
+    },
+    "fullObserverEachRuntime": {
+      "tests": 40,
+      "passed": 40,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "experimentalCoverage": true
+    },
+    "fix": "Only the leader-wide capacity fixture closes completed candidate response connections; it independently exercises fresh native transport after actual slot release. No product/fetch result fabrication, primary/candidate comparison assertion changes, new retry or test skip.",
+    "evidence": {
+      "probe-boundary-01.json": {
+        "path": "/tmp/clank-review-2026-10-08/shadow-capacity-fresh-connection-01/probe-boundary-01.json",
+        "sha256": "149e8118a3586c9bcdca14dc2bff0e8215af30867d6fa1c866dbf10a754d2bc6"
+      },
+      "before-native22-01.log": {
+        "path": "/tmp/clank-review-2026-10-08/shadow-capacity-fresh-connection-01/before-native22-01.log",
+        "sha256": "0925616ad74efc7c5b0a77c469b4e4003adb8fe8cf1d0228ea3c842b2f00edab"
+      },
+      "fault-results-02.json": {
+        "path": "/tmp/clank-review-2026-10-08/shadow-capacity-fresh-connection-01/fault-results-02.json",
+        "sha256": "17af71c52132d6dc7d5b89522a78945d48b000eedb0d7537906603cf54f3fea2"
+      },
+      "probe-qualification-03.json": {
+        "path": "/tmp/clank-review-2026-10-08/shadow-capacity-fresh-connection-01/probe-qualification-03.json",
+        "sha256": "33600bc7a218815c22ef135bd6904211f197a536e21284cb1266f9529214b32b"
+      },
+      "assertion-parity-04.json": {
+        "path": "/tmp/clank-review-2026-10-08/shadow-capacity-fresh-connection-01/assertion-parity-04.json",
+        "sha256": "139bade3867da487ff65ad30ae61904a374aec176e3dd00a430ea775c7be166c"
+      },
+      "full-observer-results-05.json": {
+        "path": "/tmp/clank-review-2026-10-08/shadow-capacity-fresh-connection-01/full-observer-results-05.json",
+        "sha256": "a990a152626cdaed82cbb5403c9ee102adf641964a0d5dfc89a7484d823b1b85"
+      }
+    },
+    "remainingAcceptance": {
+      "accepted": 29,
+      "remaining": 11
+    },
+    "qualification": "Current cost production fix remains intact. Sources, all320built outputs, package/types/dependencies, production quotas/profiles, CI25minute windows and main protection unchanged by this fixture-only follow-up. Fresh exact-head hosted checks and protected merge still required.",
+    "immutableBoundary": {
+      "path": "/tmp/clank-review-2026-10-08/shadow-capacity-fresh-connection-01/publication-boundary-06.json",
+      "sha256": "03f1854384ecfd3229071ae807c52a9a28e3e61733691b26ab424b2c486a087f"
+    }
+  },
+  "peerCleanupLifetimeFollowup": {
+    "priorHead": "43057fcb2350b187baf88c6fd47c06fe9f94db98",
+    "testPath": "tests/managed-shadow-observer.test.mjs",
+    "testSHA256": "1930b722e6cef93ad4489c51cf181e0de7397966629bd28a0e51b5d21d02ec9d",
+    "unchangedAssertionExpressions": 178,
+    "unchangedEmittedOutputs": 320,
+    "changedProductionSource": false,
+    "hostedBefore": {
+      "successfulChecks": 7,
+      "runtimeChecks": "Node22.16 and Node24 successful; bounded terminal logs retained without inferring missing counts.",
+      "package": {
+        "reported": 3469,
+        "passed": 3430,
+        "failed": 2,
+        "cancelled": 0,
+        "existingSkips": 37,
+        "failure": "Both independent native reader/cancel completion cases time out waiting for the second capacity skip."
+      }
+    },
+    "controlledFaultEachRuntime": {
+      "delayMs": 11000,
+      "peerRequestDeadlineMs": 10000,
+      "before": {
+        "reported": 2,
+        "passed": 0,
+        "failed": 2,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "after": {
+        "reported": 2,
+        "passed": 2,
+        "failed": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "qualification": "Real delay inserted after initial peer admission, before releasing the first focal outcome. Exact hosted phase timing is not recorded; this proves the fixture assumption under declared delay."
+    },
+    "fullObserverEachRuntime": {
+      "reported": 40,
+      "passed": 40,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "experimentalCoverage": true
+    },
+    "fix": "Only two independent reader/cancel cases opt into120s native leases/session and hold actual peer request/cancellation outcomes through capacity inspection. Native cancel runs before the gate; original result/rejection retained. Focal2s and peer10s deadlines unchanged. Completed fixture responses close connections. Strict15peer+1focal capacity, independent read/cancel delivery, tombstone recovery and actual fresh17th server event asserted.",
+    "remainingAcceptance": {
+      "accepted": 29,
+      "remaining": 11
+    },
+    "evidence": {
+      "assertion-parity-04.json": {
+        "path": "/tmp/clank-review-2026-10-08/shadow-peer-cleanup-lifetime-01/assertion-parity-04.json",
+        "sha256": "edbe272165ae79396ec66273de8954e9c38b48686db5e78f8a1a5d2fd5896e39"
+      },
+      "deadline-fault-results-02.json": {
+        "path": "/tmp/clank-review-2026-10-08/shadow-peer-cleanup-lifetime-01/deadline-fault-results-02.json",
+        "sha256": "3e5011e7cca08dfb01574139c2e490c6a09a46e50967fa95a3aa61ce6da7c2e3"
+      },
+      "full-observer-results-03.json": {
+        "path": "/tmp/clank-review-2026-10-08/shadow-peer-cleanup-lifetime-01/full-observer-results-03.json",
+        "sha256": "710139c5295309fe24274ab3e7011d457ed3df9ca3a1305ba5a19cc2d38a6c72"
+      },
+      "full-observer-qualified-05.json": {
+        "path": "/tmp/clank-review-2026-10-08/shadow-peer-cleanup-lifetime-01/full-observer-qualified-05.json",
+        "sha256": "88dfc3b7d3d018ad04d963b8c7568a94fdb95fba782022c14036fde5908599ff"
+      }
+    },
+    "qualification": "Fixture-only follow-up. Current production cost repair, source/public API/dependencies,320built outputs, production quotas/profiles, CI windows and main protection unchanged. Fresh exact-head hosted checks and protected merge required.",
+    "immutableBoundary": {
+      "path": "/tmp/clank-review-2026-10-08/shadow-peer-cleanup-lifetime-01/publication-boundary-07.json",
+      "sha256": "f7e54c01221a61c499094a4c80101dfef18035e8842d6bb9b299ccbc80f866a2"
+    }
+  }
+}

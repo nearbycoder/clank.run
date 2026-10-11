@@ -531,9 +531,97 @@ transition; do not bypass capture guards or create a replacement base or grant a
 The native metadata crash tests establish neither Docker host eligibility nor provider-wide
 source stop, target activation or the interruption bound for online handoff.
 
+Private runtime initialization now consumes one bounded canonical bootstrap and reads its
+exact mounted catalog through native read-only transactions. Created/started grants permit
+initial capture only; ordinary writes and later control states remain refused. Missing or
+ambiguous native descriptor identity, including SQLite descriptor reuse, refuses enrollment
+while preserving ordinary database support. Native descriptor observation excludes hostile
+same-process interference and does not prove exclusive writer or provider ownership.
+Initialization rechecks authority inside backup, worker and durable publication boundaries.
+Workers retain default Linux namespace isolation. Revocation or close cannot acknowledge a
+later publication; uncertain owned files remain for recovery. A killed initializer cannot
+adopt its retained capture on restart. These private tests do not establish Docker runtime
+mounts, provider-wide stop, target activation or the online interruption bound.
+
+Successful private initialization returns a frozen, bounded metadata snapshot containing
+only the original capture epoch, key identifier, schema hash, acknowledged base identifier
+and zero cursor. It checks the original native insert and base acknowledgment, complete
+retained capture metadata and logical state after durable publication. The snapshot grants
+no authority: ordinary writes remain denied, and export, enrollment, readiness and later
+control states remain unavailable. Revocation, close, metadata drift or uncertain cleanup
+prevents the result; retained files remain recovery evidence, never permission to restart.
+
+The private host catalog also records exact `issued → created → started` container
+observations through its retained owner and original Docker client. These operations
+do not create or start containers. They compare the complete grant, index and catalog
+state, retain native file identities across inspection waits, and commit the grant
+and its mirror together before file/directory synchronization and final inspection.
+Exact retries preserve the version, including a committed maximum version; changed
+identity, uncertain inspection or failed synchronization never grants permission.
+Restart with any retained grant remains cleanup-only. Created/started rows are
+historical observations, not liveness, readiness, writer admission or stop proof.
+The conservative inspection parser also refuses native JSON escaping and integer-like
+label-key ordering that differ from its exact re-encoding, including otherwise valid
+unrelated labels. Scripted transport tests exercise this boundary without establishing
+native Docker lifecycle or reference-profile eligibility. No launch or readiness path
+uses these operations, and the current reference profile remains source-ineligible.
+
 Continue with [Provider data lifecycle](provider-data-lifecycle.md),
 [Provider Docker runtime](provider-docker-runtime.md),
 [Provider runtime ingress](provider-runtime-ingress.md),
 [Deployment provider adapters](provider-adapters.md),
 [Remote runtime placement](runtime-placement.md), and
 [Managed ingress](data-plane.md).
+
+### Explicit shadow checkpoint state
+
+The provider compatibility prerequisite for shadow traffic accepts the same
+trusted `canaries.prepare` and authenticated HTTP prepare endpoint with the exact
+additional pair `purpose: "shadow"` and `stateProtocol: "clank-provider-canary/2"`.
+For HTTP put both fields in `x-clank-canary-input`, beside the existing exact
+identity; retain the existing binary capsule body and current control credential.
+Omitting both retains ordinary canary protocol1. Partial pairs, unknown versions,
+and reuse of an operation for a different purpose are rejected. A controller must
+never retry an unsupported shadow prepare as an ordinary canary.
+
+A successful shadow response has protocol2, `purpose: "shadow"`, and
+`snapshot: { sha256, bytes, startedAt, completedAt }`. This is the digest and byte
+length of the verified SQLite checkpoint embedded in the isolated candidate,
+not its source capsule or release artifact. Metadata is durably written and read
+back before candidate data apply/launch. A running shadow requires it; a stopped
+operation that failed before snapshot acquisition may retain null. An exact
+running retry returns the same checkpoint instead of taking another snapshot.
+Inspect and stop return the discriminated protocol1/protocol2 union; inspect
+still excludes private route credentials. Shadow preparation uses the existing
+read-only profile, code-only validation, empty application environment, disabled
+jobs and exact public read-path policy. Candidate data is never promoted.
+
+Acquisition timestamps use the provider's clock. They give an observed interval,
+not a transaction timestamp or trustworthy cross-host age. A caller may record
+its own observation time and monotonic elapsed interval, but must expose clock
+uncertainty rather than subtract host wall clocks and claim exact freshness.
+
+Before the first shadow intent the service irreversibly enrolls private owner
+protocol2, with fsync and exact readback, while holding its native lifetime lock.
+It preserves this version across restarts, ordinary canaries and disablement.
+Older provider services refuse owner2 or retained journal2 before admitting
+ordinary writes. The legacy Docker factory can perform its existing owned orphan
+cleanup before reaching the refusal; downgrade is not a no-op recovery strategy.
+Unknown/corrupt protocols, incomplete checkpoint metadata or a missing capability
+fail closed. Current startup refuses a missing owner before Docker cleanup when
+any other service metadata exists; it does not reconstruct an owner from a later
+ordinary protocol1 journal. A service directory containing only validated native
+lifetime-lock files can create its first marker and adopt independently staged
+provider data through the existing high-water checks. Plain provider data cannot
+prove earlier service enrollment after all service metadata is deleted. This
+also does not make older binaries detect deletion of every future-version marker
+or protect a simultaneous metadata rollback; retain coherent backups and do not
+use downgrade as recovery. Startup cleans retained shadow candidates even with
+canaries configured off. Exact retirement wire1 and its old-credential cleanup-only rules
+remain unchanged, including a prepare lost before its journal was written. A
+503 is uncertain; durably retry exact retirement rather than infer absence.
+
+This prerequisite adds provider provenance and compatibility only. It does not
+expose platform shadow sessions, mirror traffic, or complete Feature09 acceptance.
+Native tests with injected runtime/ingress components do not replace real Docker
+isolation, primary-data preservation and network cleanup evidence.

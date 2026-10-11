@@ -5,52 +5,60 @@ import { runInNewContext } from 'node:vm';
 import { assertReleasePackageBudget } from '../scripts/release-package-budget.mjs';
 
 const manifest = JSON.parse(await readFile(new URL('../scripts/release-package-files.json', import.meta.url), 'utf8'));
+const initialMain = JSON.parse(await readFile(new URL('./fixtures/release-package-main422.json', import.meta.url), 'utf8'));
 const pack = (paths = manifest) => ({ entryCount: paths.length, unpackedSize: paths.length,
   files: paths.map(path => ({ path, size: 1, mode: 420 })) });
 const copy = value => structuredClone(value);
 
-// Concrete composition names are a separate inventory fixture, never optional
-// production paths. This models rollout without claiming those features ship.
-const futureOutputs = ['customer-status', 'offline-attachments', 'organization-security-policy',
+// The fixed initial-main fixture is never read by the production audit. These
+// exact reviewed additions describe this composition, with no optional paths.
+const featureOutputs = ['customer-status', 'offline-attachments', 'organization-security-policy',
   'platform-incidents', 'platform-point-in-time', 'platform-project-costs', 'platform-slo',
   'platform-status-pages', 'platform-temporary-access', 'project-costs', 'project-incidents',
   'project-slo', 'temporary-access'].flatMap(name => [`dist/${name}.d.ts`, `dist/${name}.js`]);
-futureOutputs.push('dist/point-in-time-source.js');
+featureOutputs.push('dist/point-in-time-source.js');
 
-// This initial issue364 checkpoint intentionally binds main's exact inventory.
-test('main has exactly 422 paths with no audit helpers or future feature outputs', () => {
-  assert.equal(manifest.length, 422);
+test('composition has exactly 449 reviewed paths and retains the independent initial 422 fixture', () => {
+  assert.equal(initialMain.length, 422);
+  assert.deepEqual(initialMain, [...new Set(initialMain)].sort());
+  assert.ok(featureOutputs.every(path => !initialMain.includes(path)));
+  assert.equal(manifest.length, 449);
+  assert.deepEqual(manifest, [...initialMain, ...featureOutputs].sort());
   assert.deepEqual(manifest, [...new Set(manifest)].sort());
   assert.ok(!manifest.some(path => path.includes('release-package-')));
-  assert.ok(futureOutputs.every(path => !manifest.includes(path)));
   const input = pack(), before = copy(input);
   Object.freeze(manifest);
+  Object.freeze(initialMain);
   const result = assertReleasePackageBudget(input, manifest);
-  assert.deepEqual(result, { files: 422, bytes: 422 });
+  assert.deepEqual(result, { files: 449, bytes: 449 });
   assert.ok(Object.isFrozen(result));
   assert.deepEqual(input, before);
 });
 
-test('main 422 and composition 449 accept only their own exact manifests', () => {
-  const composed = [...manifest, ...futureOutputs].sort();
-  assert.equal(composed.length, 449);
-  assert.deepEqual(assertReleasePackageBudget(pack(composed), composed), {files:449, bytes:449});
-  assert.throws(() => assertReleasePackageBudget(pack(composed), manifest), /count/);
-  assert.throws(() => assertReleasePackageBudget(pack(), composed), /count/);
+test('initial main 422 and composition 449 accept only their own exact manifests', () => {
+  assert.deepEqual(assertReleasePackageBudget(pack(initialMain), initialMain), {files:422, bytes:422});
+  assert.deepEqual(assertReleasePackageBudget(pack(), manifest), {files:449, bytes:449});
+  assert.throws(() => assertReleasePackageBudget(pack(), initialMain), /count/);
+  assert.throws(() => assertReleasePackageBudget(pack(initialMain), manifest), /count/);
   const next = [...manifest, 'dist/next-reviewed-feature.js'].sort();
   assert.throws(() => assertReleasePackageBudget(pack(next), manifest), /count/);
-  assert.equal(assertReleasePackageBudget(pack(next), next).files, 423);
+  // A matching hypothetical data model does not authorize another shipped path.
+  assert.equal(assertReleasePackageBudget(pack(next), next).files, 450);
 });
 
-test('equal-count swapped paths cannot spend a removed path as a spare slot', () => {
-  const input = pack();
-  input.files.find(file => file.path === 'dist/application-performance.js').path = 'dist/unreviewed-future.js';
-  assert.throws(() => assertReleasePackageBudget(input, manifest), /paths differ/);
+test('equal-count swapped paths cannot spend a removed path as a spare slot in either inventory', () => {
+  for (const paths of [initialMain, manifest]) {
+    const input = pack(paths);
+    input.files.find(file => file.path === 'dist/application-performance.js').path = 'dist/unreviewed-future.js';
+    assert.throws(() => assertReleasePackageBudget(input, paths), /paths differ/);
+  }
 });
 
 test('missing paths are refused even when reported count and bytes agree', () => {
-  const input = pack(manifest.slice(1));
-  assert.throws(() => assertReleasePackageBudget(input, manifest), /count/);
+  for (const paths of [initialMain, manifest]) {
+    const input = pack(paths.slice(1));
+    assert.throws(() => assertReleasePackageBudget(input, paths), /count/);
+  }
 });
 
 test('duplicate and malformed paths are refused in both manifest and packed entries', () => {
@@ -76,7 +84,7 @@ test('malformed pack and inconsistent entry counts are refused', () => {
   for (const bad of [undefined, null, [], {}, {files:null}, {files:{}}]) {
     assert.throws(() => assertReleasePackageBudget(bad, manifest), /count/);
   }
-  for (const count of [undefined, null, '422', -1, 0, 421, 423, 422.5, NaN, Infinity, 2 ** 53]) {
+  for (const count of [undefined, null, '449', -1, 0, 448, 450, 449.5, NaN, Infinity, 2 ** 53]) {
     const input = pack(); input.entryCount = count;
     assert.throws(() => assertReleasePackageBudget(input, manifest), /count/);
   }
@@ -114,7 +122,7 @@ test('fixed 8 MiB limit is inclusive and cannot be overridden by a caller', () =
 
 test('a zero-byte file is legitimate when its exact path and total agree', () => {
   const input = pack(); input.files[0].size = 0; input.unpackedSize--;
-  assert.equal(assertReleasePackageBudget(input, manifest).bytes, 421);
+  assert.equal(assertReleasePackageBudget(input, manifest).bytes, 448);
 });
 
 test('actual audit integration requires readable valid manifest before exposing packed paths', async () => {
@@ -132,7 +140,7 @@ test('actual audit integration requires readable valid manifest before exposing 
     return {value, failures, successes};
   };
   const valid = await invoke(async path => {assert.equal(path, 'scripts/release-package-files.json'); return JSON.stringify(manifest);});
-  assert.equal(valid.value, 422); assert.equal(valid.failures.length, 0); assert.equal(valid.successes.length, 1);
+  assert.equal(valid.value, 449); assert.equal(valid.failures.length, 0); assert.equal(valid.successes.length, 1);
   for (const read of [async()=>{throw new Error('ENOENT');}, async()=>'{', async()=>'null', async()=>JSON.stringify([...manifest,'dist/optional.js'])]) {
     const result = await invoke(read);
     assert.equal(result.value, 0); assert.equal(result.successes.length, 0);

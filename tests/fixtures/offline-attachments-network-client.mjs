@@ -1,0 +1,30 @@
+import {createAuthClient} from '/runtime/auth.js';
+import {createApi,createSyncClient} from '/runtime/backend.js';
+import {createBucketClient} from '/runtime/buckets.js';
+import {openOfflineAttachmentQueue,mountOfflineAttachmentQueue} from '/runtime/offline-attachments.js';
+const report=document.querySelector('#report'),results=document.querySelector('#results'),active=[];
+const assert=(value,message)=>{if(!value)throw new Error(message);},passed=[];
+const record=name=>{passed.push(name);const row=document.createElement('li');row.textContent=name;results.append(row);};
+async function run(){
+  const auth=createAuthClient({immediate:false}),email='owned-'+crypto.randomUUID()+'@example.test',password='correct horse battery staple';
+  const user=await auth.register({email,password});assert(user?.id,'Ordinary native HTTP registration failed.');
+  let loseMutation=true,mutationRequests=0;
+  const transport=async(input,init)=>{const response=await fetch(input,init);if(String(input).includes('/mutation/')){mutationRequests++;if(loseMutation&&response.ok){loseMutation=false;await response.arrayBuffer();throw new TypeError('Owned fixture lost a received native mutation acknowledgment.');}}return response;};
+  const api=createApi(),client=createSyncClient({fetch:transport,auth:{csrfHeader:()=>auth.csrfHeader()}}),bucket=createBucketClient('files',{csrfToken:()=>auth.csrfHeader()['x-clank-csrf']});
+  const options={namespace:'native-http-'+crypto.randomUUID(),userId:user.id,bucketName:'files',bucket,client,currentUser:()=>auth.user.peek()?.id??null,maxBlobBytes:1000,maxTotalBytes:2000};
+  let first=await openOfflineAttachmentQueue(options);active.push(first);
+  const id=await first.enqueue(api.attach,{name:'Native uploaded attachment'},new Blob(['owned native browser bytes'],{type:'text/plain; charset=utf-8'}));
+  await first.flush();const pending=await first.snapshot();assert(pending.length===1&&pending[0].status==='pending','Lost acknowledgment must leave queued work.');
+  let rows=await client.query(api.list,{});assert(rows.length===1,'Native SQLite must contain one committed record.');const original=rows[0].attachment,uploaded=await bucket.stat(original.key);assert(uploaded.generation===original.generation,'Native object generation must match committed record.');
+  const read=await bucket.createReadIntent(original.key),downloaded=await fetch(read.url);assert(downloaded.ok&&await downloaded.text()==='owned native browser bytes','Native private download must contain the Blob bytes.');
+  record('Native HTTP registration, resumable upload, private download and SQLite attachment succeed.');
+  first.dispose();first=await openOfflineAttachmentQueue(options);active.push(first);assert((await first.snapshot())[0].id===id,'Native IndexedDB reopen must preserve exact replay identity.');await first.retry(id);await first.flush();
+  rows=await client.query(api.list,{});assert(rows.length===1&&mutationRequests===2&&(await first.snapshot()).length===0,'Exact native replay must return one effect and remove acknowledged work.');assert((await bucket.stat(original.key)).generation===original.generation,'Replay must not replace the uploaded object.');
+  record('Native IndexedDB reopen replays the same receipt over HTTP without another record or upload.');
+  const next=await first.enqueue(api.attach,{name:'Pending interactive attachment'},new Blob(['pending native bytes'],{type:'text/plain'}));await auth.logout();let rejected=false;try{await first.flush();}catch{rejected=true;}assert(rejected,'Logged-out account must stop pending dispatch.');
+  record('Ordinary native logout stops the pending account-bound attachment.');
+  await auth.login({email,password});first=await openOfflineAttachmentQueue(options);active.push(first);assert((await first.snapshot())[0].id===next,'Pending local copy must survive logout without changing identity.');
+  mountOfflineAttachmentQueue(document.querySelector('#view'),first);
+  report.dataset.status='passed';report.textContent=passed.length+' native browser/HTTP checks passed. One new local attachment remains for explicit interactive Synchronize testing. Keyboard/phone acceptance remains unverified.';
+}
+run().catch(error=>{report.dataset.status='failed';report.textContent=String(error?.stack??error).slice(0,5000);for(const queue of active)queue.dispose();});
