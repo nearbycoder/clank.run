@@ -3,6 +3,7 @@ import { openProjectIncidents, ProjectIncidentError, type PlatformIncidentOption
 import {openPlatformStatusPages,type PlatformStatusPagesOptions,type StatusPageAuthority} from "./platform-status-pages.ts";
 import {CustomerStatusError,type CustomerStatusSnapshot} from "./customer-status.ts";
 import { openProjectSlos, ProjectSloError, type PlatformSloOptions, type SloAuthority } from "./platform-slo.ts";
+import { assertProviderShadowSchema, shadowSchemaIdentity } from "./managed-shadow.ts";
 import { createManagedCanary, validateManagedCanary, type ManagedCanaryOptions } from "./managed-canary.ts";
 import { decodeReleaseAttestation, verifyReleaseAttestation, type ReleaseAttestation, type ReleaseAttestationPolicy } from "./release-attestation.ts";
 import { createOperationalMonitor, type OperationalSignal, type PlatformOperationsOptions } from "./operations-monitor.ts";
@@ -137,6 +138,7 @@ import { openSupervisorLease, armSupervisorGuardian, waitForSupervisorCleanup, n
 export type { PlatformSupervisorOptions, PlatformSupervisorStatus } from "./platform-supervisor.ts";
 import { ensureDeploymentComparisons, recordDeploymentActivation, deploymentComparisonWindows } from "./platform-comparisons.ts";
 import type { ObjectStore } from "./object-storage.ts";
+import { strictArtifactStore } from "./object-storage-internal.ts";
 import {
   createGithubActionsOidcVerifier,
   GithubActionsOidcError,
@@ -289,6 +291,31 @@ export interface PlatformDependencyCheck {
   readonly overridden: boolean;
   readonly observations: readonly PlatformDependencyObservation[];
   readonly checkedAt: number;
+}
+
+/** Original artifact accepted for observation only; it cannot activate a release. */
+export interface PlatformStagedRelease {
+  readonly id: string;
+  readonly projectId: string;
+  readonly purpose: "shadow-upload";
+  readonly status: "staged";
+  readonly digest: string;
+  readonly artifactBytes: number;
+  readonly storageBytes: number;
+  readonly artifactAvailable: true;
+  readonly runnerArtifact: {readonly bytes: number; readonly storage: "local" | "object"};
+  readonly previousReleaseId: null;
+  readonly frameworkVersion: string;
+  readonly nodeVersion: string;
+  readonly createdAt: number;
+  readonly activatedAt: null;
+  readonly failure: null;
+  readonly providerGeneration: null;
+  readonly migrations: string;
+}
+export interface PlatformStagedReleaseResponse {
+  readonly ok: true;
+  readonly release: PlatformStagedRelease;
 }
 
 export interface PlatformReleaseChannelEntry {
@@ -835,7 +862,23 @@ interface NormalizedProviderPlacement {
   maxDatabaseBytes: number;
 }
 
+interface UploadPublicationReceipt {
+  protocol: "clank-platform-upload/1";
+  attemptId: string;
+  phase: "reserved" | "submitted" | "acknowledged";
+  projectId: string;
+  releaseId: string;
+  requestDigest: string;
+  artifactSha256: string;
+  artifactBytes: number;
+  store: string;
+  key: string | null;
+}
+
 interface ReleaseRow {
+  purpose: "deployment" | "shadow-upload";
+  uploadRequestDigest: string | null;
+  uploadPublication: UploadPublicationReceipt | null;
   id: string;
   projectId: string;
   previousReleaseId: string | null;
@@ -1461,6 +1504,16 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     if (leadership && storage.internal.prepare("SELECT protocol FROM clank_platform_supervisor_state WHERE singleton=1").get()?.protocol === 2
       && !storage.internal.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_platform_provider_canaries'").get())
       throw new Error("The enrolled provider canary journal is missing; preserve the catalog for recovery.");
+    let after = "";
+    for (;;) {
+      leadership?.assertCurrent();
+      const rows = storage.internal.prepare("SELECT * FROM clank_platform_releases WHERE purpose='shadow-upload' AND id>? ORDER BY id LIMIT 64").all(after);
+      for (const row of rows) releaseRow(row);
+      if (rows.length < 64) break;
+      after = String(rows[rows.length-1].id);
+      await new Promise(resolve => setTimeout(resolve,0));
+    }
+    leadership?.assertCurrent();
     storage.internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_provider_canaries (
       project_id TEXT PRIMARY KEY, protocol INTEGER NOT NULL, epoch INTEGER NOT NULL,
       operation TEXT NOT NULL, updated_at INTEGER NOT NULL);`);
@@ -1675,6 +1728,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
             if (
               !release
               || release.projectId !== operation.projectId
+              || release.purpose !== "deployment"
               || release.runnerArtifactBytes <= 0
               || !release.artifactAvailable
             ) return null;
@@ -1712,6 +1766,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
                     || project.placement !== "provider"
                     || !release
                     || release.projectId !== project.id
+                    || release.purpose !== "deployment"
                     || release.providerGeneration !== desired.generation
                     || !generation
                   ) return null;
@@ -2120,7 +2175,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
   };
 
   const projectLeaseAssertions = new Map<string, () => void>();
-  const withProjectLock = async <Value>(projectId: string, operation: () => Promise<Value>): Promise<Value> => {
+  const withProjectLock = async <Value>(projectId: string, operation: () => Promise<Value>, waitForLease = true): Promise<Value> => {
+    if (!waitForLease && locks.has(projectId)) throw new PlatformError(409, "PROJECT_BUSY", "Another operation is changing this project.");
     const previous = locks.get(projectId) ?? Promise.resolve();
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
@@ -2131,7 +2187,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     try {
       const leaseDeadline = Date.now() + 30_000;
       distributedLease = await orchestrator.acquireLease(`project:${projectId}`, leaseOwner);
-      while (!distributedLease && Date.now() < leaseDeadline) {
+      while (waitForLease && !distributedLease && Date.now() < leaseDeadline) {
         await new Promise((resolve) => setTimeout(resolve, 100 + Math.floor(Math.random() * 100)));
         distributedLease = await orchestrator.acquireLease(`project:${projectId}`, leaseOwner);
       }
@@ -2399,6 +2455,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     port: number,
     assertCurrent?: () => void,
   ): Promise<ActiveProcess> => {
+    requireDeploymentRelease(release);
     assertCurrent?.();
     requireRuntimeLaunchAuthority(project.id);
     const secretRevisions = secretRotations.revisions(project.id, secrets);
@@ -2472,6 +2529,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     secrets: Record<string, string>,
     recovering = false,
   ): Promise<ActiveProcess> => {
+    requireDeploymentRelease(release);
     if (!recovering) requireNoInterruptedPromotion(project.id);
     requireRuntimeLaunchAuthority(project.id);
     const current = active.get(project.id);
@@ -2857,6 +2915,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     frozenEnvironment?: Record<string, string>,
   ): Promise<Record<string, unknown>> => providerWriter(project.id, async () => {
     const assertQueueCurrent = () => {
+      requireDeploymentRelease(release);
       projectLeaseAssertions.get(project.id)?.();
       requireNoProviderCanary(project.id);
       requireNoEvacuation(project.id);
@@ -3088,6 +3147,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     safetyBackupId: string;
     generation: number;
   }> => providerWriter(project.id, async () => {
+    requireDeploymentRelease(release);
     requireNoProviderCanary(project.id);
     if (!providerPlacement || !deploymentCoordinator) {
       throw new PlatformError(
@@ -3321,6 +3381,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     sourceNodeId: string;
     targetNodeId: string;
   }> => providerWriter(project.id, async () => {
+    requireDeploymentRelease(release);
     requireNoProviderCanary(project.id);
     assertCurrent?.();
     if (!providerPlacement || !deploymentCoordinator) {
@@ -3843,6 +3904,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       const current = accessibleProject(storage.internal, project.id, principal, "deploy").project;
       const candidate = releaseById(storage.internal, release.id);
       if (!candidate || candidate.projectId !== project.id || candidate.digest !== release.digest || !candidate.artifactAvailable) throw new Error("Provider canary artifact changed.");
+      requireDeploymentRelease(candidate);
       assertReleaseCapacity(storage.internal, project.id, candidate.storageBytes, projectQuotas(storage.internal, current, quotaDefaults), candidate.id);
       return current;
     };
@@ -5277,6 +5339,180 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     }
   };
 
+  const requireFreshUploadAuthority = (principal: TokenPrincipal, projectId: string) => {
+    requireCurrentPlatformPrincipal(storage, principal);
+    if (principal.machine || principal.tokenId || !principal.sessionId) throw new PlatformError(403, "HUMAN_AUTH_REQUIRED", "Artifact staging requires a current human browser session.");
+    const session = storage.auth.refreshSession(principal.sessionId);
+    if (!session || session.user?.id !== principal.userId) throw new PlatformError(403, "FRESH_AUTH_REQUIRED", "Verify a current browser session with a passkey or MFA.");
+    storage.auth.requireFreshAuthentication(session, freshAuthenticationAge);
+    accessibleProject(storage.internal, projectId, principal, "deploy");
+  };
+  const inspectReleaseUpload = async (projectId: string, bytes: Uint8Array, claimedDigest: string, header: string | null,
+    action: "deployment" | "shadow-upload", current: () => void) => {
+    current();
+    if (header !== null && header.length > 12_000) throw new PlatformError(400, "INVALID_RELEASE_ATTESTATION", "Release attestation header exceeds its bound.");
+    const digest = await deploymentDigest(bytes); current();
+    if (claimedDigest !== digest) throw new PlatformError(400, "DIGEST_MISMATCH", "Artifact digest does not match its header.");
+    const requestDigest = syncHash(JSON.stringify([action, projectId, digest, header === null ? null : syncHash(header,"hex")]),"hex");
+    let attestation: ReleaseAttestation | undefined;
+    if (options.releaseAttestations) {
+      if (!header && options.releaseAttestations.required !== false) throw new PlatformError(403, "RELEASE_ATTESTATION_REQUIRED", "A signed release attestation is required.");
+      if (header) {
+        try { attestation = await verifyReleaseAttestation(bytes, decodeReleaseAttestation(header), options.releaseAttestations, projectId); }
+        catch { throw new PlatformError(403, "INVALID_RELEASE_ATTESTATION", "The release attestation is invalid or is not trusted for this project."); }
+        current();
+      }
+    }
+    return { digest, requestDigest, attestation };
+  };
+  const prepareShadowUploads = (current: () => void) => {
+    current();
+    if (!leadership) throw new PlatformError(409, "SUPERVISOR_REQUIRED", "Artifact staging requires native supervisor leadership.");
+    // SQLite's table-valued read is equivalent on the guarded framework connection;
+    // the shared native validator and connection-control prohibition stay unchanged.
+    const schema = {prepare:(sql: string) => storage.internal.prepare(sql === "PRAGMA table_list" ? "SELECT * FROM pragma_table_list" : sql)};
+    storage.internal.transaction(() => {
+      current();
+      const retained = storage.internal.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name IN ('clank_platform_shadow_state','clank_platform_shadow_reports')").all();
+      if (!retained.length) {
+        if (storage.internal.prepare("PRAGMA table_info(clank_platform_projects)").all().some(column => column.name === "shadow_replay_receipt")
+          || storage.internal.prepare("PRAGMA table_info(clank_platform_releases)").all().some(column => column.name === "upload_publication_receipt")) throw new Error("Incomplete retained shadow schema must be preserved for recovery.");
+        storage.internal.exec(`ALTER TABLE clank_platform_projects ADD COLUMN shadow_replay_receipt TEXT;
+          ALTER TABLE clank_platform_releases ADD COLUMN upload_publication_receipt TEXT;
+          CREATE TABLE clank_platform_shadow_state(singleton INTEGER PRIMARY KEY CHECK(singleton=1),protocol INTEGER NOT NULL,enrollment_id TEXT NOT NULL,schema_id TEXT NOT NULL) STRICT;
+          CREATE TABLE clank_platform_shadow_reports(project_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,session_id TEXT NOT NULL,idempotency_key_digest TEXT NOT NULL,
+            input_digest TEXT NOT NULL,receipt_json TEXT NOT NULL,report_json TEXT,PRIMARY KEY(project_id,session_id),UNIQUE(project_id,idempotency_key_digest)) STRICT;`);
+        const enrollment = syncHash(crypto.randomUUID() + crypto.randomUUID(),"hex");
+        const result = storage.internal.prepare("INSERT INTO clank_platform_shadow_state VALUES(1,1,?,?)").run(enrollment, shadowSchemaIdentity);
+        if (Number(result.changes) !== 1 || assertProviderShadowSchema(schema).enrollmentId !== enrollment) throw new Error("Shadow schema enrollment was not retained exactly.");
+      } else {
+        const before = assertProviderShadowSchema(schema);
+        if (before.version === 1) {
+          storage.internal.exec("ALTER TABLE clank_platform_releases ADD COLUMN upload_publication_receipt TEXT");
+          const changed = storage.internal.prepare("UPDATE clank_platform_shadow_state SET schema_id=? WHERE singleton=1 AND protocol=1 AND enrollment_id=? AND schema_id='clank-platform-shadow/1'").run(shadowSchemaIdentity,before.enrollmentId);
+          const after = assertProviderShadowSchema(schema);
+          if (Number(changed.changes)!==1 || after.version!==2 || after.enrollmentId!==before.enrollmentId) throw new Error("Upload receipt schema upgrade was not retained exactly.");
+        }
+      }
+      storage.internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_releases_purpose_status ON clank_platform_releases(purpose,status)");
+      current();
+    });
+    // The supervisor uses its own native connection: never enroll inside the storage transaction.
+    current(); leadership.enrollProviderShadow(); current();
+  };
+  const stagingProjects = new Set<string>();
+  const stagingIntakes = new Set<ReturnType<typeof releaseUploadDeadline>>();
+  const stageRelease = async (request: Request, principal: TokenPrincipal, project: ProjectRow): Promise<Record<string, unknown>> => {
+    requireFreshUploadAuthority(principal, project.id);
+    if (!leadership) throw new PlatformError(409, "SUPERVISOR_REQUIRED", "Artifact staging requires native supervisor leadership.");
+    if (stagingIntakes.size >= 2) throw new PlatformError(429, "RELEASE_UPLOAD_BUSY", "Both artifact intake slots are occupied; retry later.");
+    if (locks.has(project.id) || stagingProjects.has(project.id)) throw new PlatformError(409, "PROJECT_BUSY", "Another operation is changing this project's release storage.");
+    if (runnerArtifactObjects && !strictArtifactStore(runnerArtifactObjects.store)) throw new PlatformError(409,"RELEASE_STORAGE_INELIGIBLE","Strict artifact staging requires a genuine built-in storage adapter without a custom fetch transport.");
+    const headers = releaseUploadHeaders(request);
+    const intake = releaseUploadDeadline(request.signal, () => { stagingIntakes.delete(intake); stagingProjects.delete(project.id); });
+    stagingIntakes.add(intake); stagingProjects.add(project.id);
+    try {
+      return await intake.wait(() => withProjectLock(project.id, async () => {
+        const native = captureProjectAuthority(project.id, true);
+        const current = () => { intake.check(); native(); requireFreshUploadAuthority(principal, project.id); };
+        return providerWriterScope.run(current, async () => {
+          current(); prepareShadowUploads(current);
+          const max = Math.min(options.maxArtifactBytes ?? 100 * 1024 * 1024, runnerArtifactLimit || 100 * 1024 * 1024, 100 * 1024 * 1024);
+          const bytes = await intake.wait(() => readUploadBody(request, max, current, intake)); current();
+          const {digest, requestDigest, attestation} = await intake.wait(() => inspectReleaseUpload(project.id, bytes, headers.digest, headers.keyAttestation, "shadow-upload", current)); current();
+          let release = (() => { const row = storage.internal.prepare("SELECT * FROM clank_platform_releases WHERE project_id=? AND idempotency_key=?").get(project.id, headers.key); return row ? releaseRow(row) : null; })();
+          if (release && (release.purpose !== "shadow-upload" || release.digest !== digest || release.uploadRequestDigest !== requestDigest)) throw new PlatformError(409, "IDEMPOTENCY_ARTIFACT_MISMATCH", "This key already names a different release purpose or upload request.");
+          if (release?.uploadPublication?.phase === "submitted") throw new PlatformError(409,"RELEASE_UPLOAD_UNCERTAIN","The original publication has no durable settlement acknowledgment; its reservation is preserved.");
+          if (release?.status === "staged" && !release.artifactAvailable) throw new PlatformError(409, "RELEASE_ARTIFACT_UNAVAILABLE", "This retained upload was explicitly cleaned up; submit a new key.");
+            let bundle: DeploymentBundle;
+            try { bundle = await intake.wait(() => decodeDeploymentBundle(bytes, {maxTotalBytes: options.maxArtifactBytes ?? 100 * 1024 * 1024})); }
+            catch (error) { current(); throw new PlatformError(422, "INVALID_ARTIFACT", safeError(error)); }
+            current();
+            if (bundle.config.database.allowUnsafeMigrations && options.allowUnsafeMigrations !== true) throw new PlatformError(403, "UNSAFE_MIGRATIONS_DISABLED", "This platform does not allow unrestricted migration SQL.");
+          if (release && (JSON.stringify(release.config) !== JSON.stringify(bundle.config) || release.frameworkVersion !== bundle.provenance.frameworkVersion || release.nodeVersion !== bundle.provenance.nodeVersion)) throw new Error("Retained artifact provenance differs from the exact original upload.");
+          if (!release) {
+            const id = await intake.wait(() => randomId(18)); current();
+            const artifactStore = runnerArtifactObjects?.namespace ?? "local";
+            const artifactKey = runnerArtifactObjects ? runnerReleaseObjectKey(project.id, id, digest, "shadow-upload") : null;
+            const directory = `${paths.projects}/${project.id}/releases/${id}`;
+            const createdAt = Date.now();
+            const config = JSON.stringify(bundle.config);
+            const publication: UploadPublicationReceipt = {protocol:"clank-platform-upload/1",attemptId:syncHash(crypto.randomUUID()+crypto.randomUUID(),"hex"),phase:"reserved",projectId:project.id,releaseId:id,requestDigest,artifactSha256:digest,artifactBytes:bytes.byteLength,store:artifactStore,key:artifactKey};
+            const encodedPublication = JSON.stringify(publication);
+            storage.internal.transaction(() => {
+              current();
+              const occupied = storage.internal.prepare("SELECT * FROM clank_platform_releases WHERE purpose='shadow-upload' AND status='uploading' LIMIT 3").all();
+              for (const row of occupied) releaseRow(row);
+              if (occupied.length >= 2) throw new PlatformError(429,"RELEASE_UPLOAD_BUSY","Two durable upload reservations are occupied; complete acknowledged uploads before admitting another.");
+              const projectNow = accessibleProject(storage.internal, project.id, principal, "deploy").project;
+              assertReleaseCapacity(storage.internal, project.id, bytes.byteLength, projectQuotas(storage.internal, projectNow, quotaDefaults));
+              const inserted = storage.internal.prepare(`INSERT INTO clank_platform_releases
+                (id,project_id,previous_release_id,status,digest,artifact_bytes,runtime_bytes,runner_artifact_bytes,runner_artifact_store,runner_artifact_key,snapshot_bytes,storage_bytes,artifact_available,
+                  framework_version,node_version,config,directory,backup_path,idempotency_key,purpose,upload_request_digest,upload_publication_receipt,created_at)
+                VALUES(?,?,NULL,'uploading',?,?,0,?,?,?,0,?,0,?,?,?,?,NULL,?,'shadow-upload',?,?,?)`)
+                .run(id,project.id,digest,bytes.byteLength,bytes.byteLength,artifactStore,artifactKey,bytes.byteLength,bundle.provenance.frameworkVersion,bundle.provenance.nodeVersion,config,directory,headers.key,requestDigest,encodedPublication,createdAt);
+              const retained = storage.internal.prepare("SELECT * FROM clank_platform_releases WHERE id=?").get(id);
+              if (Number(inserted.changes) !== 1 || !retained || retained.project_id !== project.id || retained.status !== "uploading" || retained.digest !== digest || retained.artifact_bytes !== bytes.byteLength
+                || retained.runner_artifact_bytes !== bytes.byteLength || retained.storage_bytes !== bytes.byteLength || retained.runner_artifact_store !== artifactStore || retained.runner_artifact_key !== artifactKey
+                || retained.config !== config || retained.directory !== directory || retained.idempotency_key !== headers.key || retained.upload_request_digest !== requestDigest || retained.upload_publication_receipt !== encodedPublication || retained.purpose !== "shadow-upload"
+                || retained.framework_version !== bundle.provenance.frameworkVersion || retained.node_version !== bundle.provenance.nodeVersion || retained.created_at !== createdAt) throw new Error("Upload reservation was not retained exactly.");
+              release = releaseRow(retained);
+              if (attestation) {
+                const encoded = JSON.stringify(attestation);
+                const inserted = storage.internal.prepare("INSERT INTO clank_platform_release_attestations(release_id,attestation,verified_at) VALUES(?,?,?)").run(id,encoded,Date.now());
+                if (Number(inserted.changes) !== 1 || storage.internal.prepare("SELECT attestation FROM clank_platform_release_attestations WHERE release_id=?").get(id)?.attestation !== encoded) throw new Error("Upload attestation was not retained exactly.");
+              }
+              current();
+            });
+          }
+          let retained = release!;
+          let identity = JSON.stringify(storage.internal.prepare("SELECT * FROM clank_platform_releases WHERE id=?").get(retained.id));
+          const unchanged = () => { current(); if (JSON.stringify(storage.internal.prepare("SELECT * FROM clank_platform_releases WHERE id=?").get(retained.id)) !== identity) throw new Error("Retained upload identity changed during publication."); };
+          const advance = (phase: "submitted" | "acknowledged") => {
+            const previous = retained.uploadPublication!, next = JSON.stringify({...previous,phase});
+            if (previous.phase !== (phase === "submitted" ? "reserved" : "submitted")) throw new Error("Invalid upload publication transition.");
+            storage.internal.transaction(() => {
+              unchanged();
+              const changed = storage.internal.prepare(`UPDATE clank_platform_releases SET upload_publication_receipt=?
+                WHERE id=? AND project_id=? AND purpose='shadow-upload' AND status='uploading' AND artifact_available=0
+                AND upload_publication_receipt=? AND upload_request_digest=? AND digest=? AND artifact_bytes=? AND runner_artifact_store=? AND runner_artifact_key IS ?`)
+                .run(next,retained.id,project.id,JSON.stringify(previous),requestDigest,digest,bytes.byteLength,retained.runnerArtifactStore,retained.runnerArtifactKey);
+              const row = storage.internal.prepare("SELECT * FROM clank_platform_releases WHERE id=?").get(retained.id);
+              if (Number(changed.changes)!==1 || !row || row.upload_publication_receipt!==next || JSON.stringify({...row,upload_publication_receipt:JSON.stringify(previous)})!==identity) throw new Error("Upload publication acknowledgment was not retained exactly.");
+              releaseRow(row); current();
+            });
+            retained = releaseById(storage.internal,retained.id)!;
+            identity = JSON.stringify(storage.internal.prepare("SELECT * FROM clank_platform_releases WHERE id=?").get(retained.id));
+            unchanged();
+          };
+          if (retained.uploadPublication!.phase === "reserved") {
+            // No GET can prove that an earlier unknown writer has settled. The
+            // durable submission receipt and exclusive storage primitive are both required.
+            advance("submitted");
+            await intake.wait(() => writeRunnerReleaseArtifact(paths.projects, {purpose:"shadow-upload",projectId:project.id,releaseId:retained.id,digest,bytes:bytes.byteLength,store:retained.runnerArtifactStore,key:retained.runnerArtifactKey}, bytes, runnerArtifactObjects, unchanged, true)); unchanged();
+            advance("acknowledged");
+          }
+          if (retained.uploadPublication!.phase !== "acknowledged") throw new PlatformError(409,"RELEASE_UPLOAD_UNCERTAIN","The original publication acknowledgment is unavailable.");
+          const original = await intake.wait(() => readRunnerReleaseArtifact(paths.projects, retained, intake.signal, runnerArtifactObjects, unchanged)); unchanged();
+          if (!original || original.bytes.byteLength !== bytes.byteLength || original.sha256 !== digest) throw new Error("The exact acknowledged upload was not durably retained.");
+          storage.internal.transaction(changes => {
+            unchanged();
+            if (retained.status === "uploading") {
+              const changed = storage.internal.prepare("UPDATE clank_platform_releases SET status='staged',artifact_available=1 WHERE id=? AND project_id=? AND status='uploading' AND artifact_available=0").run(retained.id,project.id);
+              const row = storage.internal.prepare("SELECT * FROM clank_platform_releases WHERE id=?").get(retained.id);
+              if (Number(changed.changes) !== 1 || !row || row.status !== "staged" || row.artifact_available !== 1 || JSON.stringify({...row,status:"uploading",artifact_available:0}) !== identity) throw new Error("Staged artifact publication was not retained exactly.");
+              audit(storage.internal,principal.userId,null,project.id,"release.stage",{releaseId:retained.id,digest,artifactBytes:bytes.byteLength});
+              changes.record("__platform",project.id);
+            }
+            current();
+          });
+          current();
+          return {...publicRelease(releaseById(storage.internal,retained.id)!),projectId:project.id};
+        });
+      }, false));
+    } finally { intake.finish(); }
+  };
+
   const deployCore = async (
     principal: TokenPrincipal,
     project: ProjectRow,
@@ -5304,23 +5540,14 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       acceptance?.assertCurrent();
     };
     assertCurrent();
-    cancelRestart(project.id);
-    const digest = await deploymentDigest(bytes);
-    if (claimedDigest !== digest) throw new PlatformError(400, "DIGEST_MISMATCH", "Artifact digest does not match its header.");
-    let attestation: ReleaseAttestation | undefined;
-    if (options.releaseAttestations) {
-      if (!attestationHeader && options.releaseAttestations.required !== false) throw new PlatformError(403, "RELEASE_ATTESTATION_REQUIRED", "A signed release attestation is required.");
-      if (attestationHeader) {
-        try { attestation = await verifyReleaseAttestation(bytes, decodeReleaseAttestation(attestationHeader), options.releaseAttestations, project.id); }
-        catch { throw new PlatformError(403, "INVALID_RELEASE_ATTESTATION", "The release attestation is invalid or is not trusted for this project."); }
-      }
-    }
+    const {digest, requestDigest, attestation} = await inspectReleaseUpload(project.id, bytes, claimedDigest, attestationHeader, "deployment", assertCurrent);
 
     const existing = storage.internal.prepare(
       "SELECT id, status FROM clank_platform_releases WHERE project_id = ? AND idempotency_key = ?",
     ).get(project.id, idempotencyKey);
     const existingRelease = existing ? releaseById(storage.internal, String(existing.id)) : null;
-    if (existingRelease && existingRelease.digest !== digest) throw new PlatformError(409, "IDEMPOTENCY_ARTIFACT_MISMATCH", "This deployment key already names a different artifact.");
+    if (existingRelease && (existingRelease.purpose !== "deployment" || existingRelease.digest !== digest || existingRelease.uploadRequestDigest !== null && existingRelease.uploadRequestDigest !== requestDigest)) throw new PlatformError(409, "IDEMPOTENCY_ARTIFACT_MISMATCH", "This key already names a different release purpose or upload request.");
+    cancelRestart(project.id);
     acceptance = await dependencyFactory?.(project, existingRelease) ?? acceptance;
     assertCurrent();
     if (existing) {
@@ -5417,8 +5644,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         (id, project_id, previous_release_id, status, digest, artifact_bytes, runtime_bytes, runner_artifact_bytes,
          runner_artifact_store, runner_artifact_key,
          snapshot_bytes, storage_bytes, artifact_available, framework_version, node_version,
-         config, directory, backup_path, idempotency_key, created_at)
-        VALUES (?, ?, ?, 'staging', ?, ?, ?, ?, ?, ?, 0, ?, 1, ?, ?, ?, ?, NULL, ?, ?)`)
+         config, directory, backup_path, idempotency_key, created_at, upload_request_digest)
+        VALUES (?, ?, ?, 'staging', ?, ?, ?, ?, ?, ?, 0, ?, 1, ?, ?, ?, ?, NULL, ?, ?, ?)`)
         .run(
           releaseId,
           project.id,
@@ -5436,7 +5663,10 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           releaseDirectory,
           idempotencyKey,
           createdAt,
+          requestDigest,
         );
+      const retainedUpload = storage.internal.prepare("SELECT purpose,upload_request_digest,digest,project_id,idempotency_key FROM clank_platform_releases WHERE id=?").get(releaseId);
+      if (!retainedUpload || retainedUpload.purpose !== "deployment" || retainedUpload.upload_request_digest !== requestDigest || retainedUpload.digest !== digest || retainedUpload.project_id !== project.id || retainedUpload.idempotency_key !== idempotencyKey) throw new Error("Deployment upload identity was not retained exactly.");
       if (attestation) storage.internal.prepare("INSERT INTO clank_platform_release_attestations (release_id, attestation, verified_at) VALUES (?, ?, ?)").run(releaseId, JSON.stringify(attestation), Date.now());
       acceptance?.staged(releaseId);
     });
@@ -5938,6 +6168,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     if (!row || !project || !candidate || candidate.projectId !== projectId || (row.previous_release_id && (!previous || previous.projectId !== projectId || !previous.artifactAvailable))) {
       throw new PlatformError(409, "DEPENDENCY_RECOVERY_REQUIRED", "The exact activation and prior artifact are unavailable for verified recovery.");
     }
+    requireDeploymentRelease(candidate);
+    if (previous) requireDeploymentRelease(previous);
     const priorId = previous?.id ?? null, priorGeneration = row.previous_generation === null ? null : Number(row.previous_generation);
     const assertRecovery = () => {
       projectLeaseAssertions.get(projectId)?.(); guard?.(); requireNoEvacuation(projectId);
@@ -6036,6 +6268,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     // candidate. Resolving current secrets again can make that prior code fail
     // its health checks too, and would change the originally authorized runtime.
     const priorEnvironment = decryptProviderEnvironment(priorRuntime.encryptedEnvironment, masterKey);
+    requireDeploymentRelease(candidate); requireDeploymentRelease(previous);
     const assertRecovery = () => {
       projectLeaseAssertions.get(target.id)?.();
       guard?.();
@@ -6104,7 +6337,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           || freshTarget?.project_id !== targetId || Number(freshTarget?.version) !== version) throw new PlatformError(409, "ENVIRONMENT_VERSION_STALE", "Environment targets or policies changed; review the current version.");
         if (requireArtifact) {
           const release = releaseById(storage.internal, releaseId);
-          if (!release || release.projectId !== sourceId || release.digest !== digest || !release.artifactAvailable || !["active", "inactive"].includes(release.status)) throw new PlatformError(409, "PROMOTION_ARTIFACT_UNAVAILABLE", "The source must be a retained verified release that activated successfully.");
+          if (!release || release.projectId !== sourceId || release.digest !== digest || !release.artifactAvailable || release.purpose !== "deployment" || !["active", "inactive"].includes(release.status)) throw new PlatformError(409, "PROMOTION_ARTIFACT_UNAVAILABLE", "The source must be a retained verified release that activated successfully.");
         }
         return currentTarget;
       };
@@ -6284,7 +6517,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
             throw new PlatformError(409,"ENVIRONMENT_VERSION_STALE","The source binding changed.");
           if((row?Number(row.current_version):0)!==expected)throw new PlatformError(409,"CHANNEL_VERSION_STALE","The channel changed; review its current version.");
           const release=releaseById(storage.internal,releaseId);
-          if(!release||release.projectId!==sourceId||release.digest!==digest||!release.artifactAvailable||!["active","inactive"].includes(release.status))
+          if(!release||release.projectId!==sourceId||release.digest!==digest||!release.artifactAvailable||release.purpose!=="deployment"||!["active","inactive"].includes(release.status))
             throw new PlatformError(409,"PROMOTION_ARTIFACT_UNAVAILABLE","Pin a retained verified release that activated successfully.");
           requireChannelCapacity(root.id,!row);return release;
         };
@@ -6459,7 +6692,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         const now = Date.now();
         if (starts<=now || expires>now+30*24*60*60_000) throw new PlatformError(422,"RELEASE_WINDOW_TIME_INVALID","Choose a future window within the next 30 days.");
         const release = releaseById(storage.internal,String(entry.source_release_id));
-        if (!release || release.projectId!==entry.source_project_id || release.digest!==entry.artifact_digest || !release.artifactAvailable || !["active","inactive"].includes(release.status)) throw new PlatformError(409,"PROMOTION_ARTIFACT_UNAVAILABLE","The original verified upload must remain available.");
+        if (!release || release.projectId!==entry.source_project_id || release.digest!==entry.artifact_digest || !release.artifactAvailable || release.purpose!=="deployment" || !["active","inactive"].includes(release.status)) throw new PlatformError(409,"PROMOTION_ARTIFACT_UNAVAILABLE","The original verified upload must remain available.");
         requireNoEvacuation(currentTarget.id);requireNoEvacuation(release.projectId);
         return {root:currentRoot,release,target:currentTarget};
       };
@@ -6641,6 +6874,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       if (!release || release.projectId !== targetId || release.digest !== receipt.artifact_digest || target.placement !== "local") throw new PlatformError(409, "PROMOTION_RECOVERY_REQUIRED", "The interrupted target release is unavailable for verified local recovery.");
       const previous = release.previousReleaseId ? releaseById(storage.internal, release.previousReleaseId) : null;
       if (release.previousReleaseId && (!previous || !previous.artifactAvailable || previous.projectId !== targetId)) throw new PlatformError(409, "PROMOTION_RECOVERY_REQUIRED", "The prior target artifact is unavailable for recovery.");
+      requireDeploymentRelease(release); if (previous) requireDeploymentRelease(previous);
       const assertTarget = () => {
         if (assertCurrent().activeReleaseId !== release.previousReleaseId) throw new PlatformError(409, "PROMOTION_TARGET_STALE", "The target changed after the interrupted promotion; automatic data recovery is blocked.");
         const current = promotionReceipt(root.id, key);
@@ -6708,12 +6942,14 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       if (restoreData) requireFreshPlatformAuthentication(principal);
       acceptance?.assertCurrent();
     };
-    cancelRestart(project.id);
     const current = project.activeReleaseId ? releaseById(storage.internal, project.activeReleaseId) : null;
     const target = releaseById(storage.internal, targetId);
     if (!current || !target || target.projectId !== project.id) {
       throw new PlatformError(404, "RELEASE_NOT_FOUND", "Release not found.");
     }
+    requireDeploymentRelease(target);
+    requireDeploymentRelease(current);
+    cancelRestart(project.id);
     if (!target.artifactAvailable) {
       throw new PlatformError(409, "RELEASE_ARTIFACT_UNAVAILABLE", "This release's runtime artifact has been removed.");
     }
@@ -6926,7 +7162,9 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     confirmation: string,
     allowRollbackLoss: boolean,
   ): Promise<Record<string, unknown>> => withProjectLock(project.id, async () => providerWriter(project.id, async () => {
-    const current = providerWriterScope.getStore() ?? (() => {});
+    const outer = providerWriterScope.getStore(), native = captureProjectAuthority(project.id);
+    const current = () => { outer?.(); native(); requireCurrentPlatformPrincipal(storage, principal); accessibleProject(storage.internal, project.id, principal, "rollback"); };
+    return providerWriterScope.run(current, async () => {
     current();
     requireCurrentPlatformPrincipal(storage, principal);
     project = accessibleProject(storage.internal, project.id, principal, "rollback").project;
@@ -6945,6 +7183,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     if (releaseChannelPinned(project.id, release.id)) {
       throw new PlatformError(409, "RELEASE_CHANNEL_PINNED", "Retire the release channels that retain this artifact before removing it.");
     }
+    if (release.purpose === "shadow-upload" && release.status === "uploading") throw new PlatformError(409, "RELEASE_UPLOAD_UNCERTAIN", "Retry the exact upload to verify its retained bytes before cleanup.");
     if (!release.artifactAvailable) {
       storage.internal.transaction(() => {
         storage.internal.prepare(`DELETE FROM clank_platform_provider_generations
@@ -7002,14 +7241,24 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       );
     }
     await deleteReleaseStorage(paths.projects, release, runnerArtifactObjects, current); current();
+    if (release.purpose === "shadow-upload") {
+      const remaining = await readRunnerReleaseArtifact(paths.projects, release, new AbortController().signal, runnerArtifactObjects, current); current();
+      if (remaining) throw new PlatformError(409, "RELEASE_UPLOAD_UNCERTAIN", "Artifact absence was not verified; storage accounting is preserved.");
+    }
     if (rollbackProtected && activeRelease?.backupPath) {
       await deleteReleaseSnapshot(paths.projects, project.id, activeRelease.id, current); current();
     }
     storage.internal.transaction((changes) => {
-      storage.internal.prepare(`UPDATE clank_platform_releases
+      current();
+      const updated = storage.internal.prepare(`UPDATE clank_platform_releases
         SET artifact_available = 0, runtime_bytes = 0, runner_artifact_bytes = 0, snapshot_bytes = 0,
           storage_bytes = 0, backup_path = NULL, provider_generation = NULL
         WHERE id = ? AND project_id = ?`).run(release.id, project.id);
+      if (release.purpose === "shadow-upload") {
+        const cleaned = releaseById(storage.internal,release.id);
+        if (Number(updated.changes) !== 1 || !cleaned || cleaned.purpose !== "shadow-upload" || cleaned.artifactAvailable || cleaned.storageBytes !== 0
+          || JSON.stringify({...cleaned,artifactAvailable:release.artifactAvailable,runtimeBytes:release.runtimeBytes,runnerArtifactBytes:release.runnerArtifactBytes,snapshotBytes:release.snapshotBytes,storageBytes:release.storageBytes,backupPath:release.backupPath,providerGeneration:release.providerGeneration}) !== JSON.stringify(release)) throw new Error("Upload cleanup accounting or its exact publication receipt was not retained.");
+      }
       storage.internal.prepare(`DELETE FROM clank_platform_provider_generations
         WHERE project_id = ? AND release_id = ?`).run(project.id, release.id);
       if (rollbackProtected && activeRelease?.backupPath) {
@@ -7032,15 +7281,22 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       ...publicRelease(cleaned),
       cleanup: { allowed: false, rollbackProtected: false, channelPinned: false },
     };
+    });
   }));
 
   const destroyProject = async (
     project: ProjectRow,
     actor: { userId: string; tokenId: string | null },
     action: "project.delete" | "preview.delete" | "preview.expire",
+    authorize?: (metadataDeleted: boolean) => void,
   ): Promise<Record<string, unknown>> => withProjectLock(`dependency-graph:${project.organizationId ?? project.ownerId}`, async () => providerWriter(project.id, async () => {
-    const current = providerWriterScope.getStore() ?? (() => {});
+    const durableArtifactAbsence = Boolean(storage.internal.prepare("SELECT 1 FROM clank_platform_releases WHERE project_id=? AND purpose='shadow-upload' LIMIT 1").get(project.id));
+    const outer = providerWriterScope.getStore(), native = durableArtifactAbsence ? captureProjectAuthority(project.id,true) : undefined;
+    let metadataDeleted = false;
+    const current = () => { outer?.(); native?.(); if (native) authorize?.(metadataDeleted); };
+    return providerWriterScope.run(current, async () => {
     current();
+    if (storage.internal.prepare("SELECT 1 FROM clank_platform_releases WHERE project_id=? AND purpose='shadow-upload' AND status='uploading' LIMIT 1").get(project.id)) throw new PlatformError(409, "RELEASE_UPLOAD_UNCERTAIN", "Finish the exact retained uploads before deleting this project.");
     if (storage.internal.prepare("SELECT 1 FROM clank_platform_release_windows WHERE (root_id=? OR source_project_id=? OR target_project_id=?) AND state IN ('pending','running','cancelling','recovery-required') LIMIT 1").get(project.id,project.id,project.id)) throw new PlatformError(409,"PROJECT_RELEASE_SCHEDULED","Cancel or recover scheduled promotions before deleting their projects.");
     if (releaseChannelPinned(project.id)) {
       throw new PlatformError(409, "PROJECT_CHANNEL_PINNED", "Retire the release channels that retain this project's artifacts before deleting it.");
@@ -7088,7 +7344,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           runnerArtifactObjects,
           current,
         ); current();
-      }, current); current();
+      }, current, durableArtifactAbsence); current();
     } catch (error) {
       current();
       try { options.onError?.(error); } catch { /* Operator reporting must not alter recovery. */ }
@@ -7126,6 +7382,11 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         if (Number(result.changes) !== 1) {
           throw new PlatformError(404, "PROJECT_NOT_FOUND", "Project not found.");
         }
+        if (durableArtifactAbsence && (storage.internal.prepare("SELECT 1 FROM clank_platform_projects WHERE id=?").get(project.id)
+          || storage.internal.prepare("SELECT 1 FROM clank_platform_releases WHERE project_id=? LIMIT 1").get(project.id))) throw new Error("Project upload accounting deletion was not retained exactly.");
+        // The synchronous native DELETE intentionally removes the authorization
+        // resource. Keep native ownership through commit; rollback restores checks.
+        metadataDeleted = true;
         audit(storage.internal, actor.userId, actor.tokenId, project.id, action, {
           projectId: project.id,
           organizationId: project.organizationId,
@@ -7139,7 +7400,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         changes.record("__platform", project.organizationId ?? project.id);
       });
     } catch (error) {
-      current();
+      metadataDeleted = false; current();
       try { options.onError?.(error); } catch { /* Operator reporting must not alter the API result. */ }
       throw new PlatformError(
         500,
@@ -7162,6 +7423,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       revokedTokens,
       ...summary,
     };
+    });
   }));
 
   const deleteProject = async (
@@ -7214,7 +7476,12 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         "Explicitly acknowledge permanent application data loss.",
       );
     }
-    return destroyProject(project, principal, "project.delete");
+    return destroyProject(project, principal, "project.delete", metadataDeleted => {
+      requireCurrentPlatformPrincipal(storage,principal); requireFreshPlatformAuthentication(principal); requireNoEvacuation(project.id);
+      requireOrganizationAdministration(metadataDeleted
+        ? project.organizationId ? organizationMembership(storage.internal,project.organizationId,principal.userId).role : project.ownerId===principal.userId ? "owner" : "viewer"
+        : accessibleProject(storage.internal,project.id,principal,"tokens").role);
+    });
   }));
 
   let previewCleanupTimer: ReturnType<typeof setTimeout> | undefined;
@@ -7238,6 +7505,12 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
             preview,
             { userId: preview.ownerId, tokenId: null },
             "preview.expire",
+            metadataDeleted => {
+              if (metadataDeleted) return;
+              const current = projectById(storage.internal,projectId);
+              if (!current || current.parentProjectId!==preview.parentProjectId || current.previewName!==preview.previewName
+                || current.previewExpiresAt!==preview.previewExpiresAt || current.previewExpiresAt===null || current.previewExpiresAt>Date.now()) throw new PlatformError(409,"PREVIEW_CHANGED","The captured expired preview is no longer current.");
+            },
           );
         });
       } catch (error) {
@@ -9425,7 +9698,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         : operation.startsWith("releases/")
         && request.method === "DELETE"
         ? "rollback"
-        : operation === "releases" && request.method === "POST"
+        : (operation === "releases" || operation === "releases/stage") && request.method === "POST"
           ? "deploy"
         : operation === "rollback"
           ? "rollback"
@@ -10374,7 +10647,13 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
             storage.internal.prepare(`UPDATE clank_platform_tokens SET revoked_at = ?
               WHERE project_id = ? AND preview_name = ? AND revoked_at IS NULL`)
               .run(Date.now(), project.id, preview.previewName);
-            return destroyProject(preview, principal, "preview.delete");
+            const parentAuthority = captureProjectAuthority(project.id);
+            return destroyProject(preview, principal, "preview.delete", metadataDeleted => {
+              parentAuthority(); requireCurrentProjectAuthority();
+              if (metadataDeleted) return;
+              const current = projectById(storage.internal,preview.id);
+              if (!current || current.parentProjectId!==project.id || current.previewName!==preview.previewName) throw new PlatformError(409,"PREVIEW_CHANGED","The captured preview is no longer current.");
+            });
           }));
         return api({ ok: true, preview: deleted });
       }
@@ -10400,7 +10679,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         const effective = projectQuotas(storage.internal, project, quotaDefaults);
         const availableRows = storage.internal.prepare(
           `SELECT * FROM clank_platform_releases
-            WHERE project_id = ? AND artifact_available = 1
+            WHERE project_id = ? AND (artifact_available = 1 OR (purpose = 'shadow-upload' AND status = 'uploading'))
             ORDER BY created_at DESC LIMIT 100`,
         ).all(project.id);
         const recentRows = storage.internal.prepare(
@@ -10462,6 +10741,11 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
             allowRollbackLoss,
           ),
         });
+      }
+      if (operation === "releases/stage" && request.method === "POST") {
+        if (url.search) throw new PlatformError(400, "INVALID_REQUEST", "Artifact staging does not accept query parameters.");
+        requireCurrentProjectAuthority();
+        return api({ok:true,release:await stageRelease(request,principal,project)},201);
       }
       if (operation === "releases" && request.method === "POST") {
         const effective = projectQuotas(storage.internal, project, quotaDefaults);
@@ -11391,6 +11675,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       projectIncidents.close();
       if (closed) return;
       closed = true;
+      for (const intake of stagingIntakes) intake.abort();
+      if (stagingIntakes.size) await Promise.all([...locks.values()].map(pending => pending.catch(() => undefined)));
       if (releaseWindowTimer) clearTimeout(releaseWindowTimer);
       releaseWindowTimer = undefined;
       await releaseWindowFlight?.catch(()=>undefined);
@@ -12177,6 +12463,8 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array,
     directory TEXT NOT NULL,
     backup_path TEXT,
     idempotency_key TEXT NOT NULL,
+    purpose TEXT NOT NULL DEFAULT 'deployment' CHECK(purpose IN ('deployment','shadow-upload')),
+    upload_request_digest TEXT,
     created_at INTEGER NOT NULL,
     activated_at INTEGER,
     failure TEXT,
@@ -12319,6 +12607,8 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array,
   ) WITHOUT ROWID`);
   internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_release_window_due ON clank_platform_release_windows(state,starts_at)");
   const releaseColumns = internal.prepare("PRAGMA table_info(clank_platform_releases)").all();
+  if (!releaseColumns.some(column => column.name === "purpose")) internal.exec("ALTER TABLE clank_platform_releases ADD COLUMN purpose TEXT NOT NULL DEFAULT 'deployment' CHECK(purpose IN ('deployment','shadow-upload'))");
+  if (!releaseColumns.some(column => column.name === "upload_request_digest")) internal.exec("ALTER TABLE clank_platform_releases ADD COLUMN upload_request_digest TEXT");
   if (!releaseColumns.some(column => column.name === "dependency_request_digest")) internal.exec("ALTER TABLE clank_platform_releases ADD COLUMN dependency_request_digest TEXT");
   if (!releaseColumns.some((column) => column.name === "artifact_available")) {
     internal.exec("ALTER TABLE clank_platform_releases ADD COLUMN artifact_available INTEGER NOT NULL DEFAULT 1");
@@ -12742,8 +13032,38 @@ function projectRow(row: Record<string, unknown>): ProjectRow {
   };
 }
 
+function uploadPublicationReceipt(row: Record<string,unknown>): UploadPublicationReceipt | null {
+  const raw = row.upload_publication_receipt;
+  if (row.purpose === "deployment") {
+    if (raw !== null && raw !== undefined) throw new Error("Ordinary releases cannot carry upload publication receipts.");
+    return null;
+  }
+  if (typeof raw !== "string" || new TextEncoder().encode(raw).byteLength > 4096) throw new Error("Upload publication receipt is missing or exceeds its bound.");
+  const input = JSON.parse(raw) as UploadPublicationReceipt;
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Upload publication receipt is invalid.");
+  const receipt: UploadPublicationReceipt = {protocol:input.protocol,attemptId:input.attemptId,phase:input.phase,projectId:input.projectId,releaseId:input.releaseId,requestDigest:input.requestDigest,artifactSha256:input.artifactSha256,artifactBytes:input.artifactBytes,store:input.store,key:input.key};
+  if (raw !== JSON.stringify(receipt) || receipt.protocol !== "clank-platform-upload/1" || typeof receipt.attemptId !== "string" || !/^[a-f0-9]{64}$/u.test(receipt.attemptId)
+    || !["reserved","submitted","acknowledged"].includes(receipt.phase) || !/^[A-Za-z0-9_-]{8,128}$/u.test(receipt.projectId) || !/^[A-Za-z0-9_-]{8,128}$/u.test(receipt.releaseId)
+    || !/^[a-f0-9]{64}$/u.test(receipt.requestDigest) || !/^[a-f0-9]{64}$/u.test(receipt.artifactSha256) || !Number.isSafeInteger(receipt.artifactBytes) || receipt.artifactBytes < 1 || receipt.artifactBytes > 100*1024*1024
+    || typeof receipt.store !== "string" || receipt.store.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(receipt.store)
+    || receipt.projectId !== row.project_id || receipt.releaseId !== row.id || receipt.requestDigest !== row.upload_request_digest || receipt.artifactSha256 !== row.digest || receipt.artifactBytes !== row.artifact_bytes
+    || receipt.store !== row.runner_artifact_store || receipt.key !== row.runner_artifact_key || row.status === "staged" && receipt.phase !== "acknowledged"
+    || (receipt.store === "local" ? receipt.key !== null : receipt.key !== runnerReleaseObjectKey(receipt.projectId,receipt.releaseId,receipt.artifactSha256,"shadow-upload"))) throw new Error("Upload publication receipt differs from its immutable release identity.");
+  return Object.freeze(receipt);
+}
+
 function releaseRow(row: Record<string, unknown>): ReleaseRow {
+  if (row.purpose !== "deployment" && row.purpose !== "shadow-upload") throw new Error("Retained release purpose is invalid.");
+  if (row.upload_request_digest !== null && (typeof row.upload_request_digest !== "string" || !/^[a-f0-9]{64}$/u.test(row.upload_request_digest))) throw new Error("Retained release upload identity is invalid.");
+  if (row.purpose === "shadow-upload" && (row.upload_request_digest === null || !["uploading", "staged"].includes(String(row.status)) || Number(row.runtime_bytes) !== 0 || Number(row.snapshot_bytes) !== 0 || row.backup_path !== null || row.provider_generation !== null || row.activated_at !== null || row.previous_release_id !== null || row.status === "uploading" && Number(row.artifact_available) !== 0)) throw new Error("Retained upload-only release state is invalid.");
+  if (row.purpose === "shadow-upload" && (!Number.isSafeInteger(row.artifact_bytes) || Number(row.artifact_bytes) < 1 || Number(row.artifact_bytes) > 100 * 1024 * 1024
+    || ![0,1].includes(Number(row.artifact_available)) || row.failure !== null || !/^[a-f0-9]{64}$/u.test(String(row.digest))
+    || row.runner_artifact_bytes !== (row.status === "uploading" || row.artifact_available === 1 ? row.artifact_bytes : 0)
+    || row.storage_bytes !== row.runner_artifact_bytes)) throw new Error("Retained upload-only artifact accounting is invalid.");
   return {
+    purpose: row.purpose,
+    uploadRequestDigest: row.upload_request_digest as string | null,
+    uploadPublication: uploadPublicationReceipt(row),
     id: String(row.id),
     projectId: String(row.project_id),
     previousReleaseId: row.previous_release_id === null ? null : String(row.previous_release_id),
@@ -13604,10 +13924,10 @@ function workspaceUsagePayload(
         WHERE p.organization_id = ?) AS domains,
       (SELECT count(*) FROM clank_platform_releases r
         JOIN clank_platform_projects p ON p.id = r.project_id
-        WHERE p.organization_id = ? AND r.artifact_available = 1) AS releases,
+        WHERE p.organization_id = ? AND (r.artifact_available = 1 OR (r.purpose = 'shadow-upload' AND r.status = 'uploading'))) AS releases,
       (SELECT coalesce(sum(r.storage_bytes), 0) FROM clank_platform_releases r
         JOIN clank_platform_projects p ON p.id = r.project_id
-        WHERE p.organization_id = ? AND r.artifact_available = 1) AS release_storage_bytes`)
+        WHERE p.organization_id = ? AND (r.artifact_available = 1 OR (r.purpose = 'shadow-upload' AND r.status = 'uploading'))) AS release_storage_bytes`)
     .get(
       organizationId,
       organizationId,
@@ -15447,8 +15767,8 @@ function dashboardProjectUsage(internal: SQLiteInternal, projectIds: readonly st
     domains.set(String(row.project_id), { count: Number(row.count), ready: Number(row.ready) });
   }
   for (const row of internal.prepare(`SELECT project_id,
-      sum(CASE WHEN artifact_available = 1 THEN 1 ELSE 0 END) AS releases,
-      sum(CASE WHEN artifact_available = 1 THEN storage_bytes ELSE 0 END) AS storage_bytes
+      sum(CASE WHEN artifact_available = 1 OR (purpose = 'shadow-upload' AND status = 'uploading') THEN 1 ELSE 0 END) AS releases,
+      sum(CASE WHEN artifact_available = 1 OR (purpose = 'shadow-upload' AND status = 'uploading') THEN storage_bytes ELSE 0 END) AS storage_bytes
     FROM clank_platform_releases
     WHERE project_id IN (SELECT value FROM json_each(?)) GROUP BY project_id`).all(ids)) {
     releases.set(String(row.project_id), { releases: Number(row.releases), storageBytes: Number(row.storage_bytes) });
@@ -15599,8 +15919,71 @@ function dashboardPayload(
   };
 }
 
+function releaseUploadHeaders(request: Request): {digest: string; key: string; keyAttestation: string | null} {
+  const type = request.headers.get("content-type")?.split(";",1)[0];
+  if (type !== "application/vnd.clank.deploy+gzip" && type !== "application/vnd.proact.deploy+gzip") throw new PlatformError(415,"UNSUPPORTED_MEDIA_TYPE","Expected application/vnd.clank.deploy+gzip.");
+  const digest = request.headers.get("x-clank-content-sha256") ?? request.headers.get("x-proact-content-sha256") ?? "";
+  const key = request.headers.get("x-clank-idempotency-key") ?? request.headers.get("x-proact-idempotency-key") ?? "";
+  const keyAttestation = request.headers.get("x-clank-release-attestation");
+  if (!/^[a-f0-9]{64}$/u.test(digest)) throw new PlatformError(400,"DIGEST_REQUIRED","A SHA-256 artifact digest is required.");
+  if (!/^[A-Za-z0-9_-]{16,128}$/u.test(key)) throw new PlatformError(400,"IDEMPOTENCY_REQUIRED","A valid idempotency key is required.");
+  if (keyAttestation !== null && keyAttestation.length > 12000) throw new PlatformError(400,"INVALID_RELEASE_ATTESTATION","Release attestation header exceeds its bound.");
+  return {digest,key,keyAttestation};
+}
+
+/** A deadline ends publication authority, not an already submitted nonabortable write. */
+function releaseUploadDeadline(signal: AbortSignal, settled: () => void) {
+  const controller = new AbortController(), deadline = performance.now() + 60_000;
+  let pending = 0, finished = false, released = false;
+  let reject!: (error: unknown) => void;
+  const interrupted = new Promise<never>((_, failure) => { reject = failure; });
+  void interrupted.catch(() => undefined);
+  const abort = () => { if (!controller.signal.aborted) { const error = new PlatformError(408,"RELEASE_UPLOAD_INTERRUPTED","Upload intake expired or closed. Retry the exact request to verify retained bytes."); controller.abort(error); reject(error); } };
+  const check = () => { if (performance.now() >= deadline || signal.aborted) abort(); if (controller.signal.aborted) throw controller.signal.reason; };
+  const release = () => { if (finished && pending === 0 && !released) { released = true; settled(); } };
+  const timer = setTimeout(abort,60_000); signal.addEventListener("abort",abort,{once:true});
+  return {
+    signal:controller.signal, check, abort,
+    async wait<Value>(operation: () => Promise<Value>): Promise<Value> {
+      check(); pending++;
+      const work = Promise.resolve().then(() => { check(); return operation(); });
+      void work.then(() => { pending--; release(); }, () => { pending--; release(); });
+      const value = await Promise.race([work,interrupted]); check(); return value;
+    },
+    finish() { finished = true; clearTimeout(timer); signal.removeEventListener("abort",abort); abort(); release(); },
+  };
+}
+
+async function readUploadBody(request: Request, maximum: number, current: () => void, intake: ReturnType<typeof releaseUploadDeadline>): Promise<Uint8Array> {
+  current();
+  if (Number(request.headers.get("content-length")) > maximum) throw new PlatformError(413,"ARTIFACT_TOO_LARGE",`Artifact exceeds ${maximum} bytes.`);
+  if (!request.body) return new Uint8Array();
+  const reader = request.body.getReader(), chunks: Uint8Array[] = [];
+  let size = 0, complete = false;
+  try {
+    while (true) {
+      current(); const item = await intake.wait(() => reader.read()); current();
+      if (item.done) { complete = true; break; }
+      size += item.value.byteLength;
+      if (size > maximum) throw new PlatformError(413,"ARTIFACT_TOO_LARGE",`Artifact exceeds ${maximum} bytes.`);
+      chunks.push(new Uint8Array(item.value));
+    }
+    const bytes = new Uint8Array(size); let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk,offset); offset += chunk.byteLength; }
+    return bytes;
+  } finally {
+    if (!complete) void reader.cancel("Upload intake ended").catch(() => undefined);
+    reader.releaseLock();
+  }
+}
+
+function requireDeploymentRelease(release: ReleaseRow): void {
+  if (release.purpose !== "deployment") throw new PlatformError(409, "SHADOW_UPLOAD_ONLY", "Upload-only releases cannot be activated. Submit an ordinary deployment with its own key.");
+}
+
 function publicRelease(release: ReleaseRow): Record<string, unknown> {
   return {
+    purpose: release.purpose,
     id: release.id,
     previousReleaseId: release.previousReleaseId,
     status: release.status,
@@ -17021,12 +17404,12 @@ function releaseStorageUsage(
 ): { releases: number; storageBytes: number } {
   const row = excludeReleaseId
     ? internal.prepare(`SELECT
-        sum(CASE WHEN artifact_available = 1 THEN 1 ELSE 0 END) AS releases,
-        sum(CASE WHEN artifact_available = 1 THEN storage_bytes ELSE 0 END) AS storage_bytes
+        sum(CASE WHEN artifact_available = 1 OR (purpose = 'shadow-upload' AND status = 'uploading') THEN 1 ELSE 0 END) AS releases,
+        sum(CASE WHEN artifact_available = 1 OR (purpose = 'shadow-upload' AND status = 'uploading') THEN storage_bytes ELSE 0 END) AS storage_bytes
       FROM clank_platform_releases WHERE project_id = ? AND id <> ?`).get(projectId, excludeReleaseId)
     : internal.prepare(`SELECT
-        sum(CASE WHEN artifact_available = 1 THEN 1 ELSE 0 END) AS releases,
-        sum(CASE WHEN artifact_available = 1 THEN storage_bytes ELSE 0 END) AS storage_bytes
+        sum(CASE WHEN artifact_available = 1 OR (purpose = 'shadow-upload' AND status = 'uploading') THEN 1 ELSE 0 END) AS releases,
+        sum(CASE WHEN artifact_available = 1 OR (purpose = 'shadow-upload' AND status = 'uploading') THEN storage_bytes ELSE 0 END) AS storage_bytes
       FROM clank_platform_releases WHERE project_id = ?`).get(projectId);
   return {
     releases: Number(row?.releases ?? 0),
@@ -17294,6 +17677,7 @@ function reconcileBackupObjectBinding(
 }
 
 interface RunnerArtifactDescriptor {
+  purpose?: "deployment" | "shadow-upload";
   projectId: string;
   releaseId: string;
   digest: string;
@@ -17329,9 +17713,10 @@ function normalizeRunnerArtifactObjects(
   return Object.freeze({ namespace, store });
 }
 
-function runnerReleaseObjectKey(projectId: string, releaseId: string, digest: string): string {
+function runnerReleaseObjectKey(projectId: string, releaseId: string, digest: string, purpose: "deployment" | "shadow-upload" = "deployment"): string {
   assertReleaseStorageIdentifiers(projectId, releaseId);
   if (!/^[a-f0-9]{64}$/u.test(digest)) throw new Error("Release artifact digest is invalid.");
+  if (purpose === "shadow-upload") return `shadow-artifacts/${syncHash(projectId,"hex")}/${syncHash(releaseId,"hex")}/${digest}.clank.gz`;
   return `runner-artifacts/${projectId}/${releaseId}/${digest}.clank.gz`;
 }
 
@@ -17340,76 +17725,58 @@ async function writeRunnerReleaseArtifact(
   artifact: RunnerArtifactDescriptor,
   bytes: Uint8Array,
   objects: RunnerArtifactObjects | null,
+  assertCurrent: () => void = () => {},
+  exclusive = false,
 ): Promise<void> {
-  assertReleaseStorageIdentifiers(artifact.projectId, artifact.releaseId);
+  assertCurrent(); assertReleaseStorageIdentifiers(artifact.projectId, artifact.releaseId);
   if (artifact.store !== "local") {
-    if (
-      !objects
-      || artifact.store !== objects.namespace
-      || artifact.key !== runnerReleaseObjectKey(
-        artifact.projectId,
-        artifact.releaseId,
-        artifact.digest,
-      )
-    ) {
-      throw new Error("Release artifact object repository does not match its metadata.");
-    }
-    const metadata = await objects.store.put(artifact.key, bytes, {
-      contentType: "application/vnd.clank.deploy+gzip",
-    });
-    if (
-      metadata.key !== artifact.key
-      || metadata.size !== artifact.bytes
-      || metadata.sha256 !== artifact.digest
-      || metadata.contentType !== "application/vnd.clank.deploy+gzip"
-    ) {
-      throw new Error("Release artifact object repository returned inconsistent metadata.");
-    }
+    if (!objects || artifact.store !== objects.namespace || artifact.key !== runnerReleaseObjectKey(artifact.projectId,artifact.releaseId,artifact.digest,artifact.purpose)) throw new Error("Release artifact object repository does not match its metadata.");
+    assertCurrent();
+    const strict = artifact.purpose === "shadow-upload" ? strictArtifactStore(objects.store) : null;
+    if (artifact.purpose === "shadow-upload" && !strict) throw new Error("Strict artifact repository capability is unavailable.");
+    const metadata = strict ? await strict.put(artifact.key,bytes,"application/vnd.clank.deploy+gzip",assertCurrent)
+      : await objects.store.put(artifact.key, bytes, {contentType:"application/vnd.clank.deploy+gzip"}); assertCurrent();
+    if (metadata.key !== artifact.key || metadata.size !== artifact.bytes || metadata.sha256 !== artifact.digest || metadata.contentType !== "application/vnd.clank.deploy+gzip") throw new Error("Release artifact object repository returned inconsistent metadata.");
     return;
   }
-  if (artifact.key !== null) {
-    throw new Error("Local release artifact metadata contains an unexpected object key.");
+  if (artifact.key !== null) throw new Error("Local release artifact metadata contains an unexpected object key.");
+  const fsName = "node:fs/promises", pathName = "node:path";
+  const fs = await import(fsName) as unknown as {
+    mkdir(path: string, options: {recursive: boolean; mode: number}): Promise<void>;
+    rename(source: string, destination: string): Promise<void>;
+    link(source: string, destination: string): Promise<void>;
+    rm(path: string, options: {force: true}): Promise<void>;
+    open(path: string, flags: string, mode?: number): Promise<{writeFile(bytes: Uint8Array): Promise<void>; sync(): Promise<void>; close(): Promise<void>}>;
+  }; assertCurrent();
+  const path = await import(pathName) as unknown as {join(...segments: string[]): string}; assertCurrent();
+  const projectRoot = await safeChildPath(projectsRoot,artifact.projectId); assertCurrent();
+  await requireRealDirectory(projectsRoot); assertCurrent();
+  for (const [directory,parent] of [[projectRoot,projectsRoot],[path.join(projectRoot,"artifacts"),projectRoot]]) {
+    assertCurrent();
+    try { await fs.mkdir(directory,{recursive:false,mode:0o700}); }
+    catch (error) { if ((error as {code?: string}).code !== "EEXIST") throw error; }
+    assertCurrent(); await requireRealDirectory(directory); assertCurrent();
+    const handle = await fs.open(parent,"r");
+    try { assertCurrent(); await handle.sync(); assertCurrent(); } finally { await handle.close(); }
   }
-  const fsName = "node:fs/promises";
-  const pathName = "node:path";
-  const [fs, path] = await Promise.all([
-    import(fsName) as unknown as Promise<{
-      chmod(path: string, mode: number): Promise<void>;
-      mkdir(path: string, options: { recursive: boolean; mode: number }): Promise<void>;
-      rename(source: string, destination: string): Promise<void>;
-      rm(path: string, options: { force: true }): Promise<void>;
-      writeFile(
-        path: string,
-        value: Uint8Array,
-        options: { flag: "wx"; mode: number },
-      ): Promise<void>;
-    }>,
-    import(pathName) as unknown as Promise<{ join(...segments: string[]): string }>,
-  ]);
-  const projectRoot = await safeChildPath(projectsRoot, artifact.projectId);
-  await requireRealDirectory(projectsRoot);
-  await requireRealDirectory(projectRoot);
-  const directory = path.join(projectRoot, "artifacts");
+  const directory = path.join(projectRoot,"artifacts");
+  const target = await safeChildPath(projectsRoot,`${artifact.projectId}/artifacts/${artifact.releaseId}.clank.gz`); assertCurrent();
+  const temporary = await safeChildPath(projectsRoot,`${artifact.projectId}/artifacts/.${artifact.releaseId}.${crypto.randomUUID()}.tmp`); assertCurrent();
+  const file = await fs.open(temporary,"wx",0o600);
   try {
-    await fs.mkdir(directory, { recursive: false, mode: 0o700 });
-  } catch (error) {
-    if ((error as { code?: string }).code !== "EEXIST") throw error;
-    await requireRealDirectory(directory);
-  }
-  const target = await safeChildPath(
-    projectsRoot,
-    `${artifact.projectId}/artifacts/${artifact.releaseId}.clank.gz`,
-  );
-  const temporary = await safeChildPath(
-    projectsRoot,
-    `${artifact.projectId}/artifacts/.${artifact.releaseId}.${crypto.randomUUID()}.tmp`,
-  );
-  try {
-    await fs.writeFile(temporary, bytes, { flag: "wx", mode: 0o600 });
-    await fs.rename(temporary, target);
-    await fs.chmod(target, 0o600);
+    assertCurrent(); await file.writeFile(bytes); assertCurrent(); await file.sync(); assertCurrent();
+    if (exclusive) {
+      await fs.link(temporary,target); assertCurrent();
+      // A durable acknowledgment must include removal of our temporary hard link.
+      await fs.rm(temporary,{force:true});
+    } else await fs.rename(temporary,target);
+    assertCurrent();
+    const parent = await fs.open(directory,"r");
+    try { assertCurrent(); await parent.sync(); assertCurrent(); } finally { await parent.close(); }
   } finally {
-    await fs.rm(temporary, { force: true });
+    await file.close();
+    // Only this operation's private temporary name is removed after uncertainty.
+    await fs.rm(temporary,{force:true});
   }
 }
 
@@ -17418,17 +17785,21 @@ async function readRunnerReleaseArtifact(
   release: ReleaseRow,
   signal: AbortSignal,
   objects: RunnerArtifactObjects | null,
+  assertCurrent: () => void = () => {},
 ): Promise<{ bytes: Uint8Array; sha256: string } | null> {
+  assertCurrent();
   assertReleaseStorageIdentifiers(release.projectId, release.id);
   if (signal.aborted) return null;
   if (release.runnerArtifactStore !== "local") {
-    const expectedKey = runnerReleaseObjectKey(release.projectId, release.id, release.digest);
+    const expectedKey = runnerReleaseObjectKey(release.projectId, release.id, release.digest, release.purpose);
     if (
       !objects
       || objects.namespace !== release.runnerArtifactStore
       || release.runnerArtifactKey !== expectedKey
     ) return null;
-    const stored = await objects.store.get(expectedKey);
+    const strict = release.purpose === "shadow-upload" ? strictArtifactStore(objects.store) : null;
+    if (release.purpose === "shadow-upload" && !strict) throw new Error("Strict artifact repository capability is unavailable.");
+    const stored = strict ? await strict.get(expectedKey,assertCurrent) : await objects.store.get(expectedKey); assertCurrent();
     if (!stored || signal.aborted) return null;
     if (
       stored.metadata.key !== expectedKey
@@ -17441,17 +17812,22 @@ async function readRunnerReleaseArtifact(
     ) {
       throw new Error("Stored deployment runner object failed integrity verification.");
     }
+    assertCurrent();
     return { bytes: stored.bytes, sha256: release.digest };
   }
   if (release.runnerArtifactKey !== null) {
     throw new Error("Stored local deployment artifact metadata is inconsistent.");
   }
-  const parents = await releaseStorageParents(projectsRoot, release.projectId);
+  const projectRoot = await safeChildPath(projectsRoot,release.projectId); assertCurrent();
+  if (release.purpose === "shadow-upload" && !await requireRealDirectory(projectRoot,true)) { assertCurrent(); return null; }
+  assertCurrent();
+  const parents = await releaseStorageParents(projectsRoot, release.projectId, release.purpose === "shadow-upload"); assertCurrent();
   if (!parents.artifacts) return null;
   const target = await safeChildPath(
     projectsRoot,
     `${release.projectId}/artifacts/${release.id}.clank.gz`,
   );
+  assertCurrent();
   const fsName = "node:fs/promises";
   const nodeFsName = "node:fs";
   const [fs, nodeFs] = await Promise.all([
@@ -17478,6 +17854,7 @@ async function readRunnerReleaseArtifact(
       constants: { O_RDONLY: number; O_NOFOLLOW?: number };
     }>,
   ]);
+  assertCurrent();
   let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
   try {
     handle = await fs.open(
@@ -17489,7 +17866,9 @@ async function readRunnerReleaseArtifact(
     throw error;
   }
   try {
+    assertCurrent();
     const [stats, pathStats] = await Promise.all([handle.stat(), fs.lstat(target)]);
+    assertCurrent();
     const getUid = (globalThis as any).process?.getuid;
     const currentUid = typeof getUid === "function"
       ? Number(getUid.call((globalThis as any).process))
@@ -17506,11 +17885,12 @@ async function readRunnerReleaseArtifact(
     ) {
       throw new Error("Stored deployment runner artifact is unsafe or inconsistent.");
     }
-    const bytes = await handle.readFile();
+    const bytes = await handle.readFile(); assertCurrent();
     if (signal.aborted) return null;
     if (bytes.byteLength !== stats.size || await deploymentDigest(bytes) !== release.digest) {
       throw new Error("Stored deployment runner artifact failed integrity verification.");
     }
+    assertCurrent();
     return { bytes, sha256: release.digest };
   } finally {
     await handle.close();
@@ -17528,7 +17908,7 @@ async function deleteReleaseStorage(
   const fs = await import(fsName) as unknown as {
     rm(path: string, options: { recursive?: boolean; force: true }): Promise<void>;
   };
-  const parents = await releaseStorageParents(projectsRoot, release.projectId);
+  const parents = await releaseStorageParents(projectsRoot, release.projectId, release.purpose === "shadow-upload");
   const targets: Array<{ path: string; recursive?: boolean }> = [];
   if (parents.releases) {
     targets.push({
@@ -17563,6 +17943,12 @@ async function deleteReleaseStorage(
   await Promise.all(targets.map((target) => {
     assertCurrent(); return fs.rm(target.path, { ...(target.recursive ? { recursive: true } : {}), force: true });
   })); assertCurrent();
+  if (release.purpose === "shadow-upload" && parents.artifacts) {
+    const directory = await safeChildPath(projectsRoot,`${release.projectId}/artifacts`); assertCurrent();
+    const syncFs = await import(fsName) as unknown as {open(path: string, flags: string): Promise<{sync(): Promise<void>; close(): Promise<void>}>}; assertCurrent();
+    const handle = await syncFs.open(directory,"r");
+    try { assertCurrent(); await handle.sync(); assertCurrent(); } finally { await handle.close(); }
+  }
 }
 
 function assertReleaseStorageIdentifiers(projectId: string, releaseId: string): void {
@@ -17576,6 +17962,7 @@ async function deleteProjectStorage(
   projectId: string,
   beforeRemove?: () => Promise<void>,
   assertCurrent: () => void = () => {},
+  durableAbsence = false,
 ): Promise<void> {
   if (!/^[A-Za-z0-9_-]{8,128}$/u.test(projectId)) {
     throw new Error("Project storage identifier is invalid.");
@@ -17583,13 +17970,20 @@ async function deleteProjectStorage(
   const fsName = "node:fs/promises";
   const fs = await import(fsName) as unknown as {
     rm(path: string, options: { recursive: true; force: true }): Promise<void>;
+    open(path: string, flags: string): Promise<{sync(): Promise<void>; close(): Promise<void>}>;
   };
   await requireRealDirectory(projectsRoot);
   const projectRoot = await safeChildPath(projectsRoot, projectId);
   const projectExists = await requireRealDirectory(projectRoot, true);
   assertCurrent(); await beforeRemove?.(); assertCurrent();
-  if (!projectExists) return;
-  await fs.rm(projectRoot, { recursive: true, force: true }); assertCurrent();
+  if (projectExists) { await fs.rm(projectRoot, { recursive: true, force: true }); assertCurrent(); }
+  if (durableAbsence) {
+    // A prior uncertain deletion may already have removed the directory. Its
+    // parent must still be durable before the native receipt/accounting disappears.
+    const handle = await fs.open(projectsRoot,"r");
+    try { assertCurrent(); await handle.sync(); assertCurrent(); } finally { await handle.close(); }
+    assertCurrent();
+  }
 }
 
 async function deleteRunnerReleaseObject(
@@ -17598,7 +17992,7 @@ async function deleteRunnerReleaseObject(
   assertCurrent: () => void = () => {},
 ): Promise<void> {
   if (release.runnerArtifactBytes <= 0 || release.runnerArtifactStore === "local") return;
-  const expectedKey = runnerReleaseObjectKey(release.projectId, release.id, release.digest);
+  const expectedKey = runnerReleaseObjectKey(release.projectId, release.id, release.digest, release.purpose);
   if (
     !objects
     || objects.namespace !== release.runnerArtifactStore
@@ -17608,7 +18002,18 @@ async function deleteRunnerReleaseObject(
       "Release artifact belongs to an unavailable object repository; storage metadata was preserved.",
     );
   }
-  assertCurrent(); await objects.store.delete(expectedKey); assertCurrent();
+  const strict = release.purpose === "shadow-upload" ? strictArtifactStore(objects.store) : null;
+  if (release.purpose === "shadow-upload" && !strict) throw new Error("Strict artifact repository capability is unavailable.");
+  assertCurrent();
+  if (strict) {
+    try { await strict.delete(expectedKey,assertCurrent); }
+    catch (error) { assertCurrent(); throw new PlatformError(409,"RELEASE_UPLOAD_UNCERTAIN","Artifact deletion did not establish durable absence; storage metadata was preserved."); }
+  } else await objects.store.delete(expectedKey);
+  assertCurrent();
+  if (strict) {
+    const remaining = await strict.get(expectedKey,assertCurrent); assertCurrent();
+    if (remaining) throw new PlatformError(409, "RELEASE_UPLOAD_UNCERTAIN", "Artifact deletion has not established absence; storage metadata was preserved.");
+  }
 }
 
 async function deleteProjectRunnerArtifacts(
@@ -17686,12 +18091,13 @@ async function deleteReleaseSnapshotFiles(
 async function releaseStorageParents(
   projectsRoot: string,
   projectId: string,
+  missingProject = false,
 ): Promise<{ releases: boolean; artifacts: boolean; backups: boolean }> {
   const pathName = "node:path";
   const path = await import(pathName) as unknown as { join(...segments: string[]): string };
   const projectRoot = await safeChildPath(projectsRoot, projectId);
   await requireRealDirectory(projectsRoot);
-  await requireRealDirectory(projectRoot);
+  if (!await requireRealDirectory(projectRoot, missingProject)) return {releases:false,artifacts:false,backups:false};
   return {
     releases: await requireRealDirectory(path.join(projectRoot, "releases"), true),
     artifacts: await requireRealDirectory(path.join(projectRoot, "artifacts"), true),
@@ -19291,10 +19697,10 @@ async function hash(value: string): Promise<string> {
   return syncHash(value);
 }
 
-function syncHash(value: string): string {
+function syncHash(value: string, encoding: "base64url" | "hex" = "base64url"): string {
   const module = (globalThis as any).process.getBuiltinModule?.("node:crypto");
   if (!module) throw new Error("Node crypto module is unavailable.");
-  return module.createHash("sha256").update(value).digest("base64url");
+  return module.createHash("sha256").update(value).digest(encoding);
 }
 
 async function timingSafeStringEqual(left: string, right: string): Promise<boolean> {

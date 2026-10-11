@@ -184,11 +184,9 @@ for (const expected of ["README.md", "SECURITY.md", "LICENSE", "dist/index.js", 
 // Proposal #302 adds the SLO client/controller and their declarations.
 // Four deliberate public/private service-account runtime and declaration files.
 // Proposal #313 adds exactly platform-supervisor.js and its declaration.
-// Proposals #300/#302/#327 retain twelve incident/SLO/status runtime/declaration files.
-// Proposal #339 retains the private managed-shadow helper and declaration.
-// Proposal #338 adds private provider-handoff.js and provider-docker-client.js.
+// Accepted incident/SLO/staging foundation has430 files; status adds four outputs.
 // The package byte ceiling remains unchanged.
-if ((packResult?.entryCount ?? 0) > 433) fail("Published package unexpectedly exceeds 433 files.");
+if ((packResult?.entryCount ?? 0) > 434) fail("Published package unexpectedly exceeds 434 files.");
 if ((packResult?.unpackedSize ?? 0) > 6 * 1024 * 1024) fail("Published package unexpectedly exceeds 6 MiB unpacked.");
 pass(`publish allowlist contains ${packResult?.entryCount ?? 0} bounded files`);
 
