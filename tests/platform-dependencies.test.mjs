@@ -482,28 +482,43 @@ for (const stalled of [false, true]) {
         .finally(() => { deploymentFinished = true; });
       deploy.catch(() => {});
       await waitFor(() => report()?.state === 'running' && report()?.trafficPercent === 100, 'Candidate must enter measured traffic.');
+      const candidateLease = sql.prepare('SELECT owner,fence,token_hash FROM clank_distributed_leases WHERE resource=?').get(`project:${f.staging.id}`);
+      assert.ok(candidateLease, 'Measured candidate traffic requires a native project lease.');
       await f.probe(f.staging, '/fast'); await f.probe(f.staging, '/fast');
-      admitted = f.probe(f.staging, '/held', stalled ? 502 : 200)
+      admitted = f.probe(f.staging, '/held', stalled ? 503 : 200)
         .then(value => ({ value }), error => ({ error }))
         .finally(() => { responseFinished = true; });
       await entered(admittedFile);
+      const candidatePid = Number((await readFile(admittedFile, 'utf8')).trim());
+      assert.ok(Number.isSafeInteger(candidatePid) && candidatePid > 0);
       await writeFile(policy, JSON.stringify({ status: 503 }));
       await waitFor(() => report()?.state === 'failed', 'Dependency failure must retire the candidate.');
       const failedAt = Date.now();
       assert.equal(responseFinished, false, 'An admitted request must survive the start of rollback.');
       assert.equal(deploymentFinished, false, 'Candidate cleanup must wait for the admitted request.');
+      assert.doesNotThrow(() => process.kill(candidatePid, 0), 'The admitted candidate must remain alive during drain.');
       assert.equal((await f.probe(f.staging, '/fast')).label, 'canary-prior', 'New traffic must use the prior release while the candidate drains.');
       if (!stalled) await rm(hold);
       const result = await admitted;
       assert.equal(result.error, undefined, result.error?.stack);
       if (stalled) {
-        assert.equal(result.value.error.code, 'UPSTREAM_FAILED');
+        // Process cleanup releases the native project lease; an admitted
+        // request cannot retry the stopped candidate using that spent lease.
+        assert.equal(result.value.error.code, 'CANARY_UNAVAILABLE');
         assert.ok(Date.now() - failedAt >= 1800, 'Termination must respect the two-second drain interval.');
+        assert.throws(() => process.kill(candidatePid, 0), { code: 'ESRCH' }, 'Authority failure follows actual candidate termination.');
       } else {
         assert.equal(result.value.label, 'canary-candidate');
         assert.equal(result.value.value, 'retained-data');
       }
       await deploy;
+      // A terminated response can finish before deployment cleanup releases
+      // its lease. Check that exact capability after cleanup; a later lease
+      // acquired for the restored release is allowed to exist.
+      assert.equal(sql.prepare('SELECT 1 FROM clank_distributed_leases WHERE resource=? AND owner=? AND fence=? AND token_hash=?')
+        .get(`project:${f.staging.id}`, candidateLease.owner, candidateLease.fence, candidateLease.token_hash), undefined,
+      'The spent native project lease cannot authorize another candidate attempt.');
+      assert.equal(await readFile(admittedFile, 'utf8'), `${candidatePid}\n`, 'No additional candidate request may bypass withdrawal or process cleanup.');
       assert.equal((await f.call(`/api/projects/${f.staging.id}`)).project.activeReleaseId, prior.id);
       assert.equal((await f.probe(f.staging)).label, 'canary-prior');
       assert.equal((await f.probe(f.staging)).value, 'retained-data');

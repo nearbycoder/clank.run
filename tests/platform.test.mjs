@@ -8128,12 +8128,14 @@ async function waitFor(check, timeout = 5_000) {
 
 test("secret rotations validate candidates, fence activation/rollback, track running consumers and survive restart", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-secret-rotations-"));
+  const ports = await reservePlatformTestPorts();
   const dataDirectory = join(root, "platform");
   const options = { dataDirectory, publicUrl: "http://127.0.0.1:4200", signup: true,
-    appPortStart: 59280, appPortEnd: 59285, backups: { intervalMs: false },
+    appPortStart: ports.start, appPortEnd: ports.start + 5, backups: { intervalMs: false },
     validateSecret: async ({ value }) => value.startsWith("valid-") };
-  let platform = await openPlatform(options);
+  let platform;
   try {
+    platform = await openPlatform(options);
     const owner = await authorizeCli(platform, "rotation-owner@example.invalid");
     const other = await authorizeCli(platform, "rotation-other@example.invalid");
     const created = await payload(platform, jsonRequest("/api/projects", { method: "POST", token: owner.accessToken, body: { name: "Rotation app", slug: "rotation-app" } }), 201);
@@ -8168,15 +8170,22 @@ test("secret rotations validate candidates, fence activation/rollback, track run
     assert.doesNotMatch(JSON.stringify(control.prepare("SELECT * FROM clank_platform_secret_rotations").all()), /valid-new-fixture-key|valid-old-fixture-key/); control.close();
     await call("/PARTNER_KEY", "DELETE"); assert.equal((await call("/rotations")).rotations.length, 0);
     await call(`/rotations/${staged.id}/rollback`, "POST", {}, 409);
-  } finally { await platform.close(); await rm(root, { recursive: true, force: true }); }
+  } finally {
+    await platform?.close();
+    const fences = (await readdir(join(dataDirectory, "runtime-guardians")).catch(error => {
+      if (error.code === "ENOENT") return []; throw error;
+    })).filter(name => name.endsWith(".json"));
+    assert.deepEqual(fences, [], "Unverified fixture runtime fences must retain their root and port lease.");
+    await rm(root, { recursive: true, force: true }); await ports.release();
+  }
 });
 
 
-test("managed canaries route real traffic, promote measured stages and roll back failing or under-sampled candidates", async () => {
+test("managed canaries route real traffic, promote measured stages and roll back failing or under-sampled candidates", { timeout: 60_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-platform-canary-"));
   const platform = await openPlatform({ dataDirectory: join(root, "platform"), publicUrl: "http://127.0.0.1:4200", signup: true,
     appPortStart: 4820, appPortEnd: 4823, ingress: { enabled: true, baseDomain: "apps.example.test", domainRecheckIntervalMs: false },
-    backups: { intervalMs: false }, canary: { stages: [{ trafficPercent: 50, durationMs: 400, minimumSamples: 2 }, { trafficPercent: 100, durationMs: 200, minimumSamples: 2 }], maximumErrorRate: 0.1, maximumP95Ms: 1000 } });
+    backups: { intervalMs: false }, canary: { stages: [{ trafficPercent: 50, durationMs: 2_000, minimumSamples: 2 }, { trafficPercent: 100, durationMs: 1_000, minimumSamples: 2 }], maximumErrorRate: 0.1, maximumP95Ms: 1000 } });
   try {
     const owner = await authorizeCli(platform, "canary@example.com");
     const { project } = await payload(platform, jsonRequest("/api/projects", { method: "POST", token: owner.accessToken, body: { name: "Canary", slug: "canary-app" } }), 201);
@@ -8186,13 +8195,27 @@ test("managed canaries route real traffic, promote measured stages and roll back
     const drive = async (artifact, id) => {
       let finished = false;
       const pending = deploy(platform, project.id, owner.accessToken, artifact, id).finally(() => { finished = true; });
-      const observed = [];
-      while (!finished) {
-        const responses = await Promise.all(Array.from({ length: 10 }, () => platform.handle(new Request("https://canary-app.apps.example.test/"))));
-        for (const response of responses) observed.push({ status: response.status, body: await response.text() });
-        await new Promise((resolve) => setTimeout(resolve, 10));
+      pending.catch(() => {});
+      const observed = new Map();
+      // Each client keeps driving traffic independently. A slow response must not
+      // hold the entire batch until a short stage has already expired under CI load.
+      const clients = Array.from({ length: 4 }, async () => {
+        while (!finished) {
+          const response = await platform.handle(new Request("https://canary-app.apps.example.test/"));
+          const value = { status: response.status, body: await response.text() };
+          observed.set(JSON.stringify(value), value);
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      });
+      const traffic = Promise.allSettled(clients);
+      let result;
+      try {
+        result = await pending;
+      } finally {
+        const failed = (await traffic).find((client) => client.status === "rejected");
+        if (failed) throw failed.reason;
       }
-      return { result: await pending, observed };
+      return { result, observed: [...observed.values()] };
     };
     const good = await drive(await appArtifact(join(root, "good"), "candidate", migrations, false, { jobs: { workers: 1, scheduler: false } }), "canary-good-0002");
     assert.equal(good.result.response.status, 201, JSON.stringify(good.result.body));
@@ -8200,6 +8223,7 @@ test("managed canaries route real traffic, promote measured stages and roll back
     assert.equal(await platform.handle(new Request("https://canary-app.apps.example.test/")).then((response) => response.text()), "candidate");
     const failed = await drive(await appArtifact(join(root, "bad"), "broken", migrations, false, { responseStatus: 500 }), "canary-bad-release-0003");
     assert.equal(failed.result.response.status, 422, JSON.stringify(failed.result.body)); assert.match(failed.result.body.error.message, /Canary guardrail/);
+    assert.ok(failed.observed.some((value) => value.status === 500 && value.body === "broken"), "The failing candidate must receive real ingress traffic.");
     assert.equal(await platform.handle(new Request("https://canary-app.apps.example.test/")).then((response) => response.text()), "candidate");
     const workerFailure = await drive(await appArtifact(join(root, "worker-broken"), "worker-broken", migrations, false, { jobs: { workers: 1, scheduler: false, failAfterMs: 250 } }), "canary-worker-broken-0004");
     assert.equal(workerFailure.result.response.status, 422, JSON.stringify(workerFailure.result.body));
@@ -8218,6 +8242,7 @@ test("managed canaries route real traffic, promote measured stages and roll back
     const reports = await payload(platform, jsonRequest(`/api/projects/${project.id}/canary`, { token: owner.accessToken }));
     assert.equal(reports.canaries.filter((report) => report.state === "passed").length, 1);
     assert.equal(reports.canaries.filter((report) => report.state === "failed").length, 3);
-    assert.ok(reports.canaries.some((report) => report.errorRate >= 0.9));
+    assert.ok(reports.canaries.some((report) => report.state === "passed" && report.stage === 1 && report.samples >= 2));
+    assert.ok(reports.canaries.some((report) => /Canary guardrail/.test(report.reason) && report.samples >= 2 && report.errorRate >= 0.9));
   } finally { await platform.close(); await rm(root, { recursive: true, force: true }); }
 });

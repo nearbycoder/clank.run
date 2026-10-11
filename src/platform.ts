@@ -67,6 +67,12 @@ import {
   type DockerDeploymentRuntimeLog,
 } from "./provider-docker.ts";
 import {
+  deploymentProviderCanaryPath,
+  DEPLOYMENT_PROVIDER_CANARY_CONTROL_PROTOCOL,
+  DEPLOYMENT_PROVIDER_CANARY_CONTROL_MEDIA_TYPE,
+  type DeploymentProviderCanaryBinding,
+  type DeploymentProviderCanaryState,
+  type DeploymentProviderCanaryRetirement,
   deploymentProviderDiagnosticsPath,
   deploymentProviderJobMutationPath,
   deploymentProviderJobsPath,
@@ -109,6 +115,7 @@ import {
   type IngressAdmissionDecision,
   type IngressAdmissionRequest,
   type IngressRoute,
+  type IngressCanaryRoute,
   type IngressRequestMetric,
 } from "./data-plane.ts";
 import { requireCurrentLinuxHostCertification, type LinuxHostCertificationOptions, type LinuxHostCertificationReport } from "./host-certification.ts";
@@ -141,6 +148,31 @@ import {
   type BillingProviderEvent,
   type BillingSubscriptionStatus,
 } from "./billing.ts";
+
+type ProviderCanaryPhase = "binding" | "preparing" | "measuring" | "retiring" | "retired" | "activating" | "complete";
+interface PlatformProviderCanaryOperation {
+  operationId: string;
+  releaseId: string;
+  artifactSha256: string;
+  capsuleSha256: string | null;
+  controllerEpoch: number;
+  retirementEpoch: number;
+  primary: DeploymentProviderCanaryBinding | null;
+  primaryReleaseId: string;
+  primaryFence: number;
+  nodeId: string;
+  origin: string;
+  credentialGeneration: number;
+  policy: ManagedCanaryOptions;
+  phase: ProviderCanaryPhase;
+  outcome: "passed" | "failed" | "interrupted" | null;
+  reason: string | null;
+  retirement: DeploymentProviderCanaryRetirement | null;
+  generation: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+interface PlatformProviderCanaryRecord { epoch: number; operation: PlatformProviderCanaryOperation; serialized: string; }
 
 export interface ProcessRunnerOptions {
   kind?: "process";
@@ -657,7 +689,7 @@ export interface ClankPlatformOptions {
   operations?: PlatformOperationsOptions;
   /** Poll queued exact release windows; defaults to one second. False pauses execution. */
   releaseWindows?: { intervalMs?: number | false };
-  /** Traffic and measured health gates for local code-only deployments behind managed ingress. */
+  /** Measured code-only traffic gates; provider candidates additionally require explicit isolated policy and native supervisor leadership. */
   canary?: ManagedCanaryOptions;
   jobs?: PlatformJobOperationsOptions;
   previews?: PlatformPreviewOptions;
@@ -1155,6 +1187,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
   const ingressEnabled = options.ingress?.enabled === true || Boolean(baseDomain);
   const canaryOptions = options.canary ? validateManagedCanary(options.canary) : undefined;
   if (canaryOptions && !ingressEnabled) throw new TypeError("Managed canaries require managed ingress.");
+  if (canaryOptions?.provider && !leadership) throw new TypeError("Provider canaries require native supervisor leadership in a dedicated coordinator process.");
   const defaultRuntimePolicy = normalizeRuntimePolicy(
     options.scaleToZero?.defaultPolicy ?? "always_on",
   );
@@ -1397,6 +1430,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
   if (providerPlacement && !ingressEnabled) {
     throw new TypeError("deploymentAgents.placement requires managed ingress.");
   }
+  if (canaryOptions?.provider && !providerPlacement) throw new TypeError("Provider canaries require provider placement.");
   const runnerArtifactLimit = options.deploymentAgents
     ? integerInRange(
         options.deploymentAgents.maxArtifactBytes ?? 100 * 1024 * 1024,
@@ -1434,7 +1468,39 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     : signupMode === false
       ? "disabled"
       : "bootstrap";
-  const storage = await openPlatformDatabase(paths.controlDatabase, masterKey, authentication,leadership);
+  const ProviderWriterScope = (globalThis as any).process.getBuiltinModule("node:async_hooks").AsyncLocalStorage;
+  const providerWriterScope = new ProviderWriterScope();
+  const storage = await openPlatformDatabase(paths.controlDatabase, masterKey, authentication, leadership, () => providerWriterScope.getStore()?.());
+  try {
+    if (leadership && storage.internal.prepare("SELECT protocol FROM clank_platform_supervisor_state WHERE singleton=1").get()?.protocol === 2
+      && !storage.internal.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_platform_provider_canaries'").get())
+      throw new Error("The enrolled provider canary journal is missing; preserve the catalog for recovery.");
+    storage.internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_provider_canaries (
+      project_id TEXT PRIMARY KEY, protocol INTEGER NOT NULL, epoch INTEGER NOT NULL,
+      operation TEXT NOT NULL, updated_at INTEGER NOT NULL);`);
+  } catch (error) { storage.auth.close(); storage.database.close(); throw error; }
+  const providerCanaryRecord = (projectId: string): PlatformProviderCanaryRecord | null => {
+    const row = storage.internal.prepare("SELECT * FROM clank_platform_provider_canaries WHERE project_id=?").get(projectId);
+    const project = storage.internal.prepare("SELECT provider_canary_epoch FROM clank_platform_projects WHERE id=?").get(projectId);
+    if (!project) { if (row) throw new Error("Provider canary project receipt is missing."); return null; }
+    const floor = project.provider_canary_epoch;
+    if (!Number.isSafeInteger(floor) || Number(floor) < 0) throw new Error("Provider canary project receipt is invalid.");
+    const record = platformCanaryRecord(row, projectId);
+    if (record ? record.epoch !== floor : floor !== 0) throw new Error("Provider canary journal and project receipt differ; preserve them for recovery.");
+    return record;
+  };
+  const requireNoProviderCanary = (projectId: string) => {
+    const record = providerCanaryRecord(projectId);
+    if (record && !["retired", "activating", "complete"].includes(record.operation.phase)) throw new PlatformError(409, "PROVIDER_CANARY_RECOVERY_REQUIRED", "Retire the exact provider candidate before changing its authoritative writer.");
+  };
+  try {
+    const retained = storage.internal.prepare("SELECT project_id FROM clank_platform_provider_canaries UNION SELECT id AS project_id FROM clank_platform_projects WHERE provider_canary_epoch<>0").all();
+    for (const row of retained) {
+      providerCanaryRecord(String(row.project_id));
+      if (!leadership) throw new TypeError("Retained provider canary operations require native supervisor leadership.");
+    }
+    if (canaryOptions?.provider || retained.length) leadership!.enrollProviderCanaries();
+  } catch (error) { storage.auth.close(); storage.database.close(); throw error; }
   const machineResponseGuards = new WeakMap<Request, () => void>();
   const evacuations = openNodeEvacuations(storage.internal);
   const requireNoEvacuation = (projectId: string) => { if (evacuations.activeForProject(projectId)) throw new PlatformError(409, "PROJECT_EVACUATING", "Resume or cancel the node evacuation before changing this project."); };
@@ -1556,7 +1622,22 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     if (response.status === 201) reconcilePlatformAdminRoles(storage, platformAdminEmails);
     return response;
   };
-  const orchestrator = openDeploymentOrchestrator(storage.database);
+  const nativeOrchestrator = openDeploymentOrchestrator(storage.database);
+  const providerWriter = <Value>(projectId: string, write: () => Promise<Value>): Promise<Value> => {
+    requireNoProviderCanary(projectId);
+    if (!providerCanaryRecord(projectId)) return write();
+    const authority = captureProjectAuthority(projectId, true);
+    const outer = providerWriterScope.getStore();
+    const guard = () => { outer?.(); authority(); requireNoProviderCanary(projectId); };
+    // The native scope survives every continuation and restores an outer scope
+    // automatically. No detached writer can outlive its captured project lease.
+    return providerWriterScope.run(guard, async () => { guard(); const result = await write(); guard(); return result; });
+  };
+  const orchestrator: DeploymentOrchestrator = { ...nativeOrchestrator,
+    setDesired: input => providerWriter(input.projectId, () => nativeOrchestrator.setDesired(input)),
+    relocateStateful: input => providerWriter(input.projectId, () => nativeOrchestrator.relocateStateful(input)),
+    enqueue: input => providerWriter(input.projectId, () => nativeOrchestrator.enqueue(input)),
+  };
   const deploymentCoordinator = options.deploymentAgents
     ? createDeploymentCoordinatorHandler(orchestrator, {
         ...(options.deploymentAgents.registrationToken === undefined
@@ -1606,6 +1687,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
               runtime: {
                 async load({ operation, signal }) {
                   if (signal.aborted || operation.action !== "reconcile") return null;
+                  const current = () => { leadership?.assertCurrent(); requireNoProviderCanary(operation.projectId); if (signal.aborted) throw new Error("Provider capsule request was aborted."); };
+                  current();
                   const desired = providerDesiredPayload(operation.payload);
                   if (
                     desired.state !== "running"
@@ -1634,6 +1717,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
                     signal,
                     runnerArtifactObjects,
                   );
+                  current();
                   if (!artifact || signal.aborted) return null;
                   const environment = decryptProviderEnvironment(
                     generation.encryptedEnvironment,
@@ -1666,9 +1750,11 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
                       backupObjects,
                     );
                     try {
+                      current();
                       const restored = await manager.read(
                         generation.restoreBackupId,
                       );
+                      current();
                       if (
                         restored.verification.databaseSha256
                           !== generation.restoreDatabaseSha256
@@ -1701,6 +1787,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
                       );
                     }
                   }
+                  current();
                   const capsule = await createDeploymentRuntimeCapsule({
                     projectId: project.id,
                     releaseId: release.id,
@@ -1726,6 +1813,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
                     maxDatabaseBytes: providerPlacement.maxDatabaseBytes,
                     maxCapsuleBytes: providerPlacement.maxRuntimeBytes,
                   });
+                  current();
                   return { bytes: capsule.bytes, sha256: capsule.sha256 };
                 },
               },
@@ -1889,7 +1977,10 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     }
     return admitProjectUsage(storage.internal, request, quotaDefaults);
   };
-  const canaries = canaryOptions ? createManagedCanary(storage.internal, canaryOptions) : undefined;
+  const retainedCanary = storage.internal.prepare("SELECT project_id FROM clank_platform_provider_canaries LIMIT 1").get();
+  const reportPolicy = canaryOptions ?? (retainedCanary ? providerCanaryRecord(String(retainedCanary.project_id))?.operation.policy : undefined);
+  const canaryHistory = reportPolicy ? createManagedCanary(storage.internal, reportPolicy) : undefined;
+  const canaries = canaryOptions ? canaryHistory : undefined;
   const recordIngressMetric = (metric: IngressRequestMetric): void => {
     canaries?.record(metric);
     recordMetric(storage.internal, metric);
@@ -1926,6 +2017,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           ? { allowedUpstreamHosts: providerPlacement.allowedProviderHosts }
           : {}),
         admitRequest: admitIngressRequest,
+        assertCanaryCurrent: route => { if (!canaries) throw new Error("Canary routing is unavailable."); return canaries.assertCurrent(route); },
         prepareRoute: async (route) => {
           if (!prepareIngressRoute) throw new Error("Application runtime preparation is unavailable.");
           await prepareIngressRoute(route);
@@ -2109,6 +2201,15 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     const failed = stopped.find((result): result is PromiseRejectedResult => result.status === "rejected");
     if (failed) throw failed.reason;
     if (active.get(running.projectId) === running) active.delete(running.projectId);
+  };
+
+  const captureProjectAuthority = (projectId: string, provider = false): (() => void) => {
+    const lease = projectLeaseAssertions.get(projectId);
+    if (!lease || provider && !leadership) throw new PlatformError(409, "PROJECT_LEASE_LOST", "A current native project and supervisor capability is required.");
+    return () => {
+      if (projectLeaseAssertions.get(projectId) !== lease) throw new PlatformError(409, "PROJECT_LEASE_LOST", "The captured project authority is no longer current.");
+      leadership?.assertCurrent(); lease();
+    };
   };
 
   const stopProject = async (projectId: string): Promise<void> => {
@@ -2748,9 +2849,10 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     accepted?: () => void,
     beforeAcceptance?: () => Promise<void>,
     frozenEnvironment?: Record<string, string>,
-  ): Promise<Record<string, unknown>> => {
+  ): Promise<Record<string, unknown>> => providerWriter(project.id, async () => {
     const assertQueueCurrent = () => {
       projectLeaseAssertions.get(project.id)?.();
+      requireNoProviderCanary(project.id);
       requireNoEvacuation(project.id);
       if (guard) guard();
       else {
@@ -2898,6 +3000,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         ...(providerPlacement.region ? { region: providerPlacement.region } : {}),
         runtimeProtocol: DEPLOYMENT_RUNTIME_PROTOCOL,
       });
+      assertQueueCurrent();
       if (desired.generation !== generation) {
         throw new Error("Provider generation allocation changed unexpectedly.");
       }
@@ -2935,7 +3038,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       ...release,
       providerGeneration: generation,
     }, generation, permission, assertQueueCurrent, accepted, beforeAcceptance);
-  };
+  });
 
   const deployProviderRelease = async (
     principal: TokenPrincipal,
@@ -2944,15 +3047,14 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     config: DeploymentBundle["config"],
     acceptance?: DeploymentAcceptance,
     assertCurrent?: () => void,
-  ): Promise<Record<string, unknown>> => queueProviderRelease(
-    principal,
-    project,
-    release,
-    config,
-    false, "deploy", assertCurrent,
-    acceptance ? () => acceptance.accepted(release.id) : undefined,
-    acceptance?.beforeProviderAcceptance,
-  );
+  ): Promise<Record<string, unknown>> => {
+    const retained = providerCanaryRecord(project.id);
+    if (retained && retained.operation.phase !== "complete" || canaryOptions?.provider && project.activeReleaseId && project.activeGeneration !== null) {
+      return deployProviderCanary(principal, project, release, config, acceptance, assertCurrent ?? (() => { requireCurrentPlatformPrincipal(storage, principal); accessibleProject(storage.internal, project.id, principal, "deploy"); }));
+    }
+    return queueProviderRelease(principal, project, release, config, false, "deploy", assertCurrent,
+      acceptance ? () => acceptance.accepted(release.id) : undefined, acceptance?.beforeProviderAcceptance);
+  };
 
   const verifyEncryptedProjectBackup = async (
     project: ProjectRow,
@@ -2979,7 +3081,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     verification: BackupVerification;
     safetyBackupId: string;
     generation: number;
-  }> => {
+  }> => providerWriter(project.id, async () => {
+    requireNoProviderCanary(project.id);
     if (!providerPlacement || !deploymentCoordinator) {
       throw new PlatformError(
         409,
@@ -3197,7 +3300,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       safetyBackupId,
       generation,
     };
-  };
+  });
 
   const queueProviderFailover = async (
     principal: TokenPrincipal,
@@ -3211,7 +3314,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     generation: number;
     sourceNodeId: string;
     targetNodeId: string;
-  }> => {
+  }> => providerWriter(project.id, async () => {
+    requireNoProviderCanary(project.id);
     assertCurrent?.();
     if (!providerPlacement || !deploymentCoordinator) {
       throw new PlatformError(
@@ -3490,14 +3594,16 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       sourceNodeId,
       targetNodeId: desired.assignedNodeId!,
     };
-  };
+  });
 
   const waitForProviderLifecycle = async (
     operationId: string,
     action: "rollback" | "delete",
+    assertCurrent: () => void = () => {},
   ): Promise<void> => {
     const deadline = Date.now() + providerPlacement!.activationTimeoutMs;
     while (!closed && Date.now() < deadline) {
+      assertCurrent();
       const operation = orchestrator.operation(operationId);
       if (operation?.state === "succeeded") return;
       if (!operation || operation.state === "failed" || operation.state === "cancelled") {
@@ -3576,6 +3682,256 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     }
     return origin;
   };
+
+  const assertCanaryRecord = (projectId: string, record: PlatformProviderCanaryRecord, authority: () => void) => {
+    authority();
+    const current = providerCanaryRecord(projectId);
+    if (!current || current.epoch !== record.epoch || current.serialized !== record.serialized) throw new PlatformError(409, "PROVIDER_CANARY_SUPERSEDED", "The retained provider canary operation changed.");
+  };
+  const saveCanaryRecord = (projectId: string, prior: PlatformProviderCanaryRecord | null, operation: PlatformProviderCanaryOperation, authority: () => void): PlatformProviderCanaryRecord => {
+    const serialized = JSON.stringify(operation), epoch = canaryInteger(Math.max((prior?.epoch ?? 0) + 1, operation.retirementEpoch));
+    const record = platformCanaryRecord({ project_id: projectId, protocol: 1, epoch, operation: serialized, updated_at: operation.updatedAt }, projectId)!;
+    const write = () => {
+      authority();
+      if (prior) assertCanaryRecord(projectId, prior, authority);
+      else if (providerCanaryRecord(projectId)) throw new Error("Provider canary identity was already reserved.");
+      const written = storage.internal.prepare(`INSERT INTO clank_platform_provider_canaries(project_id,protocol,epoch,operation,updated_at) VALUES(?,1,?,?,?)
+        ON CONFLICT(project_id) DO UPDATE SET protocol=1,epoch=excluded.epoch,operation=excluded.operation,updated_at=excluded.updated_at`).run(projectId, epoch, serialized, operation.updatedAt);
+      if (Number(written.changes) !== 1) throw new Error("Provider canary journal write was not applied.");
+      const marked = storage.internal.prepare("UPDATE clank_platform_projects SET provider_canary_epoch=? WHERE id=? AND provider_canary_epoch=?").run(epoch, projectId, prior?.epoch ?? 0);
+      if (Number(marked.changes) !== 1) throw new Error("Provider canary project receipt write was not applied.");
+      const confirmed = providerCanaryRecord(projectId);
+      if (!confirmed || confirmed.epoch !== epoch || confirmed.serialized !== serialized) throw new Error("Provider canary journal write was not retained exactly.");
+      authority();
+    };
+    if (storage.internal.inTransaction) write(); else storage.internal.transaction(write);
+    return record;
+  };
+  const nextCanaryEpoch = (record: PlatformProviderCanaryRecord | null) => canaryInteger((record?.epoch ?? 0) + 1);
+  const canaryControlRequest = async (projectId: string, record: PlatformProviderCanaryRecord, action: "binding" | "prepare" | "inspect" | "retire", input: unknown, assertCurrent: () => void, capsule?: Uint8Array): Promise<unknown> => {
+    assertCurrent();
+    if (!providerPlacement || providerIngressOrigin(record.operation.origin, providerPlacement.allowedProviderHosts) !== record.operation.origin) throw new Error("The retained provider origin is unavailable.");
+    const url = new URL(deploymentProviderCanaryPath(projectId, action), record.operation.origin).href;
+    const controller = new AbortController(), started = performance.now(), wall = Date.now(), duration = providerPlacement.activationTimeoutMs;
+    const timer = setTimeout(() => controller.abort(), duration);
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    const current = () => {
+      assertCurrent();
+      if (controller.signal.aborted || performance.now() - started >= duration || Date.now() < wall) throw new Error("Provider canary control deadline expired.");
+      if (!providerPlacement || providerIngressOrigin(record.operation.origin, providerPlacement.allowedProviderHosts) !== record.operation.origin) throw new Error("Provider canary origin is no longer approved.");
+    };
+    try {
+      const headers = new Headers({ accept: DEPLOYMENT_PROVIDER_CANARY_CONTROL_MEDIA_TYPE, "accept-encoding": "identity", authorization: `Bearer ${providerControlToken(masterKey, projectId, record.operation.credentialGeneration)}` });
+      let body: Uint8Array | undefined;
+      if (action !== "binding") {
+        const json = JSON.stringify(input);
+        if (new TextEncoder().encode(json).byteLength > 4096) throw new Error("Provider canary identity exceeds its bound.");
+        body = capsule ?? new TextEncoder().encode(json);
+        headers.set("content-type", capsule ? "application/vnd.clank.runtime" : "application/json");
+        headers.set("content-length", String(body.byteLength));
+        if (capsule) headers.set("x-clank-canary-input", json);
+      }
+      current();
+      const response = await canaryAwait(fetch(url, { method: action === "binding" ? "GET" : "POST", body: body as BodyInit | undefined, headers,
+        redirect: "error", credentials: "omit", cache: "no-store", referrerPolicy: "no-referrer", signal: controller.signal }), controller.signal);
+      current();
+      const length = response.headers.get("content-length");
+      if (response.status !== 200 || response.redirected || response.url !== url || response.headers.get("content-type") !== DEPLOYMENT_PROVIDER_CANARY_CONTROL_MEDIA_TYPE
+        || response.headers.has("content-encoding") || !length || !/^[1-9][0-9]*$/u.test(length) || !Number.isSafeInteger(Number(length)) || Number(length) > 64 * 1024 || !response.body) {
+        void response.body?.cancel().catch(() => undefined); throw new Error("Provider canary response is uncertain.");
+      }
+      let headerBytes = 0, headerCount = 0;
+      for (const [key, value] of response.headers) { headerBytes += key.length + value.length; headerCount++; }
+      if (headerCount > 64 || headerBytes > 16 * 1024) { void response.body.cancel().catch(() => undefined); throw new Error("Provider canary response headers exceed their bound."); }
+      const bytes = new Uint8Array(Number(length)); let offset = 0;
+      reader = response.body.getReader();
+      while (true) {
+        current(); const next = await canaryAwait(reader.read(), controller.signal); current();
+        if (next.done) break;
+        if (offset + next.value.byteLength > bytes.byteLength) throw new Error("Provider canary response exceeds its bound.");
+        bytes.set(next.value, offset); offset += next.value.byteLength;
+      }
+      if (offset !== bytes.byteLength) throw new Error("Provider canary response is truncated.");
+      const field = action === "binding" ? "binding" : action === "retire" ? "retirement" : "state";
+      const result = canaryObject(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)), ["protocol", field]);
+      current();
+      if (result.protocol !== DEPLOYMENT_PROVIDER_CANARY_CONTROL_PROTOCOL) throw new Error("Provider canary response protocol is unsupported.");
+      return result[field];
+    } finally {
+      controller.abort(); clearTimeout(timer); void reader?.cancel().catch(() => undefined);
+    }
+  };
+  const retireProviderCanary = async (projectId: string, input: PlatformProviderCanaryRecord, authority: () => void, outcome: "passed" | "failed" | "interrupted", reason: string | null): Promise<PlatformProviderCanaryRecord> => {
+    const outer = providerWriterScope.getStore();
+    return providerWriterScope.run(() => { outer?.(); authority(); }, async () => {
+    let record = input;
+    assertCanaryRecord(projectId, record, authority);
+    if (["activating", "complete"].includes(record.operation.phase)) return record;
+    if (record.operation.phase === "binding") {
+      // No prepare can be dispatched until the native preparing intent exists.
+      record = saveCanaryRecord(projectId, record, { ...record.operation, phase: "complete", outcome: "interrupted", reason, updatedAt: Math.max(Date.now(), record.operation.updatedAt) }, authority);
+    } else {
+      if (!record.operation.retirement) {
+        const retirementEpoch = record.operation.phase === "retiring" ? record.operation.retirementEpoch : nextCanaryEpoch(record);
+        record = saveCanaryRecord(projectId, record, { ...record.operation, retirementEpoch, phase: "retiring", outcome, reason, updatedAt: Math.max(Date.now(), record.operation.updatedAt) }, authority);
+        const guard = () => assertCanaryRecord(projectId, record, authority);
+        const op = record.operation;
+        const raw = await canaryControlRequest(projectId, record, "retire", { primary: op.primary, operationId: op.operationId, controllerEpoch: op.controllerEpoch,
+          releaseId: op.releaseId, capsuleSha256: op.capsuleSha256, retirementEpoch: op.retirementEpoch }, guard);
+        guard();
+        const retirement = canaryRetirement(raw, op);
+        record = saveCanaryRecord(projectId, record, { ...op, phase: "retired", retirement, updatedAt: Math.max(Date.now(), op.updatedAt) }, authority);
+      }
+      if (outcome !== "passed") record = saveCanaryRecord(projectId, record, { ...record.operation, phase: "complete", outcome, reason, updatedAt: Math.max(Date.now(), record.operation.updatedAt) }, authority);
+    }
+    if (record.operation.outcome !== "passed") {
+      assertCanaryRecord(projectId, record, authority);
+      storage.internal.prepare("UPDATE clank_platform_releases SET status='failed',failure=? WHERE id=? AND project_id=? AND status='staging'").run(record.operation.reason ?? "Provider canary was interrupted; start a new deployment after cleanup.", record.operation.releaseId, projectId);
+    }
+    return record;
+    });
+  };
+  const inspectCanaryState = (value: unknown, record: PlatformProviderCanaryRecord, preparing: boolean): DeploymentProviderCanaryState & { route?: Extract<IngressCanaryRoute, { runtime: object }> } => {
+    const keys = ["protocol", "operationId", "primary", "controllerEpoch", "candidateProjectId", "releaseId", "capsuleSha256", "phase", "expiresAt"];
+    const raw = canaryObject(value, preparing ? [...keys, "route"] : keys), primary = canaryBinding(raw.primary), op = record.operation;
+    if (!op.primary || !samePlatformCanaryBinding(primary, op.primary) || raw.protocol !== "clank-provider-canary/1" || raw.operationId !== op.operationId || raw.controllerEpoch !== op.controllerEpoch
+      || raw.releaseId !== op.releaseId || raw.capsuleSha256 !== op.capsuleSha256 || raw.candidateProjectId !== platformCanaryCandidateId(op) || raw.phase !== "running"
+      || canaryInteger(raw.expiresAt) <= Date.now() || Number(raw.expiresAt) > Date.now() + 30 * 60_000) throw new Error("Provider canary runtime identity or phase is unavailable.");
+    let route: Extract<IngressCanaryRoute, { runtime: object }> | undefined;
+    if (preparing) {
+      const input = canaryObject(raw.route, ["projectId", "releaseId", "generation", "path", "token", "readPaths"]);
+      if (input.projectId !== raw.candidateProjectId || input.releaseId !== op.releaseId || input.generation !== 1 || input.path !== providerRuntimePath(String(input.projectId))
+        || typeof input.token !== "string" || !/^clanki_[A-Za-z0-9_-]{32,192}$/u.test(input.token) || !Array.isArray(input.readPaths)
+        || input.readPaths.length > 128 || input.readPaths.some(path => typeof path !== "string" || path.length > 512)
+        || op.policy.provider!.readPaths.some(path => !(input.readPaths as string[]).includes(path))) throw new Error("Provider candidate route policy differs.");
+      route = { upstream: op.origin, projectId: String(input.projectId), releaseId: op.releaseId, trafficPercent: 0,
+        runtime: { protocol: DEPLOYMENT_RUNTIME_PROTOCOL, generation: 1, path: String(input.path), token: input.token }, readPaths: op.policy.provider!.readPaths };
+    }
+    return { ...raw, primary, ...(route ? { route } : {}) } as unknown as DeploymentProviderCanaryState & { route?: Extract<IngressCanaryRoute, { runtime: object }> };
+  };
+  const canaryHealth = async (route: IngressRoute, healthPath: string, assertCurrent: () => void) => {
+    const started = Date.now(), controller = new AbortController(), timer = setTimeout(() => controller.abort(), Math.min(2000, providerPlacement!.activationTimeoutMs));
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    const current = () => { assertCurrent(); if (controller.signal.aborted || Date.now() < started) throw new Error("Provider canary health expired."); };
+    try {
+      current();
+      const url = new URL(route.runtime!.path + healthPath, route.upstream).href;
+      const response = await canaryAwait(fetch(url, { method: "GET", headers: { "x-clank-project-id": route.projectId, "x-clank-runtime-protocol": DEPLOYMENT_RUNTIME_PROTOCOL,
+        "x-clank-runtime-generation": String(route.runtime!.generation), "x-clank-runtime-ingress": route.runtime!.token, "accept-encoding": "identity" },
+        redirect: "error", cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer", signal: controller.signal }), controller.signal);
+      current();
+      if (response.status !== 200 || response.redirected || response.url !== url || response.headers.has("content-encoding")) { void response.body?.cancel().catch(() => undefined); throw new Error("Provider canary health failed."); }
+      if (response.body) {
+        reader = response.body.getReader(); let size = 0;
+        while (true) { current(); const next = await canaryAwait(reader.read(), controller.signal); current(); if (next.done) break; size += next.value.byteLength; if (size > 64 * 1024) throw new Error("Provider canary health response exceeds its bound."); }
+      }
+    } finally { controller.abort(); clearTimeout(timer); void reader?.cancel().catch(() => undefined); }
+  };
+
+  const deployProviderCanary = async (principal: TokenPrincipal, project: ProjectRow, release: ReleaseRow, config: DeploymentBundle["config"], acceptance: DeploymentAcceptance | undefined, currentAdmission: () => void): Promise<Record<string, unknown>> => {
+    const authority = captureProjectAuthority(project.id, true), outer = providerWriterScope.getStore();
+    return providerWriterScope.run(() => { outer?.(); authority(); }, async () => {
+    let record = providerCanaryRecord(project.id);
+    const admit = () => {
+      authority(); currentAdmission(); requireFreshPlatformAuthenticationForCanary(principal);
+      const current = accessibleProject(storage.internal, project.id, principal, "deploy").project;
+      const candidate = releaseById(storage.internal, release.id);
+      if (!candidate || candidate.projectId !== project.id || candidate.digest !== release.digest || !candidate.artifactAvailable) throw new Error("Provider canary artifact changed.");
+      assertReleaseCapacity(storage.internal, project.id, candidate.storageBytes, projectQuotas(storage.internal, current, quotaDefaults), candidate.id);
+      return current;
+    };
+    const activate = async (): Promise<Record<string, unknown>> => {
+      if (!record || !record.operation.retirement || record.operation.outcome !== "passed") throw new Error("Provider canary retirement is not acknowledged.");
+      const guard = () => { admit(); assertCanaryRecord(project.id, record!, authority); };
+      guard();
+      if (record.operation.phase !== "activating") record = saveCanaryRecord(project.id, record, { ...record.operation, phase: "activating", updatedAt: Math.max(Date.now(), record.operation.updatedAt) }, authority);
+      try {
+        return await queueProviderRelease(principal, projectById(storage.internal, project.id)!, releaseById(storage.internal, release.id)!, config, false, "deploy", guard, () => {
+          guard();
+          acceptance?.accepted(release.id);
+          record = saveCanaryRecord(project.id, record, { ...record!.operation, phase: "complete", generation: projectById(storage.internal, project.id)!.activeGeneration, updatedAt: Math.max(Date.now(), record!.operation.updatedAt) }, authority);
+        }, acceptance?.beforeProviderAcceptance);
+      } catch (error) {
+        guard();
+        const desired = orchestrator.desired(project.id);
+        if (desired?.desiredReleaseId === release.id && desired.generation > record.operation.credentialGeneration) record = saveCanaryRecord(project.id, record, { ...record.operation, generation: desired.generation, updatedAt: Math.max(Date.now(), record.operation.updatedAt) }, authority);
+        throw error;
+      }
+    };
+    if (record && record.operation.phase !== "complete") {
+      if (record.operation.releaseId !== release.id) throw new PlatformError(409, "PROVIDER_CANARY_RECOVERY_REQUIRED", "Recover the retained provider canary before starting another deployment.");
+      admit();
+      if (record.operation.phase === "activating") return activate();
+      await retireProviderCanary(project.id, record, authority, "interrupted", "The prior canary attempt was interrupted; cleanup is required before a new deployment key.");
+      throw new PlatformError(409, "PROVIDER_CANARY_INTERRUPTED", "The prior canary attempt was retired. Deploy again with a new idempotency key.");
+    }
+    if (!canaryOptions?.provider || !canaries) throw new PlatformError(409, "PROVIDER_CANARY_DISABLED", "Provider canary measurement is disabled.");
+    if (record?.operation.releaseId === release.id) throw new PlatformError(409, "PROVIDER_CANARY_RETIRED", "This canary attempt is already retired. Use a new deployment key.");
+    const quiescentPrimary = () => {
+      admit();
+      if (storage.internal.prepare("SELECT 1 FROM clank_deployment_operations WHERE project_id=? AND state IN ('queued','retry','leased') LIMIT 1").get(project.id))
+        throw new PlatformError(409, "PROVIDER_CANARY_PRIMARY_PENDING", "Wait for the primary deployment operation to finish before starting a canary.");
+    };
+    quiescentPrimary();
+    const source = admit();
+    const primaryRelease = source.activeReleaseId ? releaseById(storage.internal, source.activeReleaseId) : null;
+    if (!primaryRelease || source.activeGeneration === null) throw new Error("Provider canary requires an active primary.");
+    if (config.jobs || !canaryOptions.provider.readPaths.includes(config.health.path)) throw new PlatformError(409, "PROVIDER_CANARY_PROFILE_UNSUPPORTED", "Provider canaries require no declared jobs and an approved public health path.");
+    const runtime = exactProviderRuntime(source, primaryRelease), origin = exactProviderOrigin(source, runtime.nodeId);
+    const fence = canaryInteger(storage.internal.prepare("SELECT fence FROM clank_deployment_project_fences WHERE project_id=?").get(project.id)?.fence);
+    const epoch = nextCanaryEpoch(record), now = Date.now();
+    record = saveCanaryRecord(project.id, record, { operationId: `canary_${crypto.randomUUID()}`, releaseId: release.id, artifactSha256: release.digest, capsuleSha256: null,
+      controllerEpoch: epoch, retirementEpoch: epoch, primary: null, primaryReleaseId: primaryRelease.id, primaryFence: fence, nodeId: runtime.nodeId, origin,
+      credentialGeneration: runtime.generation, policy: canaryOptions, phase: "binding", outcome: null, reason: null, retirement: null, generation: null, createdAt: now, updatedAt: now }, quiescentPrimary);
+    const assertCurrent = () => {
+      quiescentPrimary();
+      const current = admit(); assertCanaryRecord(project.id, record!, authority);
+      const actual = exactProviderRuntime(current, primaryRelease);
+      if (actual.generation !== runtime.generation || actual.nodeId !== runtime.nodeId || exactProviderOrigin(current, actual.nodeId) !== origin
+        || storage.internal.prepare("SELECT fence FROM clank_deployment_project_fences WHERE project_id=?").get(project.id)?.fence !== fence) throw new Error("Provider canary primary changed.");
+    };
+    try {
+      assertCurrent();
+      const artifact = await readRunnerReleaseArtifact(paths.projects, release, new AbortController().signal, runnerArtifactObjects); assertCurrent();
+      if (!artifact || artifact.sha256 !== release.digest) throw new Error("Provider canary artifact is unavailable.");
+      const capsule = await createDeploymentRuntimeCapsule({ projectId: project.id, releaseId: release.id, generation: 1, artifact: artifact.bytes, environment: {},
+        database: { path: config.database.path, mode: "preserve" }, ingress: { route: providerRuntimePath(project.id), token: providerIngressToken(masterKey, project.id, runtime.generation) } },
+        { maxArtifactBytes: runnerArtifactLimit, maxDatabaseBytes: providerPlacement!.maxDatabaseBytes, maxCapsuleBytes: providerPlacement!.maxRuntimeBytes }); assertCurrent();
+      record = saveCanaryRecord(project.id, record, { ...record.operation, capsuleSha256: capsule.sha256, updatedAt: Math.max(Date.now(), record.operation.updatedAt) }, authority);
+      const primary = canaryBinding(await canaryControlRequest(project.id, record, "binding", null, assertCurrent)); assertCurrent();
+      if (primary.projectId !== project.id || primary.releaseId !== primaryRelease.id || primary.generation !== runtime.generation || primary.fence !== fence) throw new Error("Provider canary binding differs from the current primary.");
+      // This intent is committed before any prepare bytes leave this process.
+      record = saveCanaryRecord(project.id, record, { ...record.operation, primary, phase: "preparing", updatedAt: Math.max(Date.now(), record.operation.updatedAt) }, authority);
+      const op = record.operation;
+      const prepared = inspectCanaryState(await canaryControlRequest(project.id, record, "prepare", { primary, operationId: op.operationId, controllerEpoch: op.controllerEpoch, releaseId: release.id, capsuleSha256: capsule.sha256 }, assertCurrent, capsule.bytes), record, true); assertCurrent();
+      const remaining = prepared.expiresAt - Date.now(), stageDuration = op.policy.stages.reduce((sum, stage) => sum + stage.durationMs, 0), expires = performance.now() + remaining;
+      if (remaining <= stageDuration) throw new Error("Provider canary granted lifetime cannot contain the configured stages.");
+      record = saveCanaryRecord(project.id, record, { ...record.operation, phase: "measuring", updatedAt: Math.max(Date.now(), record.operation.updatedAt) }, authority);
+      const route = prepared.route!;
+      const measuring = () => { assertCurrent(); if (record!.operation.phase !== "measuring" || performance.now() >= expires || Date.now() >= prepared.expiresAt) throw new Error("Provider canary measurement expired."); };
+      await canaries.run(project.id, release.id, origin, async () => {
+        measuring(); await acceptance?.beforeProviderAcceptance?.(); measuring();
+        const inspected = inspectCanaryState(await canaryControlRequest(project.id, record!, "inspect", { primary, operationId: op.operationId, controllerEpoch: op.controllerEpoch }, measuring), record!, false); measuring();
+        if (inspected.expiresAt !== prepared.expiresAt) throw new Error("Provider canary lifetime changed.");
+        await canaryHealth({ id: project.id, projectId: route.projectId, releaseId: release.id, hosts: [], active: true, upstream: origin, runtime: route.runtime }, config.health.path, measuring); measuring();
+        await canaryHealth({ id: project.id, projectId: project.id, releaseId: primaryRelease.id, hosts: [], active: true, upstream: origin,
+          runtime: { protocol: DEPLOYMENT_RUNTIME_PROTOCOL, generation: runtime.generation, path: providerRuntimePath(project.id), token: providerIngressToken(masterKey, project.id, runtime.generation) } }, primaryRelease.config.health.path, measuring); measuring();
+      }, { assertCurrent: measuring, route, policy: op.policy,
+        primary: { projectId: project.id, releaseId: primaryRelease.id, upstream: origin, runtime: { protocol: DEPLOYMENT_RUNTIME_PROTOCOL,
+          generation: runtime.generation, path: providerRuntimePath(project.id), token: providerIngressToken(masterKey, project.id, runtime.generation) } } });
+      assertCurrent();
+      record = await retireProviderCanary(project.id, record, authority, "passed", null); admit();
+      return await activate();
+    } catch (error) {
+      // Cleanup deliberately uses only current native authority, never a revoked deploy credential.
+      if (record.operation.phase === "activating" || record.operation.phase === "complete") throw error;
+      try { record = await retireProviderCanary(project.id, record, authority, "failed", "Provider canary evaluation failed or became uncertain; the prior release remains authoritative."); }
+      catch { throw new PlatformError(503, "PROVIDER_CANARY_RECOVERY_REQUIRED", "Provider canary cleanup is uncertain. Retry exact cleanup before another deployment.", 1); }
+      throw new PlatformError(409, "PROVIDER_CANARY_FAILED", "Provider canary did not pass its measured stages. The candidate was retired; the prior release remains authoritative.");
+    }
+    });
+  };
+  const requireFreshPlatformAuthenticationForCanary = (principal: TokenPrincipal) => { if (options.freshAuthentication?.required) requireFreshPlatformAuthentication(principal); };
 
   const fetchProviderDiagnostics = async (
     project: ProjectRow,
@@ -3915,6 +4271,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       );
     }
     const runtime = exactProviderRuntime(project, release);
+    if (evacuationId) requireNoProviderCanary(project.id);
     const origin = exactProviderOrigin(project, runtime.nodeId, Boolean(evacuationId));
     const snapshotUrl = new URL(
       evacuationId ? `/v1/clank/control/${project.id}/evacuate` : deploymentProviderSnapshotPath(project.id),
@@ -3931,6 +4288,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     );
     let response: Response | undefined;
     try {
+      if (evacuationId) { captureProjectAuthority(project.id)(); requireNoProviderCanary(project.id); }
       response = await fetch(snapshotUrl, {
         method: evacuationId ? "POST" : "GET",
         redirect: "error",
@@ -4035,6 +4393,10 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     protectedBackupIds: readonly string[] = [],
     evacuationId?: string,
   ): Promise<BackupManifest> => {
+    // A safety backup created inside an enrolled writer scope may prune retained
+    // repository objects. Preserve that captured authority through its manager.
+    const current = providerWriterScope.getStore() as (() => void) | undefined;
+    current?.();
     const retainedBackupIds = new Set(protectedBackupIds);
     for (const row of storage.internal.prepare(`SELECT json_extract(item.value, '$.backupId') AS backup_id
       FROM clank_platform_evacuations p, json_each(p.projects) item WHERE p.state NOT IN ('completed','cancelled')
@@ -4065,13 +4427,15 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     const manager = await projectBackupManager(paths.projects, project, masterKey, {
       ...backupPolicy,
       maxBackups: effective.backupsPerProject,
-    }, backupObjects);
+    }, backupObjects, current);
     try {
+      current?.();
       if (project.placement === "local") {
-        return await manager.create({
+        const manifest = await manager.create({
           reason,
           protectedBackupIds: [...retainedBackupIds],
         });
+        current?.(); return manifest;
       }
       const release = project.activeReleaseId
         ? releaseById(storage.internal, project.activeReleaseId)
@@ -4083,14 +4447,16 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           "Deploy the project before creating a database backup.",
         );
       }
-      const snapshot = await fetchProviderSnapshot(project, release, evacuationId);
-      return await manager.createFromSnapshot({
+      current?.();
+      const snapshot = await fetchProviderSnapshot(project, release, evacuationId); current?.();
+      const manifest = await manager.createFromSnapshot({
         bytes: snapshot.bytes,
         sha256: snapshot.sha256,
         source: project.databasePath.split("/").at(-1)!,
         reason,
         protectedBackupIds: [...retainedBackupIds],
       });
+      current?.(); return manifest;
     } finally {
       manager.close();
     }
@@ -4445,7 +4811,9 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     release: ReleaseRow,
     action: "rollback" | "delete",
     suffix = "",
-  ): Promise<void> => {
+  ): Promise<void> => providerWriter(project.id, async () => {
+    const current = providerWriterScope.getStore() ?? (() => {});
+    current();
     if (!providerPlacement || !deploymentCoordinator) {
       throw new PlatformError(
         409,
@@ -4465,7 +4833,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       "SELECT id FROM clank_deployment_operations WHERE idempotency_key = ?",
     ).get(idempotencyKey);
     if (existing) {
-      await waitForProviderLifecycle(String(existing.id), action);
+      await waitForProviderLifecycle(String(existing.id), action, current); current();
       return;
     }
     const runtime = exactProviderRuntime(project, release);
@@ -4477,14 +4845,15 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       nodeId: runtime.nodeId,
       maxAttempts: 10,
     });
+    current();
     recordLog(
       project.id,
       release.id,
       "platform",
       `Queued provider ${action} for generation ${runtime.generation} on ${runtime.nodeId}.`,
     );
-    await waitForProviderLifecycle(queued.operation.id, action);
-  };
+    await waitForProviderLifecycle(queued.operation.id, action, current); current();
+  });
 
   const scheduleRestart = (projectId: string, releaseId: string): void => {
     if (closed) return;
@@ -4915,6 +5284,9 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
   ): Promise<Record<string, unknown>> => withProjectLock(project.id, async () => {
     requireCurrentPlatformPrincipal(storage, principal);
     project = accessibleProject(storage.internal, project.id, principal, "deploy").project;
+    const retainedProviderCanary = providerCanaryRecord(project.id);
+    if (retainedProviderCanary && retainedProviderCanary.operation.phase !== "complete"
+      && storage.internal.prepare("SELECT idempotency_key FROM clank_platform_releases WHERE id=?").get(retainedProviderCanary.operation.releaseId)?.idempotency_key !== idempotencyKey) requireNoProviderCanary(project.id);
     const originalAcceptance = acceptance;
     if (!acceptance) requireNoInterruptedPromotion(project.id, dependencyId);
     else requireNoInterruptedDependencyActivation(project.id, dependencyId);
@@ -4977,7 +5349,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         "Changing database.path would create a second production database. Migrate it explicitly before deploying.",
       );
     }
-    if (canaries && project.placement === "provider") throw new PlatformError(409, "CANARY_PROVIDER_UNSUPPORTED", "Managed canaries require local placement with parallel code-only releases.");
+    if (canaries && !canaryOptions?.provider && project.placement === "provider") throw new PlatformError(409, "CANARY_PROVIDER_UNSUPPORTED", "Managed canaries require local placement with parallel code-only releases.");
     const initializedProvider = project.placement === "provider" ? dependencyProviderInitialization(project.id) : null;
     if (project.placement === "provider" && (project.activeReleaseId || initializedProvider) && acceptance?.dependencyGate) {
       const prior = releaseById(storage.internal, project.activeReleaseId ?? String(initializedProvider!.release_id));
@@ -5225,6 +5597,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           const expected = (release.config.jobs?.workers ?? 0) + (release.config.jobs?.scheduler ? 1 : 0);
           if (candidate.background.length !== expected) throw new Error("Canary background process count does not match the release.");
         };
+        const canaryAuthority = captureProjectAuthority(project.id);
         await canaries.run(project.id, releaseId, `http://127.0.0.1:${candidate.port}`, async () => {
           projectLeaseAssertions.get(project.id)?.();
           requireCurrentPlatformPrincipal(storage, principal);
@@ -5233,7 +5606,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           checkCanaryProcesses();
           await waitForHealth(candidate.port, release.config.health.path, Math.min(2000, release.config.health.timeoutMs), candidate.child);
           checkCanaryProcesses();
-        });
+        }, { assertCurrent: () => { canaryAuthority(); assertCurrent(); } });
         projectLeaseAssertions.get(project.id)?.();
         requireCurrentPlatformPrincipal(storage, principal);
         accessibleProject(storage.internal, project.id, principal, "deploy");
@@ -6546,7 +6919,9 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     releaseId: string,
     confirmation: string,
     allowRollbackLoss: boolean,
-  ): Promise<Record<string, unknown>> => withProjectLock(project.id, async () => {
+  ): Promise<Record<string, unknown>> => withProjectLock(project.id, async () => providerWriter(project.id, async () => {
+    const current = providerWriterScope.getStore() ?? (() => {});
+    current();
     requireCurrentPlatformPrincipal(storage, principal);
     project = accessibleProject(storage.internal, project.id, principal, "rollback").project;
     const currentProject = projectById(storage.internal, project.id);
@@ -6620,9 +6995,9 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         "This release is the active release's immediate rollback target. Explicitly allow rollback loss to remove it.",
       );
     }
-    await deleteReleaseStorage(paths.projects, release, runnerArtifactObjects);
+    await deleteReleaseStorage(paths.projects, release, runnerArtifactObjects, current); current();
     if (rollbackProtected && activeRelease?.backupPath) {
-      await deleteReleaseSnapshot(paths.projects, project.id, activeRelease.id);
+      await deleteReleaseSnapshot(paths.projects, project.id, activeRelease.id, current); current();
     }
     storage.internal.transaction((changes) => {
       storage.internal.prepare(`UPDATE clank_platform_releases
@@ -6651,13 +7026,15 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       ...publicRelease(cleaned),
       cleanup: { allowed: false, rollbackProtected: false, channelPinned: false },
     };
-  });
+  }));
 
   const destroyProject = async (
     project: ProjectRow,
     actor: { userId: string; tokenId: string | null },
     action: "project.delete" | "preview.delete" | "preview.expire",
-  ): Promise<Record<string, unknown>> => withProjectLock(`dependency-graph:${project.organizationId ?? project.ownerId}`, async () => {
+  ): Promise<Record<string, unknown>> => withProjectLock(`dependency-graph:${project.organizationId ?? project.ownerId}`, async () => providerWriter(project.id, async () => {
+    const current = providerWriterScope.getStore() ?? (() => {});
+    current();
     if (storage.internal.prepare("SELECT 1 FROM clank_platform_release_windows WHERE (root_id=? OR source_project_id=? OR target_project_id=?) AND state IN ('pending','running','cancelling','recovery-required') LIMIT 1").get(project.id,project.id,project.id)) throw new PlatformError(409,"PROJECT_RELEASE_SCHEDULED","Cancel or recover scheduled promotions before deleting their projects.");
     if (releaseChannelPinned(project.id)) {
       throw new PlatformError(409, "PROJECT_CHANNEL_PINNED", "Retire the release channels that retain this project's artifacts before deleting it.");
@@ -6672,7 +7049,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     cancelRestart(project.id);
     if (project.placement === "provider") {
       if (activeRelease) {
-        await runProviderLifecycle(project, activeRelease, "delete");
+        await runProviderLifecycle(project, activeRelease, "delete"); current();
       } else if (
         project.activeGeneration !== null
         || orchestrator.desired(project.id)
@@ -6686,24 +7063,28 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         );
       }
     } else {
-      await stopProject(project.id);
+      await stopProject(project.id); current();
     }
     try {
       await deleteProjectStorage(paths.projects, project.id, async () => {
+        current();
         await deleteProjectBackups(
           paths.projects,
           project,
           masterKey,
           backupPolicy,
           backupObjects,
-        );
+          current,
+        ); current();
         await deleteProjectRunnerArtifacts(
           storage.internal,
           project.id,
           runnerArtifactObjects,
-        );
-      });
+          current,
+        ); current();
+      }, current); current();
     } catch (error) {
+      current();
       try { options.onError?.(error); } catch { /* Operator reporting must not alter recovery. */ }
       if (project.placement === "local" && activeRelease && wasRunning) {
         try {
@@ -6733,6 +7114,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         storage.internal.prepare("DELETE FROM clank_deployment_operations WHERE project_id = ?").run(project.id);
         storage.internal.prepare("DELETE FROM clank_deployment_project_fences WHERE project_id = ?").run(project.id);
         storage.internal.prepare("DELETE FROM clank_deployment_placements WHERE project_id = ?").run(project.id);
+        requireNoProviderCanary(project.id);
+        storage.internal.prepare("DELETE FROM clank_platform_provider_canaries WHERE project_id=?").run(project.id);
         const result = storage.internal.prepare("DELETE FROM clank_platform_projects WHERE id = ?").run(project.id);
         if (Number(result.changes) !== 1) {
           throw new PlatformError(404, "PROJECT_NOT_FOUND", "Project not found.");
@@ -6750,6 +7133,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         changes.record("__platform", project.organizationId ?? project.id);
       });
     } catch (error) {
+      current();
       try { options.onError?.(error); } catch { /* Operator reporting must not alter the API result. */ }
       throw new PlatformError(
         500,
@@ -6772,7 +7156,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       revokedTokens,
       ...summary,
     };
-  });
+  }));
 
   const deleteProject = async (
     principal: TokenPrincipal,
@@ -9852,7 +10236,24 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           }));
         return api({ ok: true, preview: deleted });
       }
-      if (operation === "canary" && request.method === "GET") return api({ ok: true, enabled: Boolean(canaries), canaries: canaries?.reports(project.id) ?? [] });
+      if (operation === "canary" && request.method === "GET") return api({ ok: true, enabled: Boolean(canaryOptions), canaries: canaryHistory?.reports(project.id) ?? [], provider: canaryPublicStatus(providerCanaryRecord(project.id)) });
+      if (operation === "canary/recover" && request.method === "POST") {
+        const input = canaryObject(await readJsonRequest(request, 4096), ["operationId", "expectedEpoch"]);
+        const operationId = canaryIdentifier(input.operationId), expectedEpoch = canaryInteger(input.expectedEpoch);
+        const result = await withProjectLock(project.id, async () => {
+          const authority = captureProjectAuthority(project.id, true);
+          const current = () => { authority(); requireCurrentPlatformPrincipal(storage, principal); accessibleProject(storage.internal, project.id, principal, "deploy"); requireFreshPlatformAuthenticationForCanary(principal); };
+          current();
+          const record = providerCanaryRecord(project.id);
+          if (!record || record.epoch !== expectedEpoch || record.operation.operationId !== operationId) throw new PlatformError(409, "PROVIDER_CANARY_SUPERSEDED", "Refresh the exact canary operation before retrying cleanup.");
+          let recovered: PlatformProviderCanaryRecord;
+          try { recovered = await retireProviderCanary(project.id, record, authority, "interrupted", "Provider canary was interrupted; deploy a new key after cleanup."); }
+          catch { throw new PlatformError(503, "PROVIDER_CANARY_RECOVERY_REQUIRED", "Exact candidate cleanup is still uncertain. Refresh status and retry cleanup.", 1); }
+          current();
+          return canaryPublicStatus(recovered);
+        });
+        return api({ ok: true, provider: result });
+      }
       if (operation === "releases" && request.method === "GET") {
         const effective = projectQuotas(storage.internal, project, quotaDefaults);
         const availableRows = storage.internal.prepare(
@@ -10758,6 +11159,31 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     });
   };
 
+  const pendingCanaryProjects = new Set<string>(canaryHistory?.pendingProjects() ?? []);
+  for (const row of storage.internal.prepare("SELECT project_id FROM clank_platform_provider_canaries").all()) {
+    const record = providerCanaryRecord(String(row.project_id))!;
+    if (record.operation.phase !== "complete") pendingCanaryProjects.add(String(row.project_id));
+  }
+  const pendingCanaries = [...pendingCanaryProjects]; let canaryCursor = 0;
+  await Promise.all(Array.from({ length: Math.min(4, pendingCanaries.length) }, async () => {
+    while (canaryCursor < pendingCanaries.length) {
+      const id = pendingCanaries[canaryCursor++]!;
+      try { await withProjectLock(id, async () => {
+        const record = providerCanaryRecord(id), authority = captureProjectAuthority(id, Boolean(record));
+        canaryHistory?.interrupt(id, authority);
+        if (record?.operation.phase === "activating") {
+          const desired = orchestrator.desired(id);
+          if (desired?.desiredReleaseId === record.operation.releaseId && desired.generation > record.operation.credentialGeneration) {
+            saveCanaryRecord(id, record, { ...record.operation, generation: desired.generation, updatedAt: Math.max(Date.now(), record.operation.updatedAt) }, authority);
+          } else {
+            saveCanaryRecord(id, record, { ...record.operation, phase: "complete", outcome: "interrupted", reason: "Platform restarted before ordinary activation was queued. Deploy again with a new key.", updatedAt: Math.max(Date.now(), record.operation.updatedAt) }, authority);
+            authority();
+            storage.internal.prepare("UPDATE clank_platform_releases SET status='failed',failure=? WHERE id=? AND project_id=? AND status='staging'").run("Provider canary activation was interrupted.", record.operation.releaseId, id);
+          }
+        } else if (record && record.operation.phase !== "complete") await retireProviderCanary(id, record, authority, "interrupted", "Platform restarted before candidate acceptance; exact cleanup is required.");
+      }); } catch (error) { try { options.onError?.(error); } catch { /* A retained cleanup barrier remains authoritative. */ } }
+    }
+  }));
   if (previewCleanupIntervalMs !== false) await cleanupExpiredPreviews();
   const projects = storage.internal.prepare(
     `SELECT * FROM clank_platform_projects
@@ -10828,8 +11254,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       if (releaseWindowTimer) clearTimeout(releaseWindowTimer);
       releaseWindowTimer = undefined;
       await releaseWindowFlight?.catch(()=>undefined);
-      canaries?.close();
-      if (canaries) await Promise.all([...locks.values()].map((pending) => pending.catch(() => undefined)));
+      canaryHistory?.close();
+      if (canaryHistory) await Promise.all([...locks.values()].map((pending) => pending.catch(() => undefined)));
       if (runtimeSweepTimer) clearTimeout(runtimeSweepTimer);
       runtimeSweepTimer = undefined;
       await runtimeSweepFlight?.catch(() => undefined);
@@ -10873,7 +11299,7 @@ async function assertPlatformSupervisorMode(path:string,enabled:boolean):Promise
 }
 
 async function openPlatformDatabase(path: string, masterKey: Uint8Array,
-  authentication: { concurrency: number; maxQueue: number },leadership?:SupervisorLease): Promise<PlatformDatabase> {
+  authentication: { concurrency: number; maxQueue: number },leadership?:SupervisorLease, providerWriteAuthority?: () => void): Promise<PlatformDatabase> {
   // Check the persisted topology marker before ordinary platform bootstrap can
   // touch a catalog already owned by an upgraded multi-process supervisor.
   await assertPlatformSupervisorMode(path,Boolean(leadership));
@@ -10881,10 +11307,18 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array,
   const schema = defineDatabase({});
   const database = await openSQLite(schema, { path });
   const internal = database[SQLITE_INTERNAL];
-  try{if(leadership){if(!internal.guardWrites)throw new Error("Native supervisor write authority is unavailable.");internal.guardWrites(connection=>leadership.assertCurrent(connection));}}
+  try{if(leadership){if(!internal.guardWrites)throw new Error("Native supervisor write authority is unavailable.");internal.guardWrites(connection=>{ leadership.assertCurrent(connection); providerWriteAuthority?.(); return undefined; });}}
   catch(error){database.close();throw error;}
-  try {assertServiceAccountProtocol(internal);} catch(error) {database.close();throw error;}
-  try {assertOrganizationSecurityProtocol(internal);} catch(error) {database.close();throw error;}
+  try {
+    assertServiceAccountProtocol(internal);
+    assertOrganizationSecurityProtocol(internal);
+    if (leadership && internal.prepare("SELECT protocol FROM clank_platform_supervisor_state WHERE singleton=1").get()?.protocol === 2) {
+      if (!internal.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_platform_provider_canaries'").get())
+        throw new Error("The enrolled provider canary journal is missing; preserve the catalog for recovery.");
+      if (!internal.prepare("PRAGMA table_info(clank_platform_projects)").all().some(column => column.name === "provider_canary_epoch"))
+        throw new Error("The enrolled provider canary project receipt is missing; preserve the catalog for recovery.");
+    }
+  } catch(error) {database.close();throw error;}
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_rate_limits (
     key_hash TEXT PRIMARY KEY,
     attempts TEXT NOT NULL CHECK (json_valid(attempts) AND json_type(attempts) = 'array'),
@@ -11239,6 +11673,7 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array,
     active_generation INTEGER,
     provider_origin TEXT,
     provider_node_id TEXT,
+    provider_canary_epoch INTEGER NOT NULL DEFAULT 0 CHECK(provider_canary_epoch BETWEEN 0 AND 9007199254740991),
     parent_project_id TEXT REFERENCES clank_platform_projects(id) ON DELETE RESTRICT,
     preview_name TEXT,
     preview_expires_at INTEGER,
@@ -11250,6 +11685,9 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array,
     updated_at INTEGER NOT NULL
   )`);
   const projectColumns = internal.prepare("PRAGMA table_info(clank_platform_projects)").all();
+  if (!projectColumns.some(column => column.name === "provider_canary_epoch")) {
+    internal.exec("ALTER TABLE clank_platform_projects ADD COLUMN provider_canary_epoch INTEGER NOT NULL DEFAULT 0 CHECK(provider_canary_epoch BETWEEN 0 AND 9007199254740991)");
+  }
   if (!projectColumns.some((column) => column.name === "organization_id")) {
     internal.exec("ALTER TABLE clank_platform_projects ADD COLUMN organization_id TEXT");
   }
@@ -12425,6 +12863,7 @@ async function ingressRoutes(
         projectId: project.id,
         hosts: ready ? hosts : [],
         upstream: project.providerOrigin ?? "http://127.0.0.1:1",
+        releaseId: project.activeReleaseId ?? undefined,
         active: hosts.length > 0 && ready,
         ...(ready
           ? {
@@ -16564,6 +17003,7 @@ async function projectBackupManager(
   masterKey: Uint8Array,
   policy: PlatformBackupPolicy,
   objects: PlatformBackupObjects | null,
+  assertCurrent?: () => void,
 ) {
   if (!project.databasePath) {
     throw new PlatformError(409, "DATABASE_UNAVAILABLE", "Deploy the project before creating a database backup.");
@@ -16580,7 +17020,9 @@ async function projectBackupManager(
   material.set(masterKey);
   material.set(new TextEncoder().encode(project.id), masterKey.byteLength);
   const encryptionKey = new Uint8Array(await crypto.subtle.digest("SHA-256", material));
-  return openBackupManager({
+  assertCurrent?.();
+  const openGuardedBackupManager = openBackupManager as (input: Parameters<typeof openBackupManager>[0], authority?: () => undefined) => ReturnType<typeof openBackupManager>;
+  return openGuardedBackupManager({
     ...(databasePath ? { databasePath } : {}),
     repositoryDirectory: path.join(projectsRoot, project.id, "recovery"),
     encryptionKey,
@@ -16597,7 +17039,7 @@ async function projectBackupManager(
           },
         }
       : {}),
-  });
+  }, assertCurrent ? () => { assertCurrent(); return undefined; } : undefined);
 }
 
 function backupRepositoryId(projectId: string): string {
@@ -16957,6 +17399,7 @@ async function deleteReleaseStorage(
   projectsRoot: string,
   release: ReleaseRow,
   objects: RunnerArtifactObjects | null,
+  assertCurrent: () => void = () => {},
 ): Promise<void> {
   assertReleaseStorageIdentifiers(release.projectId, release.id);
   const fsName = "node:fs/promises";
@@ -16993,9 +17436,11 @@ async function deleteReleaseStorage(
       { path: `${backupPath}-shm` },
     );
   }
-  await deleteRunnerReleaseObject(release, objects);
-  await Promise.all(targets.map((target) =>
-    fs.rm(target.path, { ...(target.recursive ? { recursive: true } : {}), force: true })));
+  assertCurrent();
+  await deleteRunnerReleaseObject(release, objects, assertCurrent); assertCurrent();
+  await Promise.all(targets.map((target) => {
+    assertCurrent(); return fs.rm(target.path, { ...(target.recursive ? { recursive: true } : {}), force: true });
+  })); assertCurrent();
 }
 
 function assertReleaseStorageIdentifiers(projectId: string, releaseId: string): void {
@@ -17008,6 +17453,7 @@ async function deleteProjectStorage(
   projectsRoot: string,
   projectId: string,
   beforeRemove?: () => Promise<void>,
+  assertCurrent: () => void = () => {},
 ): Promise<void> {
   if (!/^[A-Za-z0-9_-]{8,128}$/u.test(projectId)) {
     throw new Error("Project storage identifier is invalid.");
@@ -17019,14 +17465,15 @@ async function deleteProjectStorage(
   await requireRealDirectory(projectsRoot);
   const projectRoot = await safeChildPath(projectsRoot, projectId);
   const projectExists = await requireRealDirectory(projectRoot, true);
-  await beforeRemove?.();
+  assertCurrent(); await beforeRemove?.(); assertCurrent();
   if (!projectExists) return;
-  await fs.rm(projectRoot, { recursive: true, force: true });
+  await fs.rm(projectRoot, { recursive: true, force: true }); assertCurrent();
 }
 
 async function deleteRunnerReleaseObject(
   release: ReleaseRow,
   objects: RunnerArtifactObjects | null,
+  assertCurrent: () => void = () => {},
 ): Promise<void> {
   if (release.runnerArtifactBytes <= 0 || release.runnerArtifactStore === "local") return;
   const expectedKey = runnerReleaseObjectKey(release.projectId, release.id, release.digest);
@@ -17039,20 +17486,21 @@ async function deleteRunnerReleaseObject(
       "Release artifact belongs to an unavailable object repository; storage metadata was preserved.",
     );
   }
-  await objects.store.delete(expectedKey);
+  assertCurrent(); await objects.store.delete(expectedKey); assertCurrent();
 }
 
 async function deleteProjectRunnerArtifacts(
   internal: SQLiteInternal,
   projectId: string,
   objects: RunnerArtifactObjects | null,
+  assertCurrent: () => void = () => {},
 ): Promise<void> {
   const releases = internal.prepare(
     `SELECT * FROM clank_platform_releases
       WHERE project_id = ? AND runner_artifact_bytes > 0 AND runner_artifact_store <> 'local'
       ORDER BY created_at`,
   ).all(projectId).map(releaseRow);
-  for (const release of releases) await deleteRunnerReleaseObject(release, objects);
+  for (const release of releases) { assertCurrent(); await deleteRunnerReleaseObject(release, objects, assertCurrent); assertCurrent(); }
 }
 
 async function deleteProjectBackups(
@@ -17061,6 +17509,7 @@ async function deleteProjectBackups(
   masterKey: Uint8Array,
   policy: PlatformBackupPolicy,
   objects: PlatformBackupObjects | null,
+  assertCurrent: () => void = () => {},
 ): Promise<void> {
   if (!project.databasePath || !objects) return;
   const manager = await projectBackupManager(
@@ -17069,9 +17518,10 @@ async function deleteProjectBackups(
     masterKey,
     policy,
     objects,
+    assertCurrent,
   );
   try {
-    await manager.purge({ confirmation: "delete all backups" });
+    assertCurrent(); await manager.purge({ confirmation: "delete all backups" }); assertCurrent();
   } finally {
     manager.close();
   }
@@ -17081,18 +17531,21 @@ async function deleteReleaseSnapshot(
   projectsRoot: string,
   projectId: string,
   releaseId: string,
+  assertCurrent: () => void = () => {},
 ): Promise<void> {
   if (!/^[A-Za-z0-9_-]{8,128}$/u.test(projectId) || !/^[A-Za-z0-9_-]{8,128}$/u.test(releaseId)) {
     throw new Error("Release storage identifier is invalid.");
   }
   const parents = await releaseStorageParents(projectsRoot, projectId);
-  if (parents.backups) await deleteReleaseSnapshotFiles(projectsRoot, projectId, releaseId);
+  assertCurrent();
+  if (parents.backups) { await deleteReleaseSnapshotFiles(projectsRoot, projectId, releaseId, assertCurrent); assertCurrent(); }
 }
 
 async function deleteReleaseSnapshotFiles(
   projectsRoot: string,
   projectId: string,
   releaseId: string,
+  assertCurrent: () => void = () => {},
 ): Promise<void> {
   const fsName = "node:fs/promises";
   const fs = await import(fsName) as unknown as {
@@ -17104,8 +17557,8 @@ async function deleteReleaseSnapshotFiles(
   );
   await Promise.all(
     [backupPath, `${backupPath}-wal`, `${backupPath}-shm`]
-      .map((target) => fs.rm(target, { force: true })),
-  );
+      .map((target) => { assertCurrent(); return fs.rm(target, { force: true }); }),
+  ); assertCurrent();
 }
 
 async function releaseStorageParents(
@@ -17858,6 +18311,95 @@ function migrateLegacyTable(internal: SQLiteInternal, legacy: string, current: s
     throw new Error(`Cannot migrate legacy platform table ${legacy}: ${current} already exists.`);
   }
   internal.exec(`ALTER TABLE "${legacy}" RENAME TO "${current}"`);
+}
+
+function canaryObject(value: unknown, keys: readonly string[]): Record<string, unknown> {
+  const object = plainObject(value);
+  if (Object.keys(object).length !== keys.length || Object.keys(object).some(key => !keys.includes(key))) throw new Error("Provider canary metadata shape is invalid.");
+  return object;
+}
+function canaryInteger(value: unknown): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 1) throw new Error("Provider canary integer is invalid.");
+  return Number(value);
+}
+function canaryIdentifier(value: unknown): string {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{1,128}$/u.test(value)) throw new Error("Provider canary identity is invalid.");
+  return value;
+}
+function canaryDigest(value: unknown): string {
+  if (typeof value !== "string" || !/^[a-f0-9]{64}$/u.test(value)) throw new Error("Provider canary digest is invalid.");
+  return value;
+}
+function canaryBinding(value: unknown): DeploymentProviderCanaryBinding {
+  const input = canaryObject(value, ["projectId", "releaseId", "generation", "fence", "incarnation"]);
+  if (typeof input.incarnation !== "string" || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/u.test(input.incarnation)) throw new Error("Provider canary incarnation is invalid.");
+  return Object.freeze({ projectId: canaryIdentifier(input.projectId), releaseId: canaryIdentifier(input.releaseId), generation: canaryInteger(input.generation), fence: canaryInteger(input.fence), incarnation: input.incarnation });
+}
+function samePlatformCanaryBinding(left: DeploymentProviderCanaryBinding, right: DeploymentProviderCanaryBinding): boolean {
+  return left.projectId === right.projectId && left.releaseId === right.releaseId && left.generation === right.generation && left.fence === right.fence && left.incarnation === right.incarnation;
+}
+function platformCanaryCandidateId(operation: PlatformProviderCanaryOperation): string {
+  if (!operation.primary || !operation.capsuleSha256) throw new Error("Provider canary preparation identity is incomplete.");
+  const crypto = (globalThis as any).process.getBuiltinModule("node:crypto");
+  return `canary_${crypto.createHash("sha256").update([operation.primary.projectId, operation.primary.incarnation, operation.controllerEpoch, operation.operationId, operation.capsuleSha256].join("\n")).digest("hex")}`;
+}
+function canaryRetirement(value: unknown, operation: PlatformProviderCanaryOperation): DeploymentProviderCanaryRetirement {
+  const input = canaryObject(value, ["protocol", "primary", "operationId", "controllerEpoch", "releaseId", "capsuleSha256", "candidateProjectId", "retirementEpoch", "phase"]);
+  const primary = canaryBinding(input.primary);
+  if (!operation.primary || !samePlatformCanaryBinding(primary, operation.primary) || input.protocol !== "clank-provider-canary-retirement/1" || input.phase !== "retired"
+    || input.operationId !== operation.operationId || input.controllerEpoch !== operation.controllerEpoch || input.releaseId !== operation.releaseId || input.capsuleSha256 !== operation.capsuleSha256
+    || input.candidateProjectId !== platformCanaryCandidateId(operation) || input.retirementEpoch !== operation.retirementEpoch) throw new Error("Provider canary retirement identity is invalid.");
+  return Object.freeze({ ...input, primary }) as unknown as DeploymentProviderCanaryRetirement;
+}
+function platformCanaryRecord(row: Record<string, unknown> | undefined, projectId: string): PlatformProviderCanaryRecord | null {
+  if (!row) return null;
+  if (row.project_id !== projectId || row.protocol !== 1 || typeof row.operation !== "string" || new TextEncoder().encode(row.operation).byteLength > 64 * 1024) throw new Error("Provider canary journal is invalid.");
+  const epoch = canaryInteger(row.epoch);
+  const raw = canaryObject(JSON.parse(row.operation), ["operationId", "releaseId", "artifactSha256", "capsuleSha256", "controllerEpoch", "retirementEpoch", "primary", "primaryReleaseId", "primaryFence", "nodeId", "origin", "credentialGeneration", "policy", "phase", "outcome", "reason", "retirement", "generation", "createdAt", "updatedAt"]);
+  const operation = raw as unknown as PlatformProviderCanaryOperation;
+  canaryIdentifier(operation.operationId); canaryIdentifier(operation.releaseId); canaryIdentifier(operation.primaryReleaseId); canaryIdentifier(operation.nodeId);
+  canaryDigest(operation.artifactSha256); if (operation.capsuleSha256 !== null) canaryDigest(operation.capsuleSha256);
+  canaryInteger(operation.controllerEpoch); canaryInteger(operation.retirementEpoch); canaryInteger(operation.credentialGeneration); canaryInteger(operation.primaryFence);
+  canaryInteger(operation.createdAt); canaryInteger(operation.updatedAt); canaryInteger(row.updated_at);
+  const policy = validateManagedCanary(canaryObject(operation.policy, ["stages", "maximumErrorRate", "maximumP95Ms", "provider"]) as unknown as ManagedCanaryOptions);
+  if (!policy.provider || JSON.stringify(policy) !== JSON.stringify(operation.policy) || operation.controllerEpoch > operation.retirementEpoch || operation.retirementEpoch > epoch || operation.updatedAt !== row.updated_at
+    || operation.createdAt > operation.updatedAt || operation.releaseId === operation.primaryReleaseId
+    || !["binding", "preparing", "measuring", "retiring", "retired", "activating", "complete"].includes(operation.phase)
+    || ![null, "passed", "failed", "interrupted"].includes(operation.outcome)
+    || operation.reason !== null && (typeof operation.reason !== "string" || operation.reason.length > 1000 || /[\u0000-\u001f]/u.test(operation.reason))
+    || typeof operation.origin !== "string" || operation.origin.length > 2048) throw new Error("Provider canary journal values are invalid.");
+  if (new URL(operation.origin).origin !== operation.origin || new URL(operation.origin).username || new URL(operation.origin).password) throw new Error("Provider canary retained origin is invalid.");
+  if (operation.primary !== null) {
+    const primary = canaryBinding(operation.primary);
+    if (primary.projectId !== projectId || primary.releaseId !== operation.primaryReleaseId || primary.generation !== operation.credentialGeneration || primary.fence !== operation.primaryFence) throw new Error("Provider canary source identity is invalid.");
+    operation.primary = primary;
+  }
+  if (!["binding", "complete"].includes(operation.phase) && (!operation.primary || !operation.capsuleSha256)) throw new Error("Provider canary prepare identity is missing.");
+  if (operation.retirement !== null) operation.retirement = canaryRetirement(operation.retirement, operation);
+  if (["retired", "activating"].includes(operation.phase) && !operation.retirement
+    || operation.phase === "complete" && operation.primary && !operation.retirement
+    || operation.phase === "binding" && (operation.primary !== null || operation.retirement !== null || operation.outcome !== null)
+    || operation.phase === "activating" && operation.outcome !== "passed"
+    || operation.phase === "complete" && (operation.outcome === null || operation.primary === null && operation.outcome !== "interrupted")
+    || ["preparing", "measuring"].includes(operation.phase) && (operation.outcome !== null || operation.retirement !== null)
+    || ["retiring", "retired"].includes(operation.phase) && operation.outcome === null
+    || operation.phase === "retiring" && operation.retirement !== null
+    || operation.generation !== null && (canaryInteger(operation.generation) <= operation.credentialGeneration || !["activating", "complete"].includes(operation.phase))) throw new Error("Provider canary phase is inconsistent.");
+  return { epoch, operation: Object.freeze(operation), serialized: row.operation };
+}
+function canaryPublicStatus(record: PlatformProviderCanaryRecord | null): Record<string, unknown> | null {
+  if (!record) return null;
+  const op = record.operation;
+  return { operationId: op.operationId, controllerEpoch: record.epoch, releaseId: op.releaseId, phase: op.phase, outcome: op.outcome,
+    cleanupRequired: !["retired", "activating", "complete"].includes(op.phase), retryable: op.phase !== "complete", reason: op.reason, updatedAt: op.updatedAt };
+}
+function canaryAwait<Value>(promise: Promise<Value>, signal: AbortSignal): Promise<Value> {
+  return new Promise<Value>((resolve, reject) => {
+    const abort = () => reject(new Error("Provider canary control deadline expired."));
+    if (signal.aborted) { void promise.catch(() => undefined); abort(); return; }
+    signal.addEventListener("abort", abort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
 }
 
 function plainObject(value: unknown): Record<string, unknown> {

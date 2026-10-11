@@ -17,6 +17,53 @@ import type {
   DockerDeploymentRuntimeCandidate,
   DockerDeploymentRuntimeLaunchInput,
 } from "@clank.run/framework/provider-docker";
+import type { DeploymentProviderDataApplyInput } from "@clank.run/framework/provider-data";
+import type { DeploymentProviderCanaryBinding, DeploymentProviderCanaryController, DeploymentProviderCanaryOptions, DeploymentProviderService } from "@clank.run/framework/provider-service";
+import { deploymentProviderCanaryPath, DEPLOYMENT_PROVIDER_CANARY_CONTROL_PROTOCOL, DEPLOYMENT_PROVIDER_CANARY_CONTROL_MEDIA_TYPE } from "@clank.run/framework/provider-service";
+
+declare const canaryPrimary: DeploymentProviderCanaryBinding;
+declare const providerDataInput: DeploymentProviderDataApplyInput;
+declare const canaryService: DeploymentProviderService;
+const codeOnlyProviderInput: DeploymentProviderDataApplyInput = {...providerDataInput,codeOnly:true};
+void codeOnlyProviderInput;
+const invalidCodeOnlyProviderInput: DeploymentProviderDataApplyInput = {
+  ...providerDataInput,
+  // @ts-expect-error code-only verification requires a boolean
+  codeOnly:"true",
+};
+void invalidCodeOnlyProviderInput;
+const providerCanaryOptions: DeploymentProviderCanaryOptions = {readPaths:["/healthz"],maxConcurrent:2,maxOperations:8,maximumDurationMs:60_000,controlTimeoutMs:30_000};
+void providerCanaryOptions;
+deploymentProviderCanaryPath("project_typed", "retire") satisfies string;
+DEPLOYMENT_PROVIDER_CANARY_CONTROL_PROTOCOL satisfies "clank-provider-canary-control/1";
+DEPLOYMENT_PROVIDER_CANARY_CONTROL_MEDIA_TYPE satisfies "application/vnd.clank.provider-canary-control+json";
+// @ts-expect-error controls do not provide promotion or implicit acceptance
+deploymentProviderCanaryPath("project_typed", "promote");
+// @ts-expect-error HTTP deadlines are bounded numeric milliseconds
+const invalidCanaryTimeout: DeploymentProviderCanaryOptions={readPaths:["/healthz"],controlTimeoutMs:"60000"};
+void invalidCanaryTimeout;
+void canaryService.canaries?.prepare({primary:canaryPrimary,controllerEpoch:3,operationId:"canary_typed_01",runtime:providerDataInput.runtime,signal:providerDataInput.signal});
+// @ts-expect-error an admitted canary must have an explicit abort signal
+void canaryService.canaries?.prepare({primary:canaryPrimary,controllerEpoch:3,operationId:"canary_typed_02",runtime:providerDataInput.runtime});
+declare const preparedProviderCanary: Awaited<ReturnType<DeploymentProviderCanaryController["prepare"]>>;
+preparedProviderCanary.route.generation satisfies 1;
+preparedProviderCanary.route.token satisfies string;
+// @ts-expect-error callers cannot substitute an admitted route credential
+preparedProviderCanary.route.token="changed";
+// @ts-expect-error approved public paths remain read-only
+preparedProviderCanary.route.readPaths.push("/private");
+void canaryService.canaries?.retire({primary:canaryPrimary,controllerEpoch:3,operationId:"canary_typed_01",releaseId:"candidate_release",capsuleSha256:providerDataInput.runtime.sha256,retirementEpoch:4});
+// @ts-expect-error retirement must include the current coordinator epoch separately from the prepare epoch
+void canaryService.canaries?.retire({primary:canaryPrimary,controllerEpoch:3,operationId:"canary_typed_01",releaseId:"candidate_release",capsuleSha256:providerDataInput.runtime.sha256});
+// @ts-expect-error retirement must bind the exact source capsule digest
+void canaryService.canaries?.retire({primary:canaryPrimary,controllerEpoch:3,operationId:"canary_typed_01",releaseId:"candidate_release",retirementEpoch:4});
+declare const retiredProviderCanary: Awaited<ReturnType<DeploymentProviderCanaryController["retire"]>>;
+retiredProviderCanary.phase satisfies "retired";
+retiredProviderCanary.retirementEpoch satisfies number;
+// @ts-expect-error an absence receipt does not grant a live route credential
+retiredProviderCanary.route.token;
+// @ts-expect-error retirement identity cannot be replaced by the caller
+retiredProviderCanary.capsuleSha256="changed";
 
 declare const preparedDockerInput: DockerDeploymentRuntimeLaunchInput;
 const isolatedDockerInput: DockerDeploymentRuntimeLaunchInput = {
