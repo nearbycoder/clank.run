@@ -20,6 +20,24 @@ class Element {
   get textContent() { return this.ownText + this.childNodes.map(node => node.textContent).join(''); }
   set textContent(value) { this.replaceChildren(); this.ownText = value; }
 }
+
+for(const label of ['Retry','Synchronize attachments'])test('current refresh failure announces at the focused '+label+' and recovery retains status focus',async t=>{
+ const f=await fixture(t),action=button(f.root,label);let reads=0;
+ f.queue.snapshot=async()=>{if(++reads===1)throw Error('Declared current snapshot failure');return [failed]};action.focus();
+ await observeRefresh(()=>reads===1);assert.equal(f.document.activeElement.getAttribute('role'),'status');assert.match(f.document.activeElement.textContent,/Attachments unavailable for this account/);
+ await observeRefresh(()=>reads===2);assert.equal(button(f.root,'Synchronize attachments').disabled,false);assert.equal(f.document.activeElement.getAttribute('role'),'status','successful recovery must not move focus back to an action');
+});
+
+for(const movedOutside of [true,false])test('held current refresh failure uses settlement-time focus '+(movedOutside?'outside':'inside')+' the queue',async t=>{
+ const f=await fixture(t);let reads=0,reject;
+ f.queue.snapshot=()=>{reads++;return new Promise((_,fail)=>reject=fail)};
+ if(movedOutside)button(f.root,'Retry').focus();else f.elsewhere.focus();
+ await observeRefresh(()=>reads===1);
+ if(movedOutside)f.elsewhere.focus();else button(f.root,'Retry').focus();
+ reject(Error('Declared held current snapshot failure'));await settle();
+ if(movedOutside)assert.equal(f.document.activeElement,f.elsewhere);
+ else{assert.equal(f.document.activeElement.getAttribute('role'),'status');assert.match(f.document.activeElement.textContent,/Attachments unavailable for this account/);}
+});
 const nodes = (root, tag) => root.childNodes.flatMap(node => [...(node.tag === tag ? [node] : []), ...nodes(node, tag)]);
 const button = (root, label) => { const found = nodes(root, 'button').find(node => node.textContent === label); assert.ok(found, label); return found; };
 const failed = { id: 'retained-id', key: 'private-key', path: 'attach', size: 22, status: 'failed', errorCode: 'CONTENT_TYPE_NOT_ALLOWED' };
