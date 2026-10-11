@@ -10,20 +10,20 @@ import { compile } from '../scripts/compiler.mjs';
 
 const execute = promisify(execFile);
 const declarationFixture = "/** IDE documentation keeps  every byte.\n * Including indentation and `templates`. */\nexport interface Contract {\n    readonly value?: Readonly<Record<string, `key-${string}`>>;\n}\nexport declare const value: number;\n";
-const declarationExpected = declarationFixture.replace('    readonly', 'readonly');
+const declarationExpected = "/** IDE documentation keeps  every byte.\n * Including indentation and `templates`. */\nexport interface Contract{\nreadonly value?:Readonly<Record<string,`key-${string}`>>;\n}\nexport declare const value:number;\n";
 const declarationFixtures = {
   // Prefix only known code lines; raw literal/comment lines below are intentional.
   syntax: {
     source: '    /// <reference lib="es2022" />\n    export declare namespace Shapes {\n        interface Item<T extends string = string> {\n            readonly key?: T;\n            [key: `field-${string}`]: unknown;\n            new (...args: unknown[]): Item<T>;\n            <U extends T>(value: U): U;\n        }\n        type Mapped<T> = { readonly [K in keyof T as `get-${string & K}`]?: T[K] };\n        type Result<T> = T extends Promise<infer U> ? U : never;\n        type Pair = [first: string, ...rest: number[]];\n        type Word = "keep  interior" | \'also  exact\';\n        const token: unique symbol;\n        function check(value: unknown): value is Item;\n        function check(value: string): boolean;\n        class Holder<T> { readonly value: T; constructor(value: T); }\n    }\n    import type { Contract as Other } from "./contract.js";\n    export type { Other };\n',
-    expected: '/// <reference lib="es2022" />\nexport declare namespace Shapes {\ninterface Item<T extends string = string> {\nreadonly key?: T;\n[key: `field-${string}`]: unknown;\nnew (...args: unknown[]): Item<T>;\n<U extends T>(value: U): U;\n}\ntype Mapped<T> = { readonly [K in keyof T as `get-${string & K}`]?: T[K] };\ntype Result<T> = T extends Promise<infer U> ? U : never;\ntype Pair = [first: string, ...rest: number[]];\ntype Word = "keep  interior" | \'also  exact\';\nconst token: unique symbol;\nfunction check(value: unknown): value is Item;\nfunction check(value: string): boolean;\nclass Holder<T> { readonly value: T; constructor(value: T); }\n}\nimport type { Contract as Other } from "./contract.js";\nexport type { Other };\n',
+    expected: "/// <reference lib=\"es2022\" />\nexport declare namespace Shapes{\ninterface Item<T extends string = string>{\nreadonly key?:T;\n[key:`field-${string}`]:unknown;\nnew(...args:unknown[]):Item<T>;\n<U extends T>(value:U):U;\n}\ntype Mapped<T> ={readonly[K in keyof T as `get-${string & K}`]?:T[K]};\ntype Result<T> = T extends Promise<infer U> ? U:never;\ntype Pair =[first:string,...rest:number[]];\ntype Word = \"keep  interior\" | 'also  exact';\nconst token:unique symbol;\nfunction check(value:unknown):value is Item;\nfunction check(value:string):boolean;\nclass Holder<T>{readonly value:T;constructor(value:T);}\n}\nimport type{Contract as Other}from \"./contract.js\";\nexport type{Other};\n",
   },
   raw: {
     source: '    /*! License  stays\n      every byte */\n    /** IDE  hover\n     * @example\n     *     preserve indentation\n     */\n    export type Raw<T extends string> = `first\n    ${`nested-${T}`}\n      last`;\n    export type Escaped = "first\\\n        second";\n',
-    expected: '/*! License  stays\n      every byte */\n/** IDE  hover\n     * @example\n     *     preserve indentation\n     */\nexport type Raw<T extends string> = `first\n    ${`nested-${T}`}\n      last`;\nexport type Escaped = "first\\\n        second";\n',
+    expected: "/*! License  stays\n      every byte */\n/** IDE  hover\n     * @example\n     *     preserve indentation\n     */\nexport type Raw<T extends string> = `first\n    ${`nested-${T}`}\n      last`;\nexport type Escaped = \"first\\\n        second\";\n",
   },
   newlines: {
     source: '\t export interface Café {\r\n    first: string;\u2028    second: number;\u2029    readonly 𐐀?: boolean;\r\n }\n',
-    expected: 'export interface Café {\r\nfirst: string;\u2028second: number;\u2029readonly 𐐀?: boolean;\r\n}\n',
+    expected: "export interface Café{\r\nfirst:string; second:number; readonly 𐐀?:boolean;\r\n}\n",
   },
 };
 // These use declaration grammar, but deliberately exceed the private scanner's
@@ -32,6 +32,22 @@ const escapedDeclaration = '    export interface \\u0043ontract {\n        value
 const boundedDeclaration = '    export type Nested = ' + '`start${'.repeat(66) + '"value"' + '}end`'.repeat(66) + ';\n';
 declarationFixtures.escaped = {source: escapedDeclaration, expected: escapedDeclaration};
 declarationFixtures.bounded = {source: boundedDeclaration, expected: boundedDeclaration};
+declarationFixtures.operators = {
+  source: "/** exact ( ) :  ; */\nexport type Transform<T> = { -readonly [ K in keyof T as `get-${string & K}` ] -? : T [ K ] extends ( infer U ) [ ] ? readonly [ U , ... U [ ] ] : T [ K ] } ;\nexport type Select<T> = T extends { value : infer U extends string } ? U : never ;\nexport type Values = -1 | 0x1 | 1n | -2n | \"http://  x\" ;\n",
+  expected: "/** exact ( ) :  ; */\nexport type Transform<T> ={-readonly[K in keyof T as `get-${string & K}`]-?:T[K]extends(infer U)[]? readonly[U,... U[]]:T[K]};\nexport type Select<T> = T extends{value:infer U extends string}? U:never;\nexport type Values = -1 | 0x1 | 1n | -2n | \"http://  x\";\n",
+};
+declarationFixtures.namespace = {
+  source: "/*! License  retained */\nexport declare namespace Outer { interface Shape { readonly size : number ; } namespace Inner { type Record = { [ key : string ] : Shape } ; } }\nexport declare class Holder<T> { private state ; protected readonly key : string ; constructor ( value : T ) ; get value ( ) : T ; set value ( next : T ) ; method<U extends T> ( input : U ) : U ; }\n",
+  expected: "/*! License  retained */\nexport declare namespace Outer{interface Shape{readonly size:number;}namespace Inner{type Record ={[key:string]:Shape};}}\nexport declare class Holder<T>{private state;protected readonly key:string;constructor(value:T);get value():T;set value(next:T);method<U extends T>(input:U):U;}\n",
+};
+declarationFixtures.predicates = {
+  source: "export interface Ready { value : string ; }\nexport declare function ready ( input : unknown ) : input is Ready ;\nexport declare function assertReady ( input : unknown ) : asserts input is Ready ;\nexport interface Callable { ( input : string ) : number ; new ( input : number ) : Ready ; }\n",
+  expected: "export interface Ready{value:string;}\nexport declare function ready(input:unknown):input is Ready;\nexport declare function assertReady(input:unknown):asserts input is Ready;\nexport interface Callable{(input:string):number;new(input:number):Ready;}\n",
+};
+declarationFixtures.exportEdges = {
+  source: "import type { Ready as Imported } from \"./predicates.js\" ;\nexport type { Imported as Exported } ;\nexport * as Library from \"./namespace.js\" ;\nexport { type Callable } from \"./predicates.js\" ;\n",
+  expected: "import type{Ready as Imported}from \"./predicates.js\";\nexport type{Imported as Exported};\nexport * as Library from \"./namespace.js\";\nexport{type Callable}from \"./predicates.js\";\n",
+};
 const fixtures = {
   ordinary: 'export function snapshot() {\n    const first = 7;\n    const second = 9;\n    return [first + second, "a  b", /a  b/u.source];\n}\n',
   literals: 'export function snapshot() {\n    const sql = `SELECT  title,  owner\n  FROM  records\n   \n\t WHERE title = \'a  b\';`;\n    const raw = String.raw`first\\n\n  second\\t\n   `;\n    const escaped = "first\\\n    second";\n    return [sql, raw, escaped, "🧪  café  Ελληνικά", /["\'`/]/u.source];\n}\n',
@@ -192,7 +208,7 @@ test('rebuilding emitted JavaScript and declarations is idempotent', async t => 
 });
 
 
-test('release declarations compact only code indentation and preserve literal, license, JSDoc and newline bytes', async t => {
+test('release declarations compact code indentation and separator spaces while preserving literal, license, JSDoc and newline bytes', async t => {
   const root = await releaseBuild(t);
   for (const [name, fixture] of Object.entries(declarationFixtures)) {
     const actual = await readFile(join(root, 'dist', `${name}.d.ts`), 'utf8');
@@ -205,6 +221,20 @@ test('release declarations compact only code indentation and preserve literal, l
   const env = {...process.env}; delete env.CLANK_SOURCE_MAPS;
   await execute(process.execPath, [join(root, 'scripts', 'build.mjs')], {env, timeout: 15000});
   for (const [name, fixture] of Object.entries(declarationFixtures)) assert.equal(await readFile(join(root, 'dist', `${name}.d.ts`), 'utf8'), fixture.expected, `${name}: idempotence`);
+});
+
+test('release declarations remove interior separator spacing beyond the accepted indentation-only layout', async t => {
+  const root = await releaseBuild(t);
+  const expected = declarationFixtures.operators.expected;
+  const built = await readFile(join(root, 'dist', 'operators.d.ts'), 'utf8');
+  assert.equal(built, expected);
+  assert.ok(built.includes('{ -readonly') === false, 'spaces next to braces are removed');
+  assert.ok(built.includes('{-readonly[K in keyof T as `get-${string & K}`]-?:T[K]'));
+  assert.ok(built.includes('T[K]extends(infer U)[]? readonly[U,... U[]]:T[K]'));
+  assert.ok(built.includes('= -1 | 0x1 | 1n | -2n | "http://  x"'), 'operator and literal boundaries remain');
+  assert.ok(built.includes('/** exact ( ) :  ; */'), 'documentation comment remains exact');
+  const indentationOnly = declarationFixtures.operators.source.replace(/^[ \t]+/gmu, '');
+  assert.ok(Buffer.byteLength(indentationOnly) - Buffer.byteLength(built) >= 40, 'proof requires additional interior savings');
 });
 
 test('documentation audit requires exact selected declaration output and rejects missing, stale or changed bytes', async t => {
