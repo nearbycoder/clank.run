@@ -104,7 +104,8 @@
     "files": 450,
     "ceilingBytes": 8388608,
     "dependencies": 0,
-    "qualification": "One private JavaScript module is added to the exact sorted manifest; no public package subpath is added."
+    "qualification": "One private JavaScript module is added to the exact sorted manifest; no public package subpath is added.",
+    "bytes": 6965448
   },
   "finalChecks": "Complete final-source local and hosted gates are required before protected delivery.",
   "featureAcceptance": {
@@ -122,5 +123,50 @@
       38,
       40
     ]
+  },
+  "inventoryCorrection": {
+    "basis": "Protected main31e613c exact sorted449-file manifest; retained as an independent test-only fixture.",
+    "fixtureSha256": "7bb82e9370fd4ad4b76578b17d14c4cc796b610046c6ab3c00c4aef664b6fcbe",
+    "fullBefore": {
+      "tests": 3580,
+      "pass": 3538,
+      "fail": 5,
+      "cancelled": 0,
+      "skipped": 37
+    },
+    "findings": "Five stale inventory expectations still assumed449 files, including a formerly-invalid450 entry count that is now the legitimate current count. The450-file expectation explicitly permits only the new private wire module, while all prior422/449 exact manifests, swapped/missing/extra-path refusals and inclusive8MiB bounds remain.",
+    "checks": {
+      "22": {
+        "counts": {
+          "tests": 12,
+          "pass": 12,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 0
+        },
+        "sha256": "30ef8d4b4551301223cdfe16bf8173a59a23e4acca9f9bde39633076be586dd4"
+      },
+      "24": {
+        "counts": {
+          "tests": 12,
+          "pass": 12,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 0
+        },
+        "sha256": "42cfb28243011dc762ebed92e2a0858ea2d443824a2521a0c4dd46e1dbbad83b"
+      },
+      "26": {
+        "counts": {
+          "tests": 12,
+          "pass": 12,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 0
+        },
+        "sha256": "43fe7cb14d412ebcec117783cffc9e569ba6990567efb0ed080eaa9f0c6ac181"
+      }
+    },
+    "unchangedProductionBudgetHelper": "5481332e9100463219d56abbfb8343f77fd502c5a5c8a3539aa2cd36b14eb836"
   }
 }
