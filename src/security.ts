@@ -13,6 +13,101 @@ const URL_ATTRIBUTES = new Set([
 
 const TRUSTED_CLIENT_ADDRESSES = new WeakMap<Request, string>();
 
+/** @internal Native transport proof; never inherited by Request.clone(). */
+export interface ExactRequest { readonly method: "GET" | "HEAD"; readonly path: string; readonly accept: string | null; }
+const EXACT_REQUESTS = new WeakMap<Request, {
+  exact: Readonly<ExactRequest>; url: string; fingerprint: string; digest: (value: string) => string;
+  taken: boolean; registered: boolean; active: boolean; handoff?: () => undefined; detach?: () => void;
+}>();
+const ANONYMOUS_HEADERS = new Set("host accept accept-encoding accept-language user-agent connection cache-control pragma dnt sec-gpc sec-fetch-dest sec-fetch-mode sec-fetch-site sec-fetch-user sec-ch-ua sec-ch-ua-mobile sec-ch-ua-platform referer".split(" "));
+const PROXY_HEADERS = new Set("forwarded x-forwarded-for x-forwarded-proto x-forwarded-host x-forwarded-port".split(" "));
+
+function exactHeaderFields(headers: Headers, injected = true): string | undefined {
+  const fields: string[][] = []; let size = 0;
+  for (const [name, value] of headers) {
+    if (!injected && name === "x-clank-client-ip") continue;
+    if (fields.length >= 33 || value.length > 2048 || (size += name.length + value.length + 4) > 8704) return undefined;
+    fields.push([name, value]);
+  }
+  return JSON.stringify(fields.sort((a, b) => a[0]! < b[0]! ? -1 : a[0]! > b[0]! ? 1 : 0));
+}
+
+/** @internal Called only by the native adapter, before Fetch normalization. */
+export function captureExactRequest(method: unknown, target: unknown, rawHeaders: unknown, trustProxy: boolean, digest: (value: string) => string): ((request: Request) => void) | undefined {
+  try {
+    if (method !== "GET" && method !== "HEAD" || typeof target !== "string" || target.length > 512
+      || !target.startsWith("/") || /[^\x21-\x7e]|[%\\?#]|\/\//u.test(target) || target.split("/").some(part => part === "." || part === "..")
+      || !Array.isArray(rawHeaders) || rawHeaders.length > 64 || rawHeaders.length % 2) return undefined;
+    const fields: string[][] = [], seen = new Set<string>(); let size = 0, accept: string | null = null;
+    for (let i = 0; i < rawHeaders.length; i += 2) {
+      const rawName: unknown = rawHeaders[i], rawValue: unknown = rawHeaders[i + 1];
+      if (typeof rawName !== "string" || typeof rawValue !== "string" || rawValue.length > 2048
+        || (size += rawName.length + rawValue.length + 4) > 8192) return undefined;
+      const name = rawName.toLowerCase(), value = rawValue.replace(/^[ \t]+|[ \t]+$/gu, "");
+      if (seen.has(name) || !ANONYMOUS_HEADERS.has(name) && !(trustProxy && PROXY_HEADERS.has(name)) || /[^\x20-\x7e]/u.test(value)
+        || name === "connection" && value.toLowerCase() !== "keep-alive" && value.toLowerCase() !== "close") return undefined;
+      seen.add(name); fields.push([name, value]);
+      if (name === "accept") { if (value.length > 512) return undefined; accept = value; }
+    }
+    const rawFingerprint = digest(JSON.stringify(fields.sort((a, b) => a[0]! < b[0]! ? -1 : a[0]! > b[0]! ? 1 : 0)));
+    fields.length = 0; seen.clear();
+    const exact = Object.freeze({ method, path: target, accept }); let attached = false;
+    // Retain no browser/referrer/forwarding values: only their bounded digest.
+    return request => {
+      if (attached) return; attached = true;
+      try {
+        const url = new URL(request.url), fields = exactHeaderFields(request.headers, false), current = exactHeaderFields(request.headers);
+        if (request.method !== method || request.body || url.pathname !== target || url.search || url.hash || fields === undefined || current === undefined
+          || digest(fields) !== rawFingerprint) return;
+        EXACT_REQUESTS.set(request, { exact, url: request.url, fingerprint: digest(current), digest, taken: false, registered: false, active: false });
+      } catch { /* Missing transport proof only disables observation. */ }
+    };
+  } catch { return undefined; }
+}
+
+/** @internal Returns bounded public metadata only while the exact native request still matches. */
+export function exactRequest(request: Request): Readonly<ExactRequest> | undefined {
+  try {
+    const proof = EXACT_REQUESTS.get(request); if (!proof) return undefined;
+    const fields = exactHeaderFields(request.headers);
+    if (request.url !== proof.url || request.method !== proof.exact.method || request.body || fields === undefined || proof.digest(fields) !== proof.fingerprint) return undefined;
+    return proof.exact;
+  } catch { return undefined; }
+}
+
+/** @internal Reserve one post-write notification; cancellation also detaches the primary tap. */
+export function registerRequestHandoff(request: Request, callback: () => undefined): (() => void) | undefined {
+  const proof = EXACT_REQUESTS.get(request);
+  if (!proof || proof.taken || proof.registered || typeof callback !== "function" || !exactRequest(request)) return undefined;
+  proof.registered = true; proof.active = true; proof.handoff = callback;
+  return () => cancelRequestHandoff(request);
+}
+/** @internal Native adapter alone consumes this after its ordinary first write/end. */
+export function takeRequestHandoff(request: Request): (() => void) | undefined {
+  const proof = EXACT_REQUESTS.get(request); if (!proof || proof.taken) return undefined;
+  proof.taken = true; const callback = proof.handoff; proof.handoff = undefined;
+  if (!callback) return undefined;
+  let called = false;
+  return () => {
+    if (called) return; called = true;
+    if (!proof.active || !exactRequest(request)) { cancelRequestHandoff(request); return; }
+    try { const result: unknown = callback(); if (result !== undefined) { void Promise.resolve(result).catch(() => undefined); cancelRequestHandoff(request); } }
+    catch { cancelRequestHandoff(request); }
+  };
+}
+/** @internal Ends only shadow observation; it never cancels the primary request. */
+export function cancelRequestHandoff(request: Request): void {
+  const proof = EXACT_REQUESTS.get(request);
+  if (proof) { proof.active = false; proof.handoff = undefined; const detach = proof.detach; proof.detach = undefined; try { detach?.(); } catch {} }
+}
+/** @internal Controller cancellation detaches consumer-driven byte notifications. */
+export function requestHandoffActive(request: Request, detach?: () => void): boolean {
+  const proof = EXACT_REQUESTS.get(request);
+  if (!proof?.active) return false;
+  if (detach) { if (proof.detach) return false; proof.detach = detach; }
+  return true;
+}
+
 /** Capture complete bounded log lines; never expose a truncated secret fragment. */
 export async function captureLogLines(stream: AsyncIterable<Uint8Array>, write: (line: string) => void): Promise<void> {
   const decoder = new TextDecoder();
