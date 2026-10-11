@@ -88,6 +88,10 @@ export function retentionHistoryUsage(connection: Pick<SQLiteInternal, "prepare"
 /** Internal hook used by the point-in-time journal. All callbacks are synchronous. */
 export interface SQLiteCaptureConnection {
   readonly path: string;
+  /** Genuine openSQLite handle, idle outside managed reads/writes/control sections. */
+  assertNativeIdle(): void;
+  /** Synchronous native control; managed reentry and structural handles are refused. */
+  withNativeControl<Value>(handler: () => Value): Value;
   exec(sql: string): void;
   prepare(sql: string): SQLiteStatement;
   createSession(options: { table?: string }): { changeset(): Uint8Array; close(): void };

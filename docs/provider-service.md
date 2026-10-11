@@ -531,6 +531,18 @@ transition; do not bypass capture guards or create a replacement base or grant a
 The native metadata crash tests establish neither Docker host eligibility nor provider-wide
 source stop, target activation or the interruption bound for online handoff.
 
+Private runtime initialization now consumes one bounded canonical bootstrap and reads its
+exact mounted catalog through native read-only transactions. Created/started grants permit
+initial capture only; ordinary writes and later control states remain refused. Missing or
+ambiguous native descriptor identity, including SQLite descriptor reuse, refuses enrollment
+while preserving ordinary database support. Native descriptor observation excludes hostile
+same-process interference and does not prove exclusive writer or provider ownership.
+Initialization rechecks authority inside backup, worker and durable publication boundaries.
+Workers retain default Linux namespace isolation. Revocation or close cannot acknowledge a
+later publication; uncertain owned files remain for recovery. A killed initializer cannot
+adopt its retained capture on restart. These private tests do not establish Docker runtime
+mounts, provider-wide stop, target activation or the online interruption bound.
+
 Continue with [Provider data lifecycle](provider-data-lifecycle.md),
 [Provider Docker runtime](provider-docker-runtime.md),
 [Provider runtime ingress](provider-runtime-ingress.md),

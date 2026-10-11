@@ -1,3 +1,5 @@
+import { SQLITE_INTERNAL } from "./sqlite-internal.ts";
+import { createPinnedSQLiteChildDirectory, type PinnedSQLiteDirectory } from "./sqlite-sandbox.ts";
 import { runSQLiteTask } from "./sqlite-task.ts";
 import { backupSQLite, restoreSQLiteBackup } from "./migrations.ts";
 import type { ObjectStore } from "./object-storage.ts";
@@ -136,6 +138,48 @@ export async function openBackupManager(options: BackupManagerOptions, assertCur
   const manager = await (options.objects ? openObjectBackupManager(options, current) : openLocalBackupManager(options, current));
   try { current?.(); return manager; } catch (error) { manager.close(); throw error; }
 }
+
+// The first private source base has one owned namespace and no timer, pruning,
+// restore API or public handle. Failed attempts preserve bounded forensic files.
+Object.defineProperty(openBackupManager,SQLITE_INTERNAL,{value:Object.freeze({async source(token:object,root:PinnedSQLiteDirectory,parents:readonly PinnedSQLiteDirectory[]):Promise<BackupManifest>{
+  const {openBackend}=await import("./backend.ts");
+  const context=(openBackend as any)[SQLITE_INTERNAL].sourceContext(token);
+  context.current();const fsName="node:fs/promises",nativeName="node:fs",pathName="node:path";
+  const [fs,native,path]=await Promise.all([import(fsName),import(nativeName),import(pathName)]);context.current();
+  const pins=[...parents];let completed=false,renamed=false,id="",base:PinnedSQLiteDirectory|undefined,stage:PinnedSQLiteDirectory|undefined,key:Uint8Array|undefined;
+  const current=()=>{
+    context.current();
+    for(const pin of pins){const retained=native.fstatSync(pin.fd),visible=native.lstatSync(pin===stage&&renamed?path.join(base!.path,id):pin.path);if(retained.dev!==visible.dev||retained.ino!==visible.ino||!visible.isDirectory()||visible.uid!==(globalThis as any).process.getuid()||(visible.mode&0o022)!==0)throw new Error("Private recovery directory changed.");}
+  };
+  const checked=async<T>(operation:()=>Promise<T>):Promise<T>=>{current();const value=await operation();current();return value;};
+  const sync=async(file:string)=>{current();const handle=await fs.open(file,"r");try{current();await checked(()=>handle.sync());}finally{await handle.close();}current();};
+  try{
+    current();base=await createPinnedSQLiteChildDirectory(root,"base",current);pins.push(base);current();
+    id=`bk_${Date.now()}_${randomId(18)}`;
+    stage=await createPinnedSQLiteChildDirectory(base,".stage-"+id,current);pins.push(stage);current();
+    key=await encryptionKey(context.key);current();
+    const snapshot=path.join(base.path,".snapshot-"+id+".sqlite"),plain=base.anchor+"/"+path.basename(snapshot),verified=base.anchor+"/.verified-"+id+".sqlite";
+    await (backupSQLite as any)[SQLITE_INTERNAL].source(token,snapshot,base,pins);current();
+    const snapshotIdentity=native.lstatSync(plain),maximum=context.binding.capture.maxStateBytes*4;
+    const digest=await checked(()=>fileDigest(plain,maximum,current));
+    const database=await checked(()=>runSQLiteTask<any>("inspection","inspectSQLite",[snapshot],pins,token));
+    const manifest:BackupManifest={protocol:"clank-backup/1",id,source:path.basename(context.path),createdAt:Date.now(),reason:"point-in-time recovery epoch",databaseBytes:digest.bytes,databaseSha256:digest.sha256,databaseRevision:database.revision,migrationCount:database.migrationCount,latestMigration:database.latestMigration,encryption:{algorithm:"AES-256-GCM",keyId:context.binding.capture.keyId}};
+    const encoded=JSON.stringify(manifest),aad=new TextEncoder().encode(encoded),envelope=stage.anchor+"/database.enc",manifestFile=stage.anchor+"/manifest.json";
+    await checked(()=>encryptFile(plain,envelope,key!,aad,current));
+    const mac=await checked(()=>hmac(encoded,key!,current));
+    await checked(()=>fs.writeFile(manifestFile,JSON.stringify({manifest,mac})+"\n",{mode:0o600,flag:"wx"}));
+    const signed=JSON.parse(await checked(()=>fs.readFile(manifestFile,"utf8")));
+    if(JSON.stringify(signed.manifest)!==encoded||signed.mac!==await checked(()=>hmac(encoded,key!,current)))throw new Error("Private base manifest changed.");
+    await checked(()=>decryptFile(envelope,verified,key!,aad,current));const verifiedIdentity=native.lstatSync(verified);
+    const actual=await checked(()=>fileDigest(verified,maximum,current));
+    if(actual.bytes!==digest.bytes||actual.sha256!==digest.sha256)throw new Error("Private base verification failed.");
+    await checked(()=>runSQLiteTask("inspection","verifySQLite",[path.join(base!.path,path.basename(verified))],pins,token));
+    await sync(envelope);await sync(manifestFile);await sync(stage.anchor);
+    current();await fs.rename(base.anchor+"/"+path.basename(stage.path),base.anchor+"/"+id);renamed=true;current();await sync(base.anchor);
+    for(const [file,identity] of [[plain,snapshotIdentity],[verified,verifiedIdentity]] as const){current();const actual=native.lstatSync(file);if(actual.dev!==identity.dev||actual.ino!==identity.ino)throw new Error("Private backup temporary identity changed.");native.unlinkSync(file);}
+    await sync(base.anchor);current();completed=true;return manifest;
+  }finally{key?.fill(0);try{await stage?.close();}finally{await base?.close();}if(completed)context.current();}
+}})});
 
 async function openLocalBackupManager(options: BackupManagerOptions, assertCurrent?: () => undefined): Promise<BackupManager> {
   const fs = await nodeFs();
@@ -1404,21 +1448,22 @@ async function encryptFile(
   destination: string,
   key: Uint8Array,
   additionalData: Uint8Array,
+  current?:()=>void,
 ): Promise<void> {
-  const fs = await nodeFs();
-  const nodeCrypto = await import("node:crypto") as any;
-  const streams = await import("node:stream/promises") as any;
-  const nativeFs = await import("node:fs") as any;
+  current?.();const fs = await nodeFs();current?.();
+  const nodeCrypto = await import("node:crypto") as any;current?.();
+  const streams = await import("node:stream/promises") as any;current?.();
+  const nativeFs = await import("node:fs") as any;current?.();
   const iv = nodeCrypto.randomBytes(12);
   const cipher = nodeCrypto.createCipheriv("aes-256-gcm", key, iv);
   cipher.setAAD(additionalData);
-  await fs.writeFile(destination, concatenate(MAGIC, iv), { mode: 0o600, flag: "wx" });
+  await fs.writeFile(destination, concatenate(MAGIC, iv), { mode: 0o600, flag: "wx" });current?.();
   await streams.pipeline(
     nativeFs.createReadStream(source),
     cipher,
     nativeFs.createWriteStream(destination, { flags: "a", mode: 0o600 }),
   );
-  await fs.appendFile(destination, cipher.getAuthTag());
+  current?.();await fs.appendFile(destination, cipher.getAuthTag());current?.();
 }
 
 async function encryptBytes(
@@ -1551,12 +1596,13 @@ async function decryptFile(
   destination: string,
   key: Uint8Array,
   additionalData: Uint8Array,
+  current?:()=>void,
 ): Promise<void> {
-  const fs = await nodeFs();
-  const nodeCrypto = await import("node:crypto") as any;
-  const streams = await import("node:stream/promises") as any;
-  const nativeFs = await import("node:fs") as any;
-  const stats = await fs.lstat(source);
+  current?.();const fs = await nodeFs();current?.();
+  const nodeCrypto = await import("node:crypto") as any;current?.();
+  const streams = await import("node:stream/promises") as any;current?.();
+  const nativeFs = await import("node:fs") as any;current?.();
+  const stats = await fs.lstat(source);current?.();
   if (!stats.isFile() || stats.isSymbolicLink() || stats.size <= MAGIC.byteLength + 12 + 16) {
     throw new Error("Encrypted backup envelope is invalid.");
   }
@@ -1564,14 +1610,14 @@ async function decryptFile(
   let header: Uint8Array;
   let tag: Uint8Array;
   try {
-    header = new Uint8Array(MAGIC.byteLength + 12);
+    current?.();header = new Uint8Array(MAGIC.byteLength + 12);
     tag = new Uint8Array(16);
-    await handle.read(header, 0, header.byteLength, 0);
-    await handle.read(tag, 0, tag.byteLength, stats.size - tag.byteLength);
+    await handle.read(header, 0, header.byteLength, 0);current?.();
+    await handle.read(tag, 0, tag.byteLength, stats.size - tag.byteLength);current?.();
   } finally {
     await handle.close();
   }
-  if (!bytesEqual(header.slice(0, MAGIC.byteLength), MAGIC)) throw new Error("Encrypted backup magic is invalid.");
+  current?.();if (!bytesEqual(header.slice(0, MAGIC.byteLength), MAGIC)) throw new Error("Encrypted backup magic is invalid.");
   const decipher = nodeCrypto.createDecipheriv("aes-256-gcm", key, header.slice(MAGIC.byteLength));
   decipher.setAAD(additionalData);
   decipher.setAuthTag(tag);
@@ -1583,28 +1629,28 @@ async function decryptFile(
       }),
       decipher,
       nativeFs.createWriteStream(destination, { flags: "wx", mode: 0o600 }),
-    );
+    );current?.();
   } catch (error) {
-    await fs.rm(destination, { force: true });
+    if(!current)await fs.rm(destination, { force: true });
     throw new Error(`Backup decryption failed: ${safeError(error)}`);
   }
 }
 
-async function fileDigest(path: string, maximum: number): Promise<{ bytes: number; sha256: string }> {
-  const fs = await nodeFs();
-  const nodeCrypto = await import("node:crypto") as any;
-  const nativeFs = await import("node:fs") as any;
-  const stats = await fs.lstat(path);
+async function fileDigest(path: string, maximum: number,current?:()=>void): Promise<{ bytes: number; sha256: string }> {
+  current?.();const fs = await nodeFs();current?.();
+  const nodeCrypto = await import("node:crypto") as any;current?.();
+  const nativeFs = await import("node:fs") as any;current?.();
+  const stats = await fs.lstat(path);current?.();
   if (!stats.isFile() || stats.isSymbolicLink()) throw new Error("Backup input must be a regular file.");
   if (stats.size > maximum) throw new Error(`Database exceeds backup limit of ${maximum} bytes.`);
   const digest = nodeCrypto.createHash("sha256");
   let bytes = 0;
   for await (const chunk of nativeFs.createReadStream(path)) {
-    bytes += chunk.byteLength;
+    current?.();bytes += chunk.byteLength;
     if (bytes > maximum) throw new Error(`Database exceeds backup limit of ${maximum} bytes.`);
     digest.update(chunk);
   }
-  return { bytes, sha256: digest.digest("hex") };
+  current?.();return { bytes, sha256: digest.digest("hex") };
 }
 
 function inspectSQLite(path: string): Promise<{
@@ -1751,9 +1797,10 @@ async function encryptionKey(value: string | Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(await crypto.subtle.digest("SHA-256", input));
 }
 
-async function hmac(value: string, key: Uint8Array): Promise<string> {
-  const imported = await crypto.subtle.importKey("raw", key, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const bytes = new Uint8Array(await crypto.subtle.sign("HMAC", imported, new TextEncoder().encode(value)));
+async function hmac(value: string, key: Uint8Array,current?:()=>void): Promise<string> {
+  current?.();
+  const imported = await crypto.subtle.importKey("raw", key, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);current?.();
+  const bytes = new Uint8Array(await crypto.subtle.sign("HMAC", imported, new TextEncoder().encode(value)));current?.();
   return base64Url(bytes);
 }
 

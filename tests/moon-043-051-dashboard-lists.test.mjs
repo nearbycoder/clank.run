@@ -256,11 +256,7 @@ test("043–049: controls have visible native labels, status counts and mobile l
   for (const id of ["member-count", "invitation-count", "release-count", "preview-count", "backup-count", "usage-project-count"]) assert.match(html, new RegExp(`id="${id}" role="status"`));
   assert.match(html, /Filters affect rows only. Totals and CSV include every project/);
   assert.match(html, /\.operational-id code\{[^}]*overflow-wrap:anywhere/);
-<<<<<<< HEAD
-  assert.match(lines.find(line => line.startsWith("async function openProject(")), /if\(state.currentProject!==id\)\{if\(state.incidentScope\)resetIncidentWorkspace\(\);if\(state.sloScope\)resetSloWorkspace\(\);resetReleaseWindowView\(\);resetDependencyState\(\);saveEnvironmentDraft\(\);state.environmentProject=null;state.releaseSearch="";state.releaseStatus="";state.releaseArtifacts="all";state.previewSort="expiry";state.backupSearch="";state.backupSort="newest"/);
-=======
-  assert.match(lines.find(line => line.startsWith("async function openProject(")), /if\(state.currentProject!==id\)\{resetRecoveryView\(\);resetReleaseWindowView\(\);resetDependencyState\(\);saveEnvironmentDraft\(\);state.environmentProject=null;state.releaseSearch="";state.releaseStatus="";state.releaseArtifacts="all";state.previewSort="expiry";state.backupSearch="";state.backupSort="newest"/);
->>>>>>> 60f05b2479b4b62997d11bd3cdf2b6505fe0fa94
+  assert.match(lines.find(line => line.startsWith("async function openProject(")), /if\(state.currentProject!==id\)\{resetRecoveryView\(\);if\(state.incidentScope\)resetIncidentWorkspace\(\);if\(state.sloScope\)resetSloWorkspace\(\);resetReleaseWindowView\(\);resetDependencyState\(\);saveEnvironmentDraft\(\);state.environmentProject=null;state.releaseSearch="";state.releaseStatus="";state.releaseArtifacts="all";state.previewSort="expiry";state.backupSearch="";state.backupSort="newest"/);
 });
 
 

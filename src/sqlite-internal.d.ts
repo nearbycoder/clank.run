@@ -43,6 +43,8 @@ export declare function isRetentionHeld(connection: Pick<SQLiteInternal, "prepar
 /** Internal hook used by the point-in-time journal. All callbacks are synchronous. */
 export interface SQLiteCaptureConnection {
     readonly path: string;
+    assertNativeIdle(): void;
+    withNativeControl<Value>(handler: () => Value): Value;
     exec(sql: string): void;
     prepare(sql: string): SQLiteStatement;
     createSession(options: {
