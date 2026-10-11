@@ -1,0 +1,126 @@
+{
+  "basisHead": "31e613c95647abb0b609ac37912c7b1286bbf482",
+  "scope": "Shared first-base authentication and correlation wire protocol. No source authority, socket transport, coupled source launch, readiness, writer stop or target activation is implemented by this formatter.",
+  "protocol": {
+    "version": "clank-provider-source-worker/1",
+    "keyDerivation": "HMAC-SHA256 with separate request/response contexts bound to grant digest, exact container ID, source incarnation and a fresh server-generated channel epoch. Caller key bytes are copied from bounded native slots; shared memory is refused.",
+    "requestMaximumBytes": 2048,
+    "responseMaximumBytes": 8192,
+    "operations": "One sequential backup, inspection and verification of the same generated backup ID. This is the existing initial private source base, not a general or live SQL channel.",
+    "correlation": "Strict canonical own-data field sets, one pending request, fresh nonces, monotonic three-stage sequence and a digest of the complete request in the response. Receipt copies/foreign receipts/replay refuse.",
+    "failure": "An authenticated refusal, uncertain response or explicit close prevents further initialization. Completed server sessions cannot be adopted; each new server mints a fresh channel epoch. Keys are zeroed on close.",
+    "publicExportsChanged": false,
+    "persistentSchemasChanged": false,
+    "runtimeProfilesChanged": false
+  },
+  "nativeWireRuns": {
+    "22": {
+      "log": "/tmp/clank-review-2026-10-08/source-worker-wire-31e613c-01/wire-native22-04.log",
+      "sha256": "a75159c96716951280838b9f3340d9c9014b4908a716256093f5590aceaac063",
+      "counts": {
+        "tests": 31,
+        "pass": 31,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      }
+    },
+    "24": {
+      "log": "/tmp/clank-review-2026-10-08/source-worker-wire-31e613c-01/wire-native24-04.log",
+      "sha256": "b9a8549ffe09227bdb36422c632e267874570bcb200e0cca876b912855a45da4",
+      "counts": {
+        "tests": 31,
+        "pass": 31,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      }
+    },
+    "26": {
+      "log": "/tmp/clank-review-2026-10-08/source-worker-wire-31e613c-01/wire-native26-04.log",
+      "sha256": "4df9d5c1132b9887eb827b61eddec7009e835138d86ef53e1b9f212a3291861d",
+      "counts": {
+        "tests": 31,
+        "pass": 31,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      }
+    }
+  },
+  "nativeSourceRuntime": {
+    "22": {
+      "log": "/tmp/clank-review-2026-10-08/source-worker-wire-31e613c-01/source-native22-05.log",
+      "sha256": "c61170aeaba69ddd897f9153f66e8bfb65309d95100a1e2115b4eb53b3519997",
+      "counts": {
+        "tests": 103,
+        "pass": 103,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      }
+    },
+    "24": {
+      "log": "/tmp/clank-review-2026-10-08/source-worker-wire-31e613c-01/source-native24-05.log",
+      "sha256": "67324f8df314b15260166b03d7b28d2b2f40794aec984b7cd2d67a493da41a6c",
+      "counts": {
+        "tests": 103,
+        "pass": 103,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      }
+    },
+    "26": {
+      "log": "/tmp/clank-review-2026-10-08/source-worker-wire-31e613c-01/source-native26-05.log",
+      "sha256": "2a142d2474d575c23217503aa1ec3a9fd79978cf73873b4a03ec1d3b8d6887d6",
+      "counts": {
+        "tests": 103,
+        "pass": 103,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      }
+    }
+  },
+  "coverage": {
+    "wireLines": 100,
+    "wireBranches": 94.78,
+    "wireFunctions": 100
+  },
+  "integrationQualification": "The 31-case wire selection includes independent HMAC calculations and an actual default Linux backup/inspection/verification worker pipeline. Independent native SQLite reads verify two exact snapshot rows and unchanged source bytes. Its broker maps fixed fixture paths and does not mint provider authority or prove coupled Docker bootstrap.",
+  "pairedBuild": {
+    "outputs": 321,
+    "node22And26Identical": true,
+    "newOutput": "provider-source-worker-wire.js",
+    "existingSourceTaskOutput": "Shared erased type import changes blank lines only; every nonblank line is byte-identical to protected PR375 output."
+  },
+  "packedTypes": {
+    "log": "/tmp/clank-review-2026-10-08/source-worker-wire-31e613c-01/wire-types-03.log",
+    "sha256": "a9d29fdbcd742a859fd291765c09c9e21ee9ce75835bc35ffb02782826971acc",
+    "counts": {}
+  },
+  "releaseManifest": {
+    "files": 450,
+    "ceilingBytes": 8388608,
+    "dependencies": 0,
+    "qualification": "One private JavaScript module is added to the exact sorted manifest; no public package subpath is added."
+  },
+  "finalChecks": "Complete final-source local and hosted gates are required before protected delivery.",
+  "featureAcceptance": {
+    "accepted": 29,
+    "pending": [
+      7,
+      9,
+      10,
+      13,
+      14,
+      17,
+      30,
+      36,
+      37,
+      38,
+      40
+    ]
+  }
+}

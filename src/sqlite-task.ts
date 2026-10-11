@@ -1,4 +1,5 @@
 import { SQLITE_INTERNAL } from "./sqlite-internal.ts";
+import type { SourceSQLiteTaskRequest } from "./provider-source-worker-wire.ts";
 // Tenant-controlled schemas, triggers and SQL must never execute on the shared
 // control-plane event loop. Linux workers default to a private filesystem namespace.
 import { prepareSQLiteSandbox, assertPinnedSQLiteDirectory, SQLITE_RESOURCE_LIMITS, type PinnedSQLiteDirectory } from "./sqlite-sandbox.ts";
@@ -101,13 +102,6 @@ const WORKER_MODULES: Record<SQLiteTaskModule, string> = {
 };
 
 /** Private transport projection, not source authority or a worker execution API. */
-interface SourceSQLiteTaskRequest {
-  readonly protocol: "clank-source-sqlite-task/1";
-  readonly operation: "backup" | "inspect" | "verify";
-  readonly backupId: string;
-  readonly temporaryId: string | null;
-}
-
 interface SourceSQLiteTaskProjection {
   readonly request: SourceSQLiteTaskRequest;
   readonly arguments: readonly string[];
