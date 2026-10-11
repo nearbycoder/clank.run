@@ -309,7 +309,8 @@ test('missing version-two publication schema is refused on native startup withou
 
 for(const mutation of ['missing','duplicate','phase','bytes'])test(`malformed ${mutation} receipt refuses native startup without rewriting retained evidence`,async t=>{
   const f=await fixture(t);await f.fresh();accepted(await f.stage());await f.platform.close();const original=f.raw()[0],receipt=JSON.parse(original.upload_publication_receipt);
-  const corrupt=mutation==='missing'?null:mutation==='duplicate'?original.upload_publication_receipt.replace('{','{"phase":"submitted",'):JSON.stringify({...receipt,...(mutation==='phase'?{phase:'submitted'}:{artifactBytes:receipt.artifactBytes+1})});
+  assert.ok(original.upload_publication_receipt.startsWith('{'));
+  const corrupt=mutation==='missing'?null:mutation==='duplicate'?'{"phase":"submitted",'+original.upload_publication_receipt.slice(1):JSON.stringify({...receipt,...(mutation==='phase'?{phase:'submitted'}:{artifactBytes:receipt.artifactBytes+1})});
   f.sql.prepare('UPDATE clank_platform_releases SET upload_publication_receipt=? WHERE id=?').run(corrupt,original.id);
   const before=f.raw()[0],result=await f.refusedRestart();assert.equal(result.signal,'SIGKILL',result.output);assert.match(result.output,/publication receipt|upload-only/);assert.deepEqual(f.raw()[0],before);assert.equal(f.sql.prepare('SELECT count(*) n FROM clank_platform_provider_generations').get().n,0);
 });
