@@ -119,10 +119,11 @@ export function normalizeShadowReport(value: unknown, maxAttempts: number): Shad
 }
 
 /** @internal Schema identity is separate from per-session policy and enablement. */
-export const shadowSchemaIdentity = "clank-platform-shadow/1";
+export const shadowSchemaIdentity = "clank-platform-shadow/2";
+export interface ShadowSchemaIdentity { readonly enrollmentId: string; readonly version: 1 | 2; }
 
 /** @internal Read only: protocol-three startup must never reconstruct missing state. */
-export function assertProviderShadowSchema(connection: Pick<SQLiteInternal, "prepare">): string {
+export function assertProviderShadowSchema(connection: Pick<SQLiteInternal, "prepare">): ShadowSchemaIdentity {
   const invalid = (): never => { const error = new Error("Retained shadow schema is missing or invalid; preserve it for recovery."); Object.assign(error, { code: "SUPERVISOR_SHADOW_SCHEMA" }); throw error; };
   const schemas = {
     clank_platform_shadow_state: ["singleton:INTEGER:0:1", "protocol:INTEGER:1:0", "enrollment_id:TEXT:1:0", "schema_id:TEXT:1:0"],
@@ -152,7 +153,12 @@ export function assertProviderShadowSchema(connection: Pick<SQLiteInternal, "pre
     || !releases.some(column => column.name === "upload_request_digest" && column.type === "TEXT" && column.notnull === 0)) invalid();
   const rows = connection.prepare("SELECT * FROM clank_platform_shadow_state LIMIT 2").all();
   const row = rows[0];
-  if (rows.length !== 1 || row.singleton !== 1 || row.protocol !== 1 || row.schema_id !== shadowSchemaIdentity
+  if (rows.length !== 1 || row.singleton !== 1 || row.protocol !== 1 || !["clank-platform-shadow/1", shadowSchemaIdentity].includes(String(row.schema_id))
     || typeof row.enrollment_id !== "string" || !/^[a-f0-9]{64}$/u.test(row.enrollment_id)) invalid();
-  return row.enrollment_id as string;
+  const version = row.schema_id === shadowSchemaIdentity ? 2 : 1;
+  const publication = releases.find(column => column.name === "upload_publication_receipt");
+  if (version === 1) {
+    if (publication || connection.prepare("SELECT 1 FROM clank_platform_releases WHERE purpose='shadow-upload' LIMIT 1").get()) invalid();
+  } else if (!publication || publication.type !== "TEXT" || publication.notnull !== 0 || publication.dflt_value !== null) invalid();
+  return Object.freeze({enrollmentId:row.enrollment_id as string,version});
 }

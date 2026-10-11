@@ -42,6 +42,7 @@ export declare function emptyShadowReport(): ShadowReport;
 export declare function normalizeShadowReport(value: unknown, maxAttempts: number): ShadowReport;
 
 /** @internal Schema identity is separate from per-session policy and enablement. */
-export declare const shadowSchemaIdentity = "clank-platform-shadow/1";
+export declare const shadowSchemaIdentity = "clank-platform-shadow/2";
+export interface ShadowSchemaIdentity { readonly enrollmentId: string; readonly version: 1 | 2; }
 /** @internal Read only: protocol-three startup must never reconstruct missing state. */
-export declare function assertProviderShadowSchema(connection: Pick<SQLiteInternal, "prepare">): string;
+export declare function assertProviderShadowSchema(connection: Pick<SQLiteInternal, "prepare">): ShadowSchemaIdentity;
