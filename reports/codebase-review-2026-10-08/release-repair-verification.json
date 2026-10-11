@@ -1,0 +1,61 @@
+{
+  "protocol": 1,
+  "kind": "accepted maintenance, no feature increment",
+  "main": "53cfec2cc6daa6e348d157a0b8ca7ea9f147e1ad",
+  "reviewedHead": "4705a95e24d8ce5906ca23c4cb97fd2e5a6f4b16",
+  "actualNativeGateHead": "6659e8a501c545c2897ef55db58e47666041b446",
+  "exactTree": "e63b94e923ee2d12b40fbdf425d5bcdb979bd9e8",
+  "mergedPRs": [
+    360,
+    361
+  ],
+  "incorporatedClosedPR": 362,
+  "sourceFilesVerified": 1175,
+  "distFilesVerified": 293,
+  "preservedLocalFiles": 23,
+  "nativeGates": {
+    "26.10": {
+      "tests": 2460,
+      "passed": 2448,
+      "failed": 0,
+      "cancelled": 0,
+      "privilegedSkips": 12,
+      "coverageProfiles": 3018
+    },
+    "22.16": {
+      "tests": 2460,
+      "passed": 2448,
+      "failed": 0,
+      "cancelled": 0,
+      "privilegedSkips": 12,
+      "coverageProfiles": 3020
+    }
+  },
+  "package": {
+    "files": 422,
+    "unpackedBytes": 6040945,
+    "ceiling": 6291456,
+    "runtimeDependencies": 0
+  },
+  "packedTypes": {
+    "fixtures": 39,
+    "existingDiagnostics": 158,
+    "newDiagnostics": 0,
+    "baseline": 163
+  },
+  "hostedChecks": {
+    "head": "4705a95e24d8ce5906ca23c4cb97fd2e5a6f4b16",
+    "passed": 8,
+    "annotation": "Ubuntu runner migration notice"
+  },
+  "localEvidence": {
+    "path": "/tmp/clank-review-2026-10-08/declaration-combined-6659e8a-full-01/evidence-final-01.json",
+    "sha256": "172d60e99e2a39834c6dbbd9ee4927858db517c69fa40a3906f00a20e570a5d6"
+  },
+  "qualifications": [
+    "Native execution on6659, source/output equality qualifies4705 and53cfec2; no relabeling of actual runtime head.",
+    "Twelve privileged Docker/XFS skips perruntime; no new host certification.",
+    "No new feature accepted:29complete/11remaining.",
+    "Historical failures remain retained; historical SLO guardian failure remains unresolved."
+  ]
+}
