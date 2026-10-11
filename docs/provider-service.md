@@ -504,6 +504,33 @@ failed canary leaves the primary database and release authoritative. Native SQLi
 fixtures and injected runtime lifecycle tests are separate from the real Docker profile;
 neither certifies a production host or physical authenticator.
 
+## Retained handoff barriers
+
+The private handoff foundation does not enable online transfer or expose an enrollment API.
+Unmarked provider roots keep ordinary startup behavior. Directory permission normalization
+requires a safe native inspection proving the owner is unmarked. Marked, malformed or uncertain
+state refuses without permission repair. A permission-drifted legacy WAL owner can also refuse
+when inspection cannot prove marker absence without creating sidecars; preserve it for operator
+recovery, with no automatic chmod, checkpoint or cleanup. Unchanged private WAL roots retain
+their existing startup behavior. A retained handoff marker binds the provider node, native
+Docker daemon identity and owner label. Startup must validate that exact
+execution domain and every bounded catalog before opening provider data or performing Docker
+orphan cleanup. A different or unavailable daemon is not evidence that the source is absent.
+
+Any retained barrier refuses ordinary startup for the whole provider root. This intentional
+restriction follows the launcher's owner-wide cleanup: selective project recovery needs a
+separately reviewed lifecycle. Refusal is not a stop receipt. Missing, partial, newer or corrupt
+metadata remains untouched; deleting it or retargeting the owner is not a recovery procedure.
+Private installation and barrier writes are permitted only before ordinary service admission.
+A later runtime bridge must establish live quiescence, exact runtime identity and native stop
+proof separately.
+
+Retained capture created before runtime enrollment may also refuse normal `openBackend`
+bootstrap. Preserve the source and capture repository for a reviewed recovery or downtime
+transition; do not bypass capture guards or create a replacement base or grant automatically.
+The native metadata crash tests establish neither Docker host eligibility nor provider-wide
+source stop, target activation or the interruption bound for online handoff.
+
 Continue with [Provider data lifecycle](provider-data-lifecycle.md),
 [Provider Docker runtime](provider-docker-runtime.md),
 [Provider runtime ingress](provider-runtime-ingress.md),
