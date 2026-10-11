@@ -151,6 +151,27 @@ export function openPlatformProjectCosts(sql: SQLiteInternal, options?: Platform
     if (closed) fail(503, "COST_CLOSED", "Project cost controller is closed.");
     protocol(); authority?.authorize(admin);
   };
+  let finalChecks: (() => void)[] | undefined;
+  const remember = (query: string, parameters: readonly (string | number)[]) => {
+    if (!finalChecks) fail(503, "COST_WRITE_FAILED", "Cost acknowledgment requires its native transaction.");
+    const statement = sql.prepare(query), expected = JSON.stringify(statement.get(...parameters));
+    finalChecks!.push(() => {
+      if (JSON.stringify(statement.get(...parameters)) !== expected) fail(503, "COST_WRITE_FAILED", "An acknowledged cost record changed before commit.");
+    });
+  };
+  const transaction = <T>(work: () => T): T => {
+    const parent = finalChecks, checks: (() => void)[] = [];
+    try {
+      return sql.transaction(() => {
+        finalChecks = checks;
+        remember("SELECT * FROM clank_project_cost_state WHERE singleton=1", []);
+        const result = work();
+        // Native audit and authority callbacks run before the final readbacks.
+        for (const verify of checks) verify();
+        return result;
+      });
+    } finally { finalChecks = parent; }
+  };
   const parse = <T>(text: unknown): T => {
     if (typeof text !== "string" || new TextEncoder().encode(text).byteLength > 16_384) fail(409, "COST_STORAGE_INVALID", "Retained cost metadata is invalid.");
     try { return JSON.parse(text as string); } catch { return fail(409, "COST_STORAGE_INVALID", "Retained cost metadata is invalid."); }
@@ -228,6 +249,7 @@ export function openPlatformProjectCosts(sql: SQLiteInternal, options?: Platform
     const inserted = sql.prepare("INSERT INTO clank_project_cost_receipts VALUES(?,?,?,?,?)").run(projectId, authority.actorId, operationId, request, result);
     const retained = sql.prepare("SELECT request,result FROM clank_project_cost_receipts WHERE project_id=? AND actor_id=? AND operation_id=?").get(projectId, authority.actorId, operationId);
     if (Number(inserted.changes) !== 1 || retained?.request !== request || retained.result !== result) fail(503, "COST_WRITE_FAILED", "Cost acknowledgment was not durably stored.");
+    remember("SELECT * FROM clank_project_cost_receipts WHERE project_id=? AND actor_id=? AND operation_id=?", [projectId, authority.actorId, operationId]);
     authority.audit(action, {month: Reflect.get(Object(value), "month") ?? null, operationId, version: Reflect.get(Object(value), "version"), reason: Reflect.get(Object(value), "reason")});
     check(authority, true);
     return value;
@@ -238,6 +260,7 @@ export function openPlatformProjectCosts(sql: SQLiteInternal, options?: Platform
       : sql.prepare(`UPDATE ${table} SET version=?,${column}=? WHERE project_id=? AND version=?`).run(version, json, projectId, expected);
     const row = sql.prepare(`SELECT version,${column} FROM ${table} WHERE project_id=?`).get(projectId);
     if (Number(changed.changes) !== 1 || row?.version !== version || row[column] !== json) fail(503, "COST_WRITE_FAILED", "Cost policy storage was not acknowledged.");
+    remember(`SELECT * FROM ${table} WHERE project_id=?`, [projectId]);
   };
   return {
     read(projectId: string, authority: ProjectCostAuthority, key?: string) { check(authority); const result = report(projectId, key); check(authority); return result; },
@@ -261,11 +284,12 @@ export function openPlatformProjectCosts(sql: SQLiteInternal, options?: Platform
         check(authority, true); if (controller.signal.aborted) fail(503, "COST_COLLECTOR_TIMEOUT", "The cost collector was interrupted.");
         measured = measurement(result, selected.start, Math.min(selected.end, asOf));
       } finally { clearTimeout(timer!); flights.delete(controller); }
-      return sql.transaction(() => {
+      return transaction(() => {
         check(authority, true); const acknowledged = retry(projectId, authority, operationId, request); if (acknowledged !== undefined) return acknowledged as ProjectCostSnapshot;
         const previous = snapshot(projectId, selected.key);
         if ((previous?.version ?? 0) !== expected) fail(409, "COST_STALE", "Cost reconciliation changed while collecting.");
         if (previous && (measured.observedUntil < previous.observedUntil || measured.source !== previous.source)) fail(409, "COST_MEASUREMENT_MISMATCH", "Reconciliation cannot move coverage backward or substitute a collector.");
+        if (previous) remember("SELECT * FROM clank_project_cost_observations WHERE project_id=? AND month=? AND version=?", [projectId, selected.key, previous.version]);
         if (Number(sql.prepare("SELECT count(*) AS n FROM clank_project_cost_observations").get()?.n) >= maximum) fail(409, "COST_CAPACITY", "Cost observation history is full; preserve and reconcile it explicitly.");
         let rateCard = previous?.rateCard;
         if (!rateCard) {
@@ -274,9 +298,11 @@ export function openPlatformProjectCosts(sql: SQLiteInternal, options?: Platform
           rateCard = card(parse(selectedCard!.card));
           if (selectedCard!.id !== rateCard.id || selectedCard!.revision !== rateCard.revision || selectedCard!.effective_from !== rateCard.effectiveFrom) fail(409, "COST_RATE_CHANGED", "Stored rate card identity changed.");
         }
+        remember("SELECT * FROM clank_project_cost_rates WHERE id=? AND revision=?", [rateCard.id, rateCard.revision]);
         const result: ProjectCostSnapshot = {protocol: "clank-project-costs/1", projectId, month: selected.key, version: expected + 1, observedUntil: measured.observedUntil, reconciledAt: now(), source: measured.source, sourceRevision: measured.sourceRevision, rateCard, ...arithmetic(measured, rateCard), reason: why};
         const serialized = JSON.stringify(result), changed = sql.prepare("INSERT INTO clank_project_cost_observations VALUES(?,?,?,?)").run(projectId, selected.key, result.version, serialized);
         if (Number(changed.changes) !== 1 || sql.prepare("SELECT snapshot FROM clank_project_cost_observations WHERE project_id=? AND month=? AND version=?").get(projectId, selected.key, result.version)?.snapshot !== serialized) fail(503, "COST_WRITE_FAILED", "Cost observation was not durably stored.");
+        remember("SELECT * FROM clank_project_cost_observations WHERE project_id=? AND month=? AND version=?", [projectId, selected.key, result.version]);
         return save(projectId, authority, operationId, request, result, "project.cost.reconcile");
       });
     },
@@ -286,7 +312,7 @@ export function openPlatformProjectCosts(sql: SQLiteInternal, options?: Platform
       if (!["observe", "deny-at-observed-limit"].includes(String(input.admission))) fail(422, "COST_INPUT", "Choose the supported observed-usage admission policy.");
       const fields = {currency: currency(input.currency), limitMinor: decimal(input.limitMinor), warningPercent: integer(input.warningPercent, 1, 100), admission: input.admission as ProjectCostPolicy["admission"], maxMeasurementAgeMs: integer(input.maxMeasurementAgeMs, 1_000, 24 * 60 * 60_000), reason: reason(input.reason)};
       const request = JSON.stringify({kind: "policy", expectedVersion: expected, ...fields});
-      return sql.transaction(() => {
+      return transaction(() => {
         check(authority, true); const retained = retry(projectId, authority, operationId, request); if (retained !== undefined) return retained as ProjectCostPolicy;
         if ((policy(projectId)?.version ?? 0) !== expected) fail(409, "COST_STALE", "Refresh the current budget policy before changing it.");
         if (expected === 0 && Number(sql.prepare("SELECT count(*) AS n FROM clank_project_cost_policies").get()?.n) >= maxPolicies) fail(409, "COST_CAPACITY", "Project budget inventory is full; preserve and reconcile it explicitly.");
@@ -297,7 +323,7 @@ export function openPlatformProjectCosts(sql: SQLiteInternal, options?: Platform
     changeOverride(projectId: string, authority: ProjectCostAuthority, value: unknown): ProjectCostOverride {
       check(authority, true); opaque(projectId); const input = exact(value, ["expectedVersion", "policyVersion", "operationId", "expiresAt", "reason"]), expected = integer(input.expectedVersion, 0, Number.MAX_SAFE_INTEGER - 1), policyVersion = integer(input.policyVersion, 1), operationId = opaque(input.operationId), why = reason(input.reason), expiresAt = integer(input.expiresAt, 0, now() + 3_600_000);
       const request = JSON.stringify({kind: "override", expectedVersion: expected, policyVersion, expiresAt, reason: why});
-      return sql.transaction(() => {
+      return transaction(() => {
         check(authority, true); const retained = retry(projectId, authority, operationId, request);
         if (retained !== undefined) {
           const historical = retained as Omit<ProjectCostOverride, "active">, current = override(projectId, policy(projectId));
@@ -306,6 +332,7 @@ export function openPlatformProjectCosts(sql: SQLiteInternal, options?: Platform
         if (expiresAt !== 0 && expiresAt <= now()) fail(422, "COST_INPUT", "Choose a future override expiry within one hour, or zero to revoke.");
         const current = policy(projectId);
         if (!current || current.version !== policyVersion || (override(projectId, current)?.version ?? 0) !== expected) fail(409, "COST_STALE", "Refresh the current policy and override before changing access.");
+        remember("SELECT * FROM clank_project_cost_policies WHERE project_id=?", [projectId]);
         const result = {version: expected + 1, policyVersion, expiresAt, createdAt: now(), reason: why}; stored("clank_project_cost_overrides", "override", projectId, expected, result);
         save(projectId, authority, operationId, request, result, "project.cost.override"); return {...result, active: expiresAt > now()};
       });

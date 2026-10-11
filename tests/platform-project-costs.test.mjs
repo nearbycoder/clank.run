@@ -101,3 +101,35 @@ for(const mode of ['ignored','altered'])test('native '+mode+' audit acknowledgme
   await assert.rejects(f.client().policy(f.development.id,f.policy()),error=>error.status===503);
   assert.equal(f.db.prepare('SELECT count(*) AS n FROM clank_project_cost_policies').get().n,0);assert.equal(f.db.prepare('SELECT count(*) AS n FROM clank_project_cost_receipts').get().n,0);assert.equal(f.db.prepare("SELECT count(*) AS n FROM clank_platform_audit WHERE action LIKE 'project.cost.%'").get().n,0);
 });
+
+for(const target of ['policy','receipt','observation','rate','override','override-policy','prior-observation'])test('native final cost '+target+' readback rolls back audit-side changes',async t=>{
+  const f=await setup(t);await stepUp(f);let serverError;const client=f.client(f.owner,async(...args)=>{const response=await fetch(...args);if(!response.ok)serverError=(await response.clone().json()).error;return response;});
+  const isOverride=target==='override'||target==='override-policy';
+  if(isOverride)await client.policy(f.development.id,f.policy());
+  if(target==='prior-observation')await client.reconcile(f.development.id,f.intent());
+  const action=isOverride?'override':target==='policy'||target==='receipt'?'policy':'reconcile';
+  const statements={
+    policy:"UPDATE clank_project_cost_policies SET policy=json_set(policy,'$.limitMinor','500') WHERE project_id=NEW.project_id;",
+    receipt:"UPDATE clank_project_cost_receipts SET result=json_set(result,'$.limitMinor','500') WHERE project_id=NEW.project_id;",
+    observation:"UPDATE clank_project_cost_observations SET snapshot=json_set(snapshot,'$.reason','altered by native audit') WHERE project_id=NEW.project_id;",
+    rate:"UPDATE clank_project_cost_rates SET card=json_set(card,'$.currency','CAD');",
+    override:"UPDATE clank_project_cost_overrides SET override=json_set(override,'$.expiresAt',0) WHERE project_id=NEW.project_id;",
+    'override-policy':"UPDATE clank_project_cost_policies SET policy=json_set(policy,'$.limitMinor','500') WHERE project_id=NEW.project_id;",
+    'prior-observation':"UPDATE clank_project_cost_observations SET snapshot=json_set(snapshot,'$.reason','altered by native audit') WHERE project_id=NEW.project_id AND version=1;",
+  };
+  f.db.exec("CREATE TRIGGER cost_final_changed AFTER INSERT ON clank_platform_audit WHEN NEW.action='project.cost."+action+"' BEGIN "+statements[target]+" END");
+  const intent=isOverride?{expectedVersion:0,policyVersion:1,operationId:'cost_final_override_01',expiresAt:Date.now()+60_000,reason:'Reviewed short recovery traffic'}:action==='policy'?f.policy():f.intent(target==='prior-observation'?1:0,target==='prior-observation'?'cost_final_correction_02':'cost_final_measurement_01');
+  await assert.rejects(client[action](f.development.id,intent),error=>error.status===503);
+  assert.equal(serverError?.code,'COST_WRITE_FAILED');
+  assert.equal(f.db.prepare("SELECT count(*) AS n FROM clank_platform_audit WHERE action=?").get('project.cost.'+action).n,target==='prior-observation'?1:0);
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM clank_project_cost_receipts WHERE operation_id=?').get(intent.operationId).n,0);
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM clank_project_cost_overrides').get().n,0);
+  if(isOverride)assert.equal(JSON.parse(f.db.prepare('SELECT policy FROM clank_project_cost_policies WHERE project_id=?').get(f.development.id).policy).limitMinor,'5');
+  else assert.equal(f.db.prepare('SELECT count(*) AS n FROM clank_project_cost_policies').get().n,0);
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM clank_project_cost_observations').get().n,target==='prior-observation'?1:0);
+  assert.equal(JSON.parse(f.db.prepare('SELECT card FROM clank_project_cost_rates').get().card).currency,'USD');
+  if(target==='prior-observation')assert.equal(JSON.parse(f.db.prepare('SELECT snapshot FROM clank_project_cost_observations WHERE version=1').get().snapshot).reason,f.intent().reason);
+  f.db.exec('DROP TRIGGER cost_final_changed');
+  const accepted=await client[action](f.development.id,intent);assert.equal(accepted.version,target==='prior-observation'?2:1);
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM clank_project_cost_receipts WHERE operation_id=?').get(intent.operationId).n,1);
+});

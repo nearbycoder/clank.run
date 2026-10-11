@@ -209,5 +209,112 @@
       "path": "/tmp/clank-review-2026-10-08/shadow-observer-phase-races-01/publication-boundary-04.json",
       "sha256": "a3e931cdd6cfb2d366c068098ddd5ae96d59efb8ffd17862f67e442070bc4b21"
     }
+  },
+  "finalCostAcknowledgmentRepair": {
+    "priorHead": "64946f334008c962978fec3c4861d05da7b1d9e8",
+    "changedSource": "src/platform-project-costs.ts",
+    "changedOutput": "dist/platform-project-costs.js",
+    "sourceSHA256": "24b7995dc6dc77398e6c62bbaff3ab3eab501edb7ddeff5a09db87200e51da16",
+    "testSHA256": "72358d630cba4a830f4f66b91933ccb93d4ee3dd09d94f35d5fc2c539bab89e4",
+    "runtimes": [
+      "22.16",
+      "24.21",
+      "26.10"
+    ],
+    "selectedEachRuntime": {
+      "tests": 57,
+      "passed": 57,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0
+    },
+    "beforeNativeFaults": {
+      "tested": 7,
+      "failedProtection": 7,
+      "qualification": "Old production native HTTP acknowledged all seven injected audit-side mutations; each failed Missing expected rejection. The later after04 run returned503 but its new test incorrectly expected a client error.code; after05 checks actual HTTP response code and public client status. Both failed records are retained."
+    },
+    "finalReadbacks": [
+      "root protocol",
+      "affected policy/override",
+      "operation receipt",
+      "new observation",
+      "accepted rate",
+      "prior observation",
+      "override-bound policy"
+    ],
+    "boundedScope": "Only rows acknowledged or used by the current native transaction; final native readbacks run after audit and authority callbacks, before commit. Throwing rolls back mutations, receipt and audit together. Same unchanged intent/operation ID succeeds exactly once after the fault is removed. No schema/public API/dependency/production quota/profile change.",
+    "review": "Root inspected all three mutation paths, original insert/update readback checks, final ordering, synchronous transaction rollback, bound queries and finally restoration. No additional actionable finding in this scope.",
+    "pairedBuildsIdentical": true,
+    "emittedFiles": 320,
+    "changedFromReviewedComposition": [
+      "dist/platform-project-costs.js"
+    ],
+    "docs": {
+      "markdown": 109,
+      "links": 375,
+      "indexedGuides": 104,
+      "declarations": 146,
+      "exports": 162
+    },
+    "types": {
+      "existing": 149,
+      "new": 0,
+      "baseline": 154,
+      "packedFixtures": 54
+    },
+    "package": {
+      "files": 449,
+      "unpackedBytes": 6941695,
+      "fixedCeilingBytes": 8388608,
+      "runtimeDependencies": 0
+    },
+    "evidence": {
+      "finding-before-boundary-02.json": {
+        "path": "/tmp/clank-review-2026-10-08/cost-final-ack-review-01/finding-before-boundary-02.json",
+        "sha256": "5ff009dc6a94e8a39f8e3dbee4b9c9efbf961ffe3be9d995c37733fa1f1ebede"
+      },
+      "regression-boundary-03.json": {
+        "path": "/tmp/clank-review-2026-10-08/cost-final-ack-review-01/regression-boundary-03.json",
+        "sha256": "e6b39f992356c34a8d5207bbb9ffa62aed5c883cd1e6e36b7e68fa6f3b86a025"
+      },
+      "focused-after-native26-04.log": {
+        "path": "/tmp/clank-review-2026-10-08/cost-final-ack-review-01/focused-after-native26-04.log",
+        "sha256": "031eb243aded67584783befb2f80ededf6a7e982ca510f18618edcfe4bce52df"
+      },
+      "focused-results-05.json": {
+        "path": "/tmp/clank-review-2026-10-08/cost-final-ack-review-01/focused-results-05.json",
+        "sha256": "af8fd39e71d4da6965cd2af6627fb0c41c0292817db3c381da3d7329ed506eda"
+      },
+      "paired-build-boundary-07.json": {
+        "path": "/tmp/clank-review-2026-10-08/cost-final-ack-review-01/paired-build-boundary-07.json",
+        "sha256": "e9b465925980add24e12cb94f080f7888a32f6ba41eb62da6b6437947b58464f"
+      },
+      "audits-08.json": {
+        "path": "/tmp/clank-review-2026-10-08/cost-final-ack-review-01/audits-08.json",
+        "sha256": "7df55e773c2a34bd132f239b2777a802acc114c48bcc393a357415993316360f"
+      }
+    },
+    "remainingAcceptance": {
+      "accepted": 29,
+      "remaining": 11
+    },
+    "qualification": "Focused native HTTP/SQLite rollback evidence; not production provider/browser acceptance. Fresh hosted checks and protected merge still required for this changed production module.",
+    "immutableBoundary": {
+      "path": "/tmp/clank-review-2026-10-08/cost-final-ack-review-01/publication-boundary-09.json",
+      "sha256": "f71773639c85dd10c27ecac271fb883d79891ce61f901e6ca9f5171ae37fa158"
+    }
+  },
+  "hostedFixtureFollowupSuccess": {
+    "head": "64946f334008c962978fec3c4861d05da7b1d9e8",
+    "successfulChecks": 8,
+    "eachCompleteSuite": {
+      "reported": 3462,
+      "passed": 3425,
+      "failed": 0,
+      "cancelled": 0,
+      "explicitExistingSkips": 37
+    },
+    "packageConformancePassed": true,
+    "qualification": "Success before the final production cost repair; fresh hosted checks required for the changed head."
   }
 }
