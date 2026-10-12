@@ -310,7 +310,7 @@ for(const [name,change] of [
   ['foreign fence',f=>writeMetadata(f.fence,{protocol:'clank-provider-data-fence/1',projectId:'other_project',fence:1})],
   ['advanced fence',f=>writeMetadata(f.fence,{protocol:'clank-provider-data-fence/1',projectId:'lease_project_0',fence:2})],
   ['extra state field',f=>{const s=JSON.parse(fs.readFileSync(f.state));s.extra=true;writeMetadata(f.state,s);} ],
-  ['duplicate state key',f=>fs.writeFileSync(f.state,fs.readFileSync(f.state,'utf8').replace('{','{"protocol":"clank-provider-data/1",'))],
+  ['duplicate state key',f=>{const encoded=fs.readFileSync(f.state,'utf8');assert.equal(encoded[0],'{');fs.writeFileSync(f.state,'{"protocol":"clank-provider-data/1",'+encoded.slice(1));}],
   ['noncanonical state whitespace',f=>fs.appendFileSync(f.state,' ')],
   ['invalid UTF8 state',f=>fs.writeFileSync(f.state,Buffer.from([0xff]))],
   ['oversized state',f=>fs.writeFileSync(f.state,' '.repeat(65537))],

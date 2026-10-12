@@ -4,7 +4,7 @@
   "sourceHashes": {
     "src/provider-data.ts": "be73215a22a19ed425641d08fabdb730878c03a0bea02b28abdf75ac8229de53",
     "src/provider-handoff.ts": "885dcf278667133b578622efffe7d898786c766120b99e2d2b364ed1b478422c",
-    "tests/provider-source-grant-lease.test.mjs": "cd122fe81a9456d641f95f1a533b29f0a4df8030c476e6eb80b1942e80ab6fd7"
+    "tests/provider-source-grant-lease.test.mjs": "6c9a9f5fa6ad9bc25bd0120f2e68a5cb3df59bd1b50dafb4b62613c20dbba94a"
   },
   "nativeEvidence": {
     "22": {
@@ -99,10 +99,29 @@
     "newDiagnostics": 0,
     "log": "/tmp/clank-review-2026-10-08/source-runtime-data-1b9b80a-01/types-04.log"
   },
-  "fullLocalGate": "Running; complete full release and hosted checks required before protected merge.",
+  "fullLocalGate": "Initial full gate passed3673/3636/0fail/0cancel/37skips; corrected full local/head hosted gates remain required after the test-only CodeQL fixture repair.",
   "acceptance": {
     "accepted": 29,
     "pending": 11,
     "feature07": "in progress"
-  }
+  },
+  "initialFullLocalGate": {
+    "counts": {
+      "tests": 3673,
+      "pass": 3636,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 37
+    },
+    "log": "/tmp/clank-review-2026-10-08/source-runtime-data-1b9b80a-01/full-check-native26-08.log",
+    "sha256": "57d287eb2b8c3f6e7bdf03080c1568700ab4efd87396441423b4afe7b877e936"
+  },
+  "retainedCodeQLFixtureFailure": {
+    "checkRunId": 114629141678,
+    "path": "tests/provider-source-grant-lease.test.mjs",
+    "line": 313,
+    "title": "Incomplete string escaping or encoding",
+    "message": "This replaces only the first occurrence of '{{'."
+  },
+  "fixtureCorrection": "Keep a duplicate outer protocol key by explicitly asserting/removing the original first brace and concatenating the intentionally invalid prefix. No replaceAll, suppression, rule change or altered production semantics."
 }
