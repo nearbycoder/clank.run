@@ -24,10 +24,20 @@ const MAX_WAITING_TASKS = 16;
 export const SQLITE_TASK_MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
 const MAX_MESSAGE_BYTES = SQLITE_TASK_MAX_MESSAGE_BYTES;
 const TASK_TIMEOUT_MS = 10_000;
+interface SQLiteTaskWaiter {
+  resolve(release: () => void): void;
+  reject(error: Error): void;
+  timer: ReturnType<typeof setTimeout>;
+  signal?: AbortSignal;
+  abort?: () => void;
+}
+function cancellationError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error ? signal.reason : new Error("SQLite task admission was canceled.");
+}
 /** Round-robin admission with one active task per tenant and bounded queue wait. */
 export class SQLiteTaskScheduler {
   private active = new Set<string>();
-  private waiting = new Map<string, Array<{ resolve(release: () => void): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>>();
+  private waiting = new Map<string, SQLiteTaskWaiter[]>();
   private capacity: number;
   private queueLimit: number;
   private tenantQueueLimit: number;
@@ -37,7 +47,8 @@ export class SQLiteTaskScheduler {
     this.capacity = capacity; this.queueLimit = queueLimit;
     this.tenantQueueLimit = tenantQueueLimit; this.queueTimeoutMs = queueTimeoutMs;
   }
-  acquire(tenant: string): Promise<() => void> {
+  acquire(tenant: string, signal?: AbortSignal): Promise<() => void> {
+    if (signal?.aborted) return Promise.reject(cancellationError(signal));
     if (!this.active.has(tenant) && this.active.size < this.capacity && this.waiting.size === 0) {
       this.active.add(tenant);
       return Promise.resolve(this.release(tenant));
@@ -47,20 +58,32 @@ export class SQLiteTaskScheduler {
       return Promise.reject(new Error("SQLite task capacity is exhausted. Retry after current operations finish."));
     }
     return new Promise((resolve, reject) => {
-      const entry = { resolve, reject, timer: setTimeout(() => {
+      const remove = (error: Error) => {
         const entries = this.waiting.get(tenant);
         if (!entries) return;
         const index = entries.indexOf(entry);
         if (index < 0) return;
         entries.splice(index, 1);
         if (!entries.length) this.waiting.delete(tenant);
-        reject(new Error(`SQLite task exceeded its ${this.queueTimeoutMs}ms queue deadline.`));
+        this.settle(entry);
+        reject(error);
         this.drain();
-      }, this.queueTimeoutMs) };
+      };
+      const entry: SQLiteTaskWaiter = { resolve, reject, signal,
+        timer: setTimeout(() => remove(new Error(`SQLite task exceeded its ${this.queueTimeoutMs}ms queue deadline.`)), this.queueTimeoutMs) };
       queue.push(entry);
       this.waiting.set(tenant, queue);
+      if (signal) {
+        entry.abort = () => remove(cancellationError(signal));
+        signal.addEventListener("abort", entry.abort, { once: true });
+        if (signal.aborted) entry.abort();
+      }
       this.drain();
     });
+  }
+  private settle(entry: SQLiteTaskWaiter): void {
+    clearTimeout(entry.timer);
+    if (entry.abort) entry.signal!.removeEventListener("abort", entry.abort);
   }
   private release(tenant: string): () => void {
     let released = false;
@@ -73,7 +96,7 @@ export class SQLiteTaskScheduler {
       const next = entries.shift()!;
       this.waiting.delete(tenant);
       if (entries.length) this.waiting.set(tenant, entries);
-      clearTimeout(next.timer);
+      this.settle(next);
       this.active.add(tenant);
       next.resolve(this.release(tenant));
     }
@@ -232,7 +255,22 @@ export async function runSQLiteTask<T>(
   sourceToken?:object,
 ): Promise<T> {
   const authority=sourceToken===undefined?undefined:((await import("./backend.ts")).openBackend as any)[SQLITE_INTERNAL].sourceContext(sourceToken);
-  const current=()=>authority?.current();
+  if (!authority) return runSQLiteTaskOwned(module, operation, args, directories, sourceToken, authority);
+  // Source authority can disappear while admission or the native worker is
+  // waiting. Keep this original context live until owned close/cleanup, and
+  // cancel without publishing a result or releasing the scheduler slot early.
+  const controller = new AbortController();
+  const check = () => { if (controller.signal.aborted) return;try { authority.current(); } catch (error) { controller.abort(error); } };
+  check();
+  const watch = setInterval(check, 50);
+  try { return await runSQLiteTaskOwned<T>(module, operation, args, directories, sourceToken, authority, controller.signal); }
+  finally { clearInterval(watch); }
+}
+
+async function runSQLiteTaskOwned<T>(module: SQLiteTaskModule, operation: string,
+  args: readonly unknown[], directories: readonly PinnedSQLiteDirectory[],
+  sourceToken: object | undefined, authority: any, signal?: AbortSignal): Promise<T> {
+  const current=()=>{if(signal?.aborted)throw cancellationError(signal);authority?.current();};
   current();
   if (authority) {
     const projection = await projectSourceTask(authority, module, operation, args, directories);
@@ -243,7 +281,7 @@ export async function runSQLiteTask<T>(
   }
   current();
   const tenant=await taskTenant(module,operation,args);current();
-  const release = await scheduler.acquire(tenant);
+  const release = await scheduler.acquire(tenant, signal);
   let sandbox: Awaited<ReturnType<typeof prepareSQLiteSandbox>> | undefined;
   try {
     current();
@@ -312,6 +350,9 @@ export async function runSQLiteTask<T>(
       const timeout = setTimeout(() => {
         terminate(new Error(`SQLite task exceeded its ${TASK_TIMEOUT_MS}ms deadline.`));
       }, TASK_TIMEOUT_MS);
+      const abort = () => terminate(cancellationError(signal!));
+      signal?.addEventListener("abort", abort, { once: true });
+      if (signal?.aborted) abort();
       child.stdout.setEncoding("utf8");
       child.stdout.on("data", (chunk: string) => {
         outputBytes += new TextEncoder().encode(chunk).byteLength;
@@ -331,6 +372,7 @@ export async function runSQLiteTask<T>(
       child.stdin.on("error", (error: Error) => { failure ??= error; });
       child.on("close", (code: number | null) => {
         clearTimeout(timeout);
+        signal?.removeEventListener("abort", abort);
         if (sandbox && code !== 0 && !output && (!failure || (failure as Error & { code?: string }).code === "EPIPE")
           && /^bwrap: (?:Creating new namespace failed: (?:Permission denied|Operation not permitted)|No permissions to create new namespace[^\n]*)$/mu.test(diagnostics)) {
           reject(Object.assign(new Error("SQLite worker isolation is unavailable: host policy denied Linux namespaces. Configure a host with Bubblewrap namespace support."), { code: "SQLITE_ISOLATION_UNAVAILABLE" })); return;
