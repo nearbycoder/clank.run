@@ -1,4 +1,4 @@
-/** Private provider-root ownership/catalog foundation. No runtime execution or stop proof. */
+/** Private provider ownership, source observations and first-base workers; no readiness or writer-stop proof. */
 import { runProviderDockerClient, type DockerClient } from "./provider-docker-client.ts";
 import { SQLITE_INTERNAL } from "./sqlite-internal.ts";
 const OWNER_SQL="CREATE TABLE clank_provider_service_owner (protocol INTEGER NOT NULL CHECK(protocol=1)) STRICT";
@@ -711,7 +711,8 @@ export interface ProviderSourceContainerLease {
   verifyCurrent():Promise<void>;
   close():void;
 }
-const sourceContainerLeases=new WeakMap<ProviderSourceContainerLease,()=>void>();
+type SourceContainerContext={check:()=>void;data:ProviderSourceRuntimeDataLease;scope:SourceRuntimeDataContext;children:Set<()=>void>;workerRetained:boolean};
+const sourceContainerLeases=new WeakMap<ProviderSourceContainerLease,SourceContainerContext>();
 const SOURCE_CONTAINER_PROJECTION=`{"identity":${CONTAINER_PROJECTION},"host":{{json .HostConfig}},"mounts":{{json .Mounts}},"apparmor":{{json .AppArmorProfile}},"workingDirectory":{{json .Config.WorkingDir}}}`;
 const SOURCE_MASKED_PATHS=["/proc/asound","/proc/acpi","/proc/kcore","/proc/keys","/proc/latency_stats","/proc/timer_list","/proc/timer_stats","/proc/sched_debug","/proc/scsi","/sys/firmware","/sys/devices/virtual/powercap"];
 const SOURCE_READONLY_PATHS=["/proc/bus","/proc/fs","/proc/irq","/proc/sys","/proc/sysrq-trigger"];
@@ -782,7 +783,7 @@ function sourceProcess(c:Context,pid:number,containerId:string,binding:Row):{bir
 }
 /** Original native proof only; serialized observations cannot mint this lease. */
 export function assertProviderSourceContainerLease(value:ProviderSourceContainerLease):void {
-  const check=sourceContainerLeases.get(value);if(!check)fail("A genuine provider source container lease is required.");check();
+  const retained=sourceContainerLeases.get(value);if(!retained)fail("A genuine provider source container lease is required.");retained.check();
 }
 /** Retain a running local default-profile source. This does not establish readiness or writer stop. */
 export async function retainProviderSourceContainer(data:ProviderSourceRuntimeDataLease):Promise<ProviderSourceContainerLease> {
@@ -797,8 +798,9 @@ export async function retainProviderSourceContainer(data:ProviderSourceRuntimeDa
       const args=["container","inspect","--format",SOURCE_CONTAINER_PROJECTION,parent.input.containerId];
       const response=await runProviderDockerClient(client,args,{timeoutMs:15000,maxOutputBytes:65536});scope.check();
       const observed=sourceContainerObservation(response.stdout,data,scope),process=sourceProcess(c,observed.pid,parent.input.containerId,grant.binding);
-      const root=`/proc/${observed.pid}/root`,held:number[]=[];let closed=false;
+      const root=`/proc/${observed.pid}/root`,held:number[]=[],children=new Set<()=>void>();let closed=false;
       const close=()=>{if(closed)return;closed=true;scope.children.delete(close);const errors:unknown[]=[];
+        for(const child of [...children])try{child();}catch(error){errors.push(error);}
         for(const fd of held.splice(0).reverse())try{c.fs.closeSync(fd);}catch(error){errors.push(error);}
         if(errors.length===1)throw errors[0];if(errors.length)throw new AggregateError(errors,"Provider source process pins failed to close.");};
       pendingClose=close;
@@ -828,12 +830,98 @@ export async function retainProviderSourceContainer(data:ProviderSourceRuntimeDa
         }catch(error){try{close();}catch(cleanup){throw new AggregateError([error,cleanup],"Provider source container verification and cleanup failed.");}throw error;}
       };
       lease=Object.freeze({containerId:parent.input.containerId,pid:observed.pid,birth:process.birth,assertCurrent:check,verifyCurrent,close});
-      check();sourceContainerLeases.set(lease,check);scope.children.add(close);scope.containerRetained=true;
+      check();sourceContainerLeases.set(lease,{check,data,scope,children,workerRetained:false});scope.children.add(close);scope.containerRetained=true;
       await verifyDomain(parent.registered.owner,parent.registered.domain,true);check();
     },parent.bridge);
     assertProviderSourceContainerLease(lease!);return lease!;
   }catch(error){try{pendingClose?.();}catch(cleanup){throw new AggregateError([error,cleanup],"Provider source container publication failed.");}throw error;}
 }
+/** Private host worker authority. Observation facades and caller paths cannot mint it. */
+export interface ProviderSourceWorkerLease {
+  execute(request:unknown):Promise<unknown>;
+  assertCurrent():void;
+  close():Promise<void>;
+}
+const sourceWorkerLeases=new WeakMap<object,{current:()=>void;path:string;binding:Readonly<Record<string,any>>;provider:true}>();
+export function assertProviderSourceWorkerLease(value:ProviderSourceWorkerLease):void {
+  const retained=sourceWorkerLeases.get(value);if(!retained)fail("A genuine provider source worker lease is required.");retained.current();
+}
+export async function retainProviderSourceWorker(container:ProviderSourceContainerLease):Promise<ProviderSourceWorkerLease> {
+  const retained=sourceContainerLeases.get(container);if(!retained)fail("A genuine provider source container lease is required.");retained.check();
+  const wire=await import("./provider-source-worker-wire.ts");retained.check();
+  const sandbox=await import("./sqlite-sandbox.ts");retained.check();
+  const task=await import("./sqlite-task.ts");retained.check();
+  await container.verifyCurrent();retained.check();
+  if(retained.workerRetained)fail("Provider source worker authority cannot be duplicated or recycled.");
+  const {data,scope}=retained,binding=scope.grant.binding,path=scope.parent.context.path;
+  let closed=false,reason:unknown,sequence=0,backupId:string|undefined,flight:Promise<unknown>|undefined;
+  let workspacePins:Array<import("./sqlite-sandbox.ts").PinnedSQLiteDirectory>=[],cleanupFlight:Promise<void>|undefined;
+  const cleanup=():Promise<void>=>{
+    if(cleanupFlight)return cleanupFlight;
+    const pins=workspacePins;workspacePins=[];
+    cleanupFlight=(async()=>{const errors:unknown[]=[];for(const pin of pins.reverse())try{await pin.close();}catch(error){errors.push(error);}
+      if(errors.length)throw new AggregateError(errors,"Provider source worker directory cleanup is uncertain.");})();
+    // Parent observation close is synchronous. Retain asynchronous cleanup's
+    // outcome for close(), without turning its rejection into an unhandled one.
+    void cleanupFlight.catch(()=>{});return cleanupFlight;
+  };
+  const invalidate=(error:unknown=new Error("Provider source worker lease is closed."))=>{
+    if(closed)return;closed=true;reason=error;retained.children.delete(invalidate);if(!flight)void cleanup();
+  };
+  const current=()=>{
+    if(closed)throw reason;
+    try{retained.check();
+      const fs=scope.parent.context.fs;
+      for(const pin of workspacePins){sandbox.assertPinnedSQLiteDirectory(pin);const held=fs.fstatSync(pin.fd),visible=fs.lstatSync(pin.path);
+        if(!held.isDirectory()||!visible.isDirectory()||held.dev!==visible.dev||held.ino!==visible.ino
+          ||held.uid!==binding.uid||visible.uid!==binding.uid||held.gid!==binding.gid||visible.gid!==binding.gid
+          ||(held.mode&0o777)!==0o700||(visible.mode&0o777)!==0o700||fs.realpathSync(pin.path)!==pin.path)fail("Provider source worker workspace changed.");
+      }
+    }catch(error){invalidate(error);throw error;}
+  };
+  const execute=(value:unknown):Promise<unknown>=>{
+    try{current();if(flight)fail("Provider source worker already has an owned operation.");}catch(error){return Promise.reject(error);}
+    let request:ReturnType<typeof wire.sourceSQLiteTaskRequest>;
+    try{request=wire.sourceSQLiteTaskRequest(value);
+      if(request.operation!==["backup","inspect","verify"][sequence]||backupId!==undefined&&request.backupId!==backupId)fail("Provider source worker sequence differs.");
+    }catch(error){invalidate(error);return Promise.reject(error);}
+    sequence++;backupId??=request.backupId;
+    const pending=(async()=>{
+            try{
+        await container.verifyCurrent();current();
+        const parent=path.dirname(data.databasePath),root=path.join(parent,".clank-source-recovery-"+binding.sourceIncarnation),base=path.join(root,"base");
+        // The original source owns creation. Never adopt/create a replacement
+        // workspace or interpret client descriptors as host capabilities.
+        if(workspacePins.length===0)for(const name of [parent,root,base,path.join(base,".stage-"+request.backupId)]){
+          const pin=await sandbox.pinSQLiteDirectory(name,false,lease);workspacePins.push(pin);current();
+        }
+        const file=path.join(base,(request.operation==="verify"?".verified-":".snapshot-")+request.backupId+".sqlite");
+        const module=request.operation==="backup"?"migrations":"inspection";
+        const operation=request.operation==="backup"?"stageSQLiteBackup":request.operation==="inspect"?"inspectSQLite":"verifySQLite";
+        const args=request.operation==="backup"?[data.databasePath,file,file+".tmp-"+request.temporaryId]:[file];
+        const result=await task.runSQLiteTask(module,operation,args,workspacePins,lease);current();
+        await container.verifyCurrent();current();
+        if(sequence===3){await cleanup();current();}return result;
+      }catch(error){
+        invalidate(error);try{await cleanup();}catch(failure){throw new AggregateError([error,failure],"Provider source worker operation and cleanup failed.");}throw error;
+      }
+    })();
+    flight=pending.catch(error=>{invalidate(error);throw error;}).finally(()=>{flight=undefined;if(sequence===3)invalidate();});
+    return flight;
+  };
+  const close=async()=>{
+    invalidate();const owned=flight??cleanupFlight;if(!owned)return;let timer:ReturnType<typeof setTimeout>|undefined;
+    // An expired wait is uncertainty, never an owned-close receipt. The original
+    // flight stays owned; each native task retains its slot until its own close.
+    try{await Promise.race([owned,new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error("Provider source worker close is unsettled after its 10000ms deadline.")),10000);})]);}
+    finally{if(timer!==undefined)clearTimeout(timer);}
+  };
+  const lease:ProviderSourceWorkerLease=Object.freeze({execute,assertCurrent:current,close});
+  current();sourceWorkerLeases.set(lease,Object.freeze({current,path:data.databasePath,binding,provider:true}));retained.children.add(invalidate);retained.workerRetained=true;
+  return lease;
+}
+Object.defineProperty(retainProviderSourceWorker,SQLITE_INTERNAL,{value:Object.freeze({sourceContext(token:object){return sourceWorkerLeases.get(token);}})});
+
 function containerTimestamp(value:unknown):boolean {
   if(typeof value!=="string"||value==="0001-01-01T00:00:00Z")return false;
   const parts=/^([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?:\.[0-9]{1,9})?Z$/u.exec(value);

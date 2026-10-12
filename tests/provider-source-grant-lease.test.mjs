@@ -457,3 +457,11 @@ test('source container admission rejects copied data and container descriptors w
  for(const value of [{containerId:f.sources[0].input.containerId,pid:process.pid,birth:'1'},{}])assert.throws(()=>handoff.assertProviderSourceContainerLease(value),/genuine/);
  assert.equal(getters,0);data.close();grant.close();
 });
+
+
+test('provider worker authority rejects grant/data facades and caller callbacks without observation or getters',async t=>{
+ const f=await dataFixture(t),grant=await f.retain(),data=await handoff.retainProviderSourceRuntimeData(grant),before=f.pins();let getters=0;
+ const candidates=[grant,data,{...data},{containerId:f.input.containerId,pid:process.pid,birth:'1',assertCurrent(){getters++;}},{},new Proxy({}, {get(){getters++;throw Error('getter');}})];
+ for(const candidate of candidates){await assert.rejects(handoff.retainProviderSourceWorker(candidate),/genuine/);assert.throws(()=>handoff.assertProviderSourceWorkerLease(candidate),/genuine/);}
+ assert.equal(getters,0);assert.deepEqual(f.pins(),before);data.close();grant.close();
+});

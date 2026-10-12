@@ -71,8 +71,68 @@
     "tests/provider-handoff-runtime.test.mjs": "9320975960daf3ec776818cf51f44018f73b000a51abc49539d2294b51fd062c",
     "tests/sqlite-sandbox.test.mjs": "45146319bf0188c484707c6f77fb2dd92e458b91b00da1f32535ac53f270659b"
   },
-  "fullLocalGate": "Final all-fixture-write candidate gate pending. Prior9a25277 full local gate passed3738/3701/0/0/37; its hosted packaged gate fails one older fixture COMMIT.",
-  "hostedChecks": "Original553c4fe: Node24 failed new fixture COMMIT. Narrow9a25277: packaged gate failed older worker-admission fixture COMMIT. Final all-fixture bounded-wait head requires eight fresh checks and protected merge.",
+  "fullLocalGate": {
+    "head": "cbe92d6254285d7be469a3fe06aec4a9ec52aef9",
+    "counts": {
+      "tests": 3738,
+      "pass": 3701,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 37
+    },
+    "complete": true,
+    "exitCode": 0,
+    "logSha256": "766d260c16003de42ff55f5ed01b91f9f768e095c4c45f18848a3bf8d1f67411",
+    "coverage": {
+      "lines": 92.01,
+      "branches": 82.32,
+      "functions": 90.23
+    },
+    "package": {
+      "files": 450,
+      "bytes": 6996714,
+      "ceilingBytes": 8388608,
+      "dependencies": 0
+    },
+    "scope": "Final all-fixture candidate build, dependency contract, coverage, docs, packed-release conformance and package/tree/history security passed."
+  },
+  "hostedChecks": {
+    "head": "cbe92d6254285d7be469a3fe06aec4a9ec52aef9",
+    "all8Pass": true,
+    "returnedSummaries": {
+      "node22": {
+        "counts": {
+          "tests": 3738,
+          "pass": 3701,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 37
+        },
+        "logTruncated": true
+      },
+      "node24": {
+        "counts": {
+          "tests": 3738,
+          "pass": 3701,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 37
+        },
+        "logTruncated": true
+      },
+      "package": {
+        "counts": {
+          "tests": 3738,
+          "pass": 3701,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 37
+        },
+        "logTruncated": true
+      }
+    },
+    "qualification": "Hosted logs are truncated; only returned summaries are claimed. No independent human approval is claimed."
+  },
   "finalSourceCancellationSelection": {
     "22": {
       "counts": {
@@ -239,5 +299,29 @@
       "dependencies": 0
     },
     "scope": "Final framework/docs/examples build, dependency contract, coverage, documentation audit, packed-release conformance and package/tree/history security passed."
+  },
+  "delivery": {
+    "main": "4b7176dbfd578846a483ab8865d9a827423ba07c",
+    "tree": "85a2535d345c0b11c3099516ae35c5e0da87d9bf",
+    "reviewedHead": "cbe92d6254285d7be469a3fe06aec4a9ec52aef9",
+    "all8HostedPass": true,
+    "originals": {
+      "/home/nearby/Sites/clank": {
+        "head": "4b7176dbfd578846a483ab8865d9a827423ba07c",
+        "files": 16,
+        "unchanged": true
+      },
+      "/home/nearby/.vnc/codex-home/.codex/worktrees/d164/clank": {
+        "head": "4b7176dbfd578846a483ab8865d9a827423ba07c",
+        "files": 7,
+        "unchanged": true
+      }
+    },
+    "implementationHead": "4b7176dbfd578846a483ab8865d9a827423ba07c",
+    "openPRs": [],
+    "compiledOutputsMatched": 321,
+    "acceptance": "29/40; complete feature evidence remains required",
+    "pullRequest": "https://github.com/nearbycoder/clank.run/pull/380",
+    "branch": "codex/provider-source-worker-authority-380"
   }
 }

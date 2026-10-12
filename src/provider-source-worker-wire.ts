@@ -64,7 +64,7 @@ function binding(value: unknown): SourceWorkerChannelBinding {
   return Object.freeze({ bindingSha256: data.bindingSha256, containerId: data.containerId,
     sourceIncarnation: data.sourceIncarnation, channelId: data.channelId });
 }
-function task(value: unknown): SourceSQLiteTaskRequest {
+export function sourceSQLiteTaskRequest(value: unknown): SourceSQLiteTaskRequest {
   const data = own(value, ["protocol", "operation", "backupId", "temporaryId"]);
   if (data.protocol !== "clank-source-sqlite-task/1" || !OPERATIONS.includes(data.operation as any)
     || typeof data.backupId !== "string" || data.backupId.length > 45) invalid();
@@ -130,7 +130,7 @@ function request(encoded: string, expected: SourceWorkerChannelBinding, key: Uin
   const declared = binding(data.binding);
   if (JSON.stringify(declared) !== JSON.stringify(expected)) invalid();
   const body: Request = { protocol: PROTOCOL, kind: "request", binding: declared,
-    sequence: data.sequence, nonce: data.nonce, task: task(data.task) };
+    sequence: data.sequence, nonce: data.nonce, task: sourceSQLiteTaskRequest(data.task) };
   authenticated(encoded, body, data.mac, key);
   return Object.freeze(body);
 }
@@ -155,7 +155,7 @@ export function createSourceWorkerClientProtocol(controlSecret: Uint8Array, chan
   return Object.freeze({
     begin(value: SourceSQLiteTaskRequest): string {
       current(); if (pending || sequence >= 3) invalid();
-      const approved = task(value); assertTaskOrder(approved, sequence + 1, backupId);
+      const approved = sourceSQLiteTaskRequest(value); assertTaskOrder(approved, sequence + 1, backupId);
       const body: Request = { protocol: PROTOCOL, kind: "request", binding: scope,
         sequence: sequence + 1, nonce: randomBytes(18).toString("base64url"), task: approved };
       const encoded = JSON.stringify({ ...body, mac: authenticator(secret.request, body) });

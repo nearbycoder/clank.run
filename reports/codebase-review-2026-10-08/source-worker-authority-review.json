@@ -1,0 +1,1616 @@
+{
+  "basis": "4b7176dbfd578846a483ab8865d9a827423ba07c",
+  "scope": "Genuine provider-derived host first-base worker capability. No socket/channel mount, coupled original-connection bootstrap, readiness/write permission, provider-wide writer stop, full host certificate or Feature07 acceptance. Acceptance remains29/40.",
+  "implementation": [
+    "Only an original retained container lease can mint one non-recyclable worker capability. Private registries retain original grant/data/container ownership, immutable source database path and binding. Caller callbacks, copied facades and serialized descriptions cannot mint it.",
+    "Four existing directories are derived from the original source path/incarnation and exact generated backup/stage names. Their original host capabilities remain retained through all three operations, with inode/dev, UID/GID, private mode and canonical identity checks during active and idle use. The original source owns workspace creation/publication.",
+    "Canonical fixed requests permit only backup, inspection and verification in that order for one backup. Requests carry no host paths, descriptor numbers, SQL, modules or worker arguments. Invalid or uncertain work closes authority; staged output is preserved.",
+    "Unified private task/sandbox resolution retains the existing constructor source context and genuine provider context without caller callbacks. Provider workers force default namespaces even inside trusted hosting; ordinary helpers and constructor source policy retain their contracts.",
+    "Linked authority loss invalidates worker admission. Close awaits the original flight and persistent workspace cleanup. A ten-second unsettled close reports uncertainty without discarding the original flight or its retained descriptors; native task scheduler ownership remains until actual task close/cleanup."
+  ],
+  "sourceSha256": {
+    "src/provider-handoff.ts": "bb85c5bdb7584e8d4ba9dd4848ec6aa52d00163bf1f6eeb4aa63cf590466d25e",
+    "src/provider-source-worker-wire.ts": "915e960f5d5368db144d8b6dece9dc0c21b6b9bc776087ed2c132d7f22fc7589",
+    "src/sqlite-task.ts": "2dcd7c35879439390c5eba0b2754d0e5cb2bd1fafa45add8089466cbad7d9528",
+    "src/sqlite-sandbox.ts": "8fe0021d0ff16d6221d0e23b1928b47a6c9de286ddf0627aaef17ecdee4100c9",
+    "tests/provider-source-grant-lease.test.mjs": "80e93c38483415e1fcac58efb0a1eccc7c85f1df346be70526055bd0ec30848f",
+    "tests/fixtures/provider-source-worker-native.mjs": "a37d26cfdafabb07a433b6cc4efdad5519e7dad513ed070203be0c38c65efdf7"
+  },
+  "focused": {
+    "22": {
+      "counts": {
+        "tests": 303,
+        "pass": 303,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "sha256": "ade3a011ccd1edf8a3db799bea8905a6a5b8787ba1bf358c1376b09367e8cbb0",
+      "qualification": "Final runtime code; final scheduler-ownership wording correction changes comments only."
+    },
+    "24": {
+      "counts": {
+        "tests": 303,
+        "pass": 303,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "sha256": "3718e9e44dd27b0442fccc20596fa7ca91564b4f547e924c6a69586903dec724",
+      "qualification": "Final runtime code; final scheduler-ownership wording correction changes comments only."
+    },
+    "26": {
+      "counts": {
+        "tests": 303,
+        "pass": 303,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "sha256": "3453dacb8af0cc435bee2c409a235e9abb6e4aa879c84f0f020c31f5678f74e6",
+      "qualification": "Final runtime code; final scheduler-ownership wording correction changes comments only."
+    }
+  },
+  "types": {
+    "existingDiagnostics": 149,
+    "newDiagnostics": 0,
+    "baselineDiagnostics": 154,
+    "packedFixtures": 54,
+    "logSha256": "a9d29fdbcd742a859fd291765c09c9e21ee9ce75835bc35ffb02782826971acc"
+  },
+  "pairedBuild": {
+    "outputs": 321,
+    "publicDeclarations": 146,
+    "matched": true,
+    "publicDeclarationsChanged": false
+  },
+  "package": {
+    "files": 450,
+    "bytes": 7002821,
+    "ceilingBytes": 8388608,
+    "dependencies": 0
+  },
+  "native": {
+    "pairedCases": 22,
+    "finalCases": [
+      {
+        "version": "22",
+        "mode": "between",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "3a9285d1ab399b1edc4560bfe5a62ea5b8d09af9f08010b536235171105f9a01",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 1,
+          "mode": "between",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 2.720106258057058
+      },
+      {
+        "version": "22",
+        "mode": "idle-close",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "02856a7817cac87a57397991acb70294ea1f1f95718b6d1e465cdddb4ca1e969",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 1,
+          "mode": "idle-close",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 2.7705215649912134
+      },
+      {
+        "version": "22",
+        "mode": "pipeline",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "8d0877b6d8210548fe7d3f8ba97edea8ed48c63439bb6f538c642a22c1405f20",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 3,
+          "mode": "pipeline",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 3.32075892703142
+      },
+      {
+        "version": "22",
+        "mode": "scope",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "b670160ab7114114e676375e856d29cb0fbb17ffd863b7236e54170fafb256df",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 0,
+          "mode": "scope",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 2.2196549479849637
+      },
+      {
+        "version": "22",
+        "mode": "close",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "326f572654d63a677240a2b00d369c7f3fc38b8fd03d74ad2a9ae604b47d3103",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 1,
+          "mode": "close",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 2.670093246968463
+      },
+      {
+        "version": "22",
+        "mode": "replace",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "c38492e61b68da5b67bc538a096592954c73e912333cfd5ddd9fc9de235549ed",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 1,
+          "mode": "replace",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 2.6705105350119993
+      },
+      {
+        "version": "22",
+        "mode": "data-close",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "03bd9cd1b3cba47259a8a6834ef75d0efeeef7505a38ff8ca808ad303a28bda8",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 1,
+          "mode": "data-close",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 2.669764635968022
+      },
+      {
+        "version": "22",
+        "mode": "revocation",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "7b176d46d1f8ca108d3d36e9e00e1ee03e8ee8e081a07d7074ccda62b8e4dc59",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 1,
+          "mode": "revocation",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 2.769793141982518
+      },
+      {
+        "version": "22",
+        "mode": "stop",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "e92c293bd0ca5f84b271485b410f5b5add4b54c460b60819c4feda053379ce59",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 1,
+          "mode": "stop",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 2.6697052359813824
+      },
+      {
+        "version": "22",
+        "mode": "queue",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "fddd92871702c388517f72309a466b3ab48bd596ca39208ab0f175b1e8fe055c",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 3,
+          "mode": "queue",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 2.6700736460043117
+      },
+      {
+        "version": "22",
+        "mode": "deadline",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "4d71e2264764c40a862087a5297137c41ecd127d0c2d647cc9effa96a8014084",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 1,
+          "mode": "deadline",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 14.694049638928846
+      },
+      {
+        "version": "26",
+        "mode": "between",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "e0aa2ccee8267376035adee390b6d8dca5640d9ef7ae9430171813bc93a36334",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 1,
+          "mode": "between",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 3.0207357780309394
+      },
+      {
+        "version": "26",
+        "mode": "idle-close",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "72463069692e502ff0b156ad62a660a84811cac572f4de317175ffa32a890f4c",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 1,
+          "mode": "idle-close",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 2.7203784739831463
+      },
+      {
+        "version": "26",
+        "mode": "pipeline",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "a5d236b358e34310bf54ff8ec0101a0834ff5e302064ef4b1b61b184fe7ea53c",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 3,
+          "mode": "pipeline",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 3.3215296890120953
+      },
+      {
+        "version": "26",
+        "mode": "scope",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "2ed0b20b0e20bbf6d810c98d87cce2071fbfdf84ec69dfa2cab3194354b0e110",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 0,
+          "mode": "scope",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 2.218877184903249
+      },
+      {
+        "version": "26",
+        "mode": "close",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "80fc86e1716e105d29cf89a24674bcff0993fd4eac050d120b4198d002b190bb",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 1,
+          "mode": "close",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 2.6696564740268514
+      },
+      {
+        "version": "26",
+        "mode": "replace",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "b168fe977de1aa89edc9d9729099e9786ed4d274c6da9d6da6ffb1f513a373e9",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 1,
+          "mode": "replace",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 2.5694530510809273
+      },
+      {
+        "version": "26",
+        "mode": "data-close",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "7086ac15d0aab89ea8402629f10783d4e1487e1224a3f16a48809d282be3a74a",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 1,
+          "mode": "data-close",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 2.6698204890126362
+      },
+      {
+        "version": "26",
+        "mode": "revocation",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "e16b7580cd672b0a17fd71929a245bddff1f1781456a158f4825f1c36631d60c",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 1,
+          "mode": "revocation",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 2.6703098450088874
+      },
+      {
+        "version": "26",
+        "mode": "stop",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "0226e10809f9b456c24437ab6329af7ae7ac5a2a9c1455a3031e7154e28b2e18",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 1,
+          "mode": "stop",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 2.669873625971377
+      },
+      {
+        "version": "26",
+        "mode": "queue",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "c3b673122a6ba78b65cf64f657c5391123ea1658aa4a532cceba345532b1f288",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 3,
+          "mode": "queue",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 2.6700879900017753
+      },
+      {
+        "version": "26",
+        "mode": "deadline",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "3c70768531a335aaf78defbfe155845e1d27bac3cb62040918a15f7a78b59f44",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 1,
+          "mode": "deadline",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 14.644817381049506
+      }
+    ],
+    "qualification": "Final persistent workspace pins; original provider/domain/grant/data/C1 transitions on immutable Node22/26 pairs. Timer-only source app, no C0 capture/bootstrap or full feature acceptance. Worker descendant namespaces were not independently sampled. Deadline cases hold the framework close callback after actual native child termination, not a kernel stall."
+  },
+  "failuresRetained": [
+    {
+      "log": "native26-pipeline-03.log",
+      "cause": "Fixture tried to mutate a read-only ESM namespace instead of the mutable default built-in module object. No worker ran."
+    },
+    {
+      "log": "native26-pipeline-04.log",
+      "cause": "Fixture inspected the final snapshot before the source-side wrapper had published the staged temporary backup. The native stage operation succeeded; fixture publication was corrected."
+    },
+    {
+      "log": "native26-queue-08.log",
+      "cause": "Two ordinary fixture databases were inside the same project tenant, so only one active slot was admitted. Corrected independent tenant directories reproduce global queue saturation."
+    }
+  ],
+  "ownership": {
+    "rows": [
+      {
+        "log": "native-final22-between-14.log",
+        "sha256": "ac7ee61829ca6470208e89405aadef7121904f69c59127adb0a369c0484498e0",
+        "containerId": "3a9285d1ab399b1edc4560bfe5a62ea5b8d09af9f08010b536235171105f9a01",
+        "directory": "/tmp/clank-container-native-qfIZTF",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final22-close-07.log",
+        "sha256": "b8cc06d69b3207156635e3ad2a44f704ef337c627986dabdc4c562a9571ea96f",
+        "containerId": "a1cf76d2996ff3072b6cd250aafcc26e370f60cfbc4fd6e5182869f04f02cbf8",
+        "directory": "/tmp/clank-container-native-xX0fbe",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final22-close-14.log",
+        "sha256": "e332ae882c1a9d76ef36dc226f523f98422a28387da586a359f4e6d604f4dcd1",
+        "containerId": "326f572654d63a677240a2b00d369c7f3fc38b8fd03d74ad2a9ae604b47d3103",
+        "directory": "/tmp/clank-container-native-2aT6eR",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final22-data-close-07.log",
+        "sha256": "26e8c58159513e4ea69c61c49572942e001a4b5cbaba7b78fb011c9e7814bfec",
+        "containerId": "b0a07d4b14a73cc0f13bbdcdd2f888fdd800420af47a935376feabc7da934ac8",
+        "directory": "/tmp/clank-container-native-5TS10j",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final22-data-close-14.log",
+        "sha256": "0e3aae593931af19bda6f7d6e7527cbfdb693023a5efc87436b8c62f7d5e8d0f",
+        "containerId": "03bd9cd1b3cba47259a8a6834ef75d0efeeef7505a38ff8ca808ad303a28bda8",
+        "directory": "/tmp/clank-container-native-Ubg3tF",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final22-deadline-10.log",
+        "sha256": "7eac809bb2b2f5c67269b258e169f6bc25c702bd3711d03822d13bf5a0eb32ba",
+        "containerId": "82383351be37c81aeaa1f382613fe31a88bfcbe30b3303d51703c70e6edf5f00",
+        "directory": "/tmp/clank-container-native-ZJHH7b",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": {
+          "elapsedMs": 10000.330296,
+          "retainedPins": 3,
+          "injectedCloseObservationDelayMs": 12000,
+          "qualification": "Actual child is killed; its framework close callback is deliberately held. No kernel-stall or host certificate claim."
+        }
+      },
+      {
+        "log": "native-final22-deadline-14.log",
+        "sha256": "63ea525fb9dd50a323106a444ca47deeaf5ac4be6a65d5a96fcda3d08eb14b92",
+        "containerId": "4d71e2264764c40a862087a5297137c41ecd127d0c2d647cc9effa96a8014084",
+        "directory": "/tmp/clank-container-native-oyUWap",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": {
+          "elapsedMs": 10000.439529,
+          "retainedPins": 3,
+          "injectedCloseObservationDelayMs": 12000,
+          "qualification": "Actual child is killed; its framework close callback is deliberately held. No kernel-stall or host certificate claim."
+        }
+      },
+      {
+        "log": "native-final22-idle-close-14.log",
+        "sha256": "52dde7d360a50ca867e061c193d19651abbe0295fc49be3f38a992f469f74537",
+        "containerId": "02856a7817cac87a57397991acb70294ea1f1f95718b6d1e465cdddb4ca1e969",
+        "directory": "/tmp/clank-container-native-KhMe0m",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final22-pipeline-07.log",
+        "sha256": "78e4ec661bb64c3ab384d1965d3027814b7144736e167e4bf3a1a76d7667291a",
+        "containerId": "2818dd491da8aec1658f71c8cb8f6de5b9004da718e5e7d38647bb1164656abd",
+        "directory": "/tmp/clank-container-native-cQWjCf",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final22-pipeline-10.log",
+        "sha256": "8831de51bee4aec150d3026bc9a22879c645d3a0303e8c06acc16c5ceafcca36",
+        "containerId": "8c21bd6268658d5184ba0776462b8c2084fcd36ba02fab2898af5c587e1f4d91",
+        "directory": "/tmp/clank-container-native-dVBkJo",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final22-pipeline-14.log",
+        "sha256": "c48dd8645808c6378602de1ea825f11a9e2a94e250ae7169cf83a065b98c8a9b",
+        "containerId": "8d0877b6d8210548fe7d3f8ba97edea8ed48c63439bb6f538c642a22c1405f20",
+        "directory": "/tmp/clank-container-native-3tkekE",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final22-queue-10.log",
+        "sha256": "c7d3b2b393fc00a1009ffa688d917d6d2c3ceb78c410523fa6991a5276d95d09",
+        "containerId": "29f35389e29c14cb0acaa9c4d1f9237a265d0558576817f275264b69534c3817",
+        "directory": "/tmp/clank-container-native-OOsRGE",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final22-queue-14.log",
+        "sha256": "a751feb138e3cc6df143194127a6593162fb3d74960996a4585662fe37d4cb9f",
+        "containerId": "fddd92871702c388517f72309a466b3ab48bd596ca39208ab0f175b1e8fe055c",
+        "directory": "/tmp/clank-container-native-PKs800",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final22-replace-07.log",
+        "sha256": "c5d216af70517c28d054bfe7708fb0c29e054fddf80b30a41decf449fc6e7b58",
+        "containerId": "d76651b22fc9612f8eb0beeb3e3cb6fe0be91380d7612ea865c02682e92e566d",
+        "directory": "/tmp/clank-container-native-wNV6Mk",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final22-replace-14.log",
+        "sha256": "7a4d726cb5e85995d514ecd3eb0c3bae7aefc69ca35dbce918ab9dbc66bd963c",
+        "containerId": "c38492e61b68da5b67bc538a096592954c73e912333cfd5ddd9fc9de235549ed",
+        "directory": "/tmp/clank-container-native-FVxCTm",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final22-revocation-07.log",
+        "sha256": "fe4a9271cd88c72617c655ef64f5ca7472e172532ac8b103335db5d3e9a5e432",
+        "containerId": "b9cad395e1128de3c7306fc0082fd0839572652985c3a1b9c04efba2fe711d90",
+        "directory": "/tmp/clank-container-native-Xt84hj",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final22-revocation-14.log",
+        "sha256": "19a85dc0cc8d791baddccfc7461037f638e0ac4bdacde940dcb5ce1fca4afde0",
+        "containerId": "7b176d46d1f8ca108d3d36e9e00e1ee03e8ee8e081a07d7074ccda62b8e4dc59",
+        "directory": "/tmp/clank-container-native-FEda58",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final22-scope-07.log",
+        "sha256": "0dac19889b2d6971ccd2eb4c1b8366b3978dc88da68c45a5fc55faeff0b7f061",
+        "containerId": "04ee5765af2ea6ed31bbaf05d0285fdf731feb1b6179eb9643ed03eb288980f9",
+        "directory": "/tmp/clank-container-native-ElyPj2",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final22-scope-14.log",
+        "sha256": "deddaa532f22b5374585b2eab842949e50a4184ea3b0cf640f7c7f49c2713bf3",
+        "containerId": "b670160ab7114114e676375e856d29cb0fbb17ffd863b7236e54170fafb256df",
+        "directory": "/tmp/clank-container-native-1gs73j",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final22-stop-07.log",
+        "sha256": "c17e07bf0c6c12c0a23aba4921f6a708606cab6149a0b2d958bb307710cf6915",
+        "containerId": "0f3bf723f0c9cd6adc55ede2a005c9b0dc18215e7ff1b24cb9ef069e3af25d8f",
+        "directory": "/tmp/clank-container-native-UtLnc1",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final22-stop-14.log",
+        "sha256": "a77959e8f26b07f1ae8ce23e6931c238a47d1fdaf50bc678f6da9247db80e1de",
+        "containerId": "e92c293bd0ca5f84b271485b410f5b5add4b54c460b60819c4feda053379ce59",
+        "directory": "/tmp/clank-container-native-A2rfmb",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final26-between-14.log",
+        "sha256": "4c766fa4066db4d6c7bc7a1f7a5ecf6edff0c9dbff7dcf6cc3ee28785435e1b9",
+        "containerId": "e0aa2ccee8267376035adee390b6d8dca5640d9ef7ae9430171813bc93a36334",
+        "directory": "/tmp/clank-container-native-Hmf2Ik",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final26-close-07.log",
+        "sha256": "39ec5c358f93e8b78b674196fb8c21a3dc7d7aaee705e508e77781bb2f47ad34",
+        "containerId": "dbc188197747f1c815b6c01dc5da2244c514c4c921530a92f6dcab566b307a52",
+        "directory": "/tmp/clank-container-native-58RjMF",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final26-close-14.log",
+        "sha256": "b681b1911500c462b83715f64acc5be7a404e778d8ec6ed2009767faef112b23",
+        "containerId": "80fc86e1716e105d29cf89a24674bcff0993fd4eac050d120b4198d002b190bb",
+        "directory": "/tmp/clank-container-native-isBP07",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final26-data-close-07.log",
+        "sha256": "882c2e3e521976ded13389ebdc9132f8dba01335e224dc9d04b606a8be27f371",
+        "containerId": "3df675e2cba56bc4ae68fa52ad8315479b1e82eb119a3592896da73f8035fc9d",
+        "directory": "/tmp/clank-container-native-UX4Y9X",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final26-data-close-14.log",
+        "sha256": "c7124cddf3d3bb172a2754bf48580f73c362c83235b7cd9c80a22779a92d8f05",
+        "containerId": "7086ac15d0aab89ea8402629f10783d4e1487e1224a3f16a48809d282be3a74a",
+        "directory": "/tmp/clank-container-native-Y1Rrfg",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final26-deadline-10.log",
+        "sha256": "10c9465943b9cec710f3c515646d7a0bd950dcd01d90be0bb8e0ceffbb522912",
+        "containerId": "fda8250805f030743a9be176e201f1eb2de5f9690b4c4fa07c5a5237269f8f6b",
+        "directory": "/tmp/clank-container-native-iNtn3u",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": {
+          "elapsedMs": 10000.456237,
+          "retainedPins": 3,
+          "injectedCloseObservationDelayMs": 12000,
+          "qualification": "Actual child is killed; its framework close callback is deliberately held. No kernel-stall or host certificate claim."
+        }
+      },
+      {
+        "log": "native-final26-deadline-14.log",
+        "sha256": "e71132c124c2811d41c38ba61aaa4e736e22e06703895e47f7e18b5cbd4d7183",
+        "containerId": "3c70768531a335aaf78defbfe155845e1d27bac3cb62040918a15f7a78b59f44",
+        "directory": "/tmp/clank-container-native-tBQP8b",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": {
+          "elapsedMs": 10000.95642,
+          "retainedPins": 3,
+          "injectedCloseObservationDelayMs": 12000,
+          "qualification": "Actual child is killed; its framework close callback is deliberately held. No kernel-stall or host certificate claim."
+        }
+      },
+      {
+        "log": "native-final26-idle-close-14.log",
+        "sha256": "1788713ae9d617b186ac3aa8a17c30cba06a685791dbdf2ab6ddfaa320fa9c95",
+        "containerId": "72463069692e502ff0b156ad62a660a84811cac572f4de317175ffa32a890f4c",
+        "directory": "/tmp/clank-container-native-ufl5by",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final26-pipeline-07.log",
+        "sha256": "ddd18e4961f9d229a5e712cd6eb9bde682a47b980d8a0ebd826a8334f754ecb3",
+        "containerId": "2bd6995ef2cbe7698c8691466dc4b6bf38bf1b521003a153ecdba77272481a0a",
+        "directory": "/tmp/clank-container-native-tFXEb9",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final26-pipeline-10.log",
+        "sha256": "ffd5812b82811528f8a0bbd6e48b6e8db9e07a72df9f8a8dc1ab5f0bb1874679",
+        "containerId": "21bd817b0b7f2357ba21020c651c40c16f54890d4e9a7a7f6ac324d39c63e411",
+        "directory": "/tmp/clank-container-native-N6Anyk",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final26-pipeline-14.log",
+        "sha256": "ec0d08990778f68e106c2fb4ad321e77598dcafd8ff451b648ee691f094f9d12",
+        "containerId": "a5d236b358e34310bf54ff8ec0101a0834ff5e302064ef4b1b61b184fe7ea53c",
+        "directory": "/tmp/clank-container-native-G3f3Q3",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final26-queue-10.log",
+        "sha256": "db29f9d5044dff48be21891a0179f799349174fd43a85c8ed07c00c6c0710571",
+        "containerId": "2f875ce3cc9c7e35dee9319ab8851c049e3147814a8c32c28d733b095d3ff075",
+        "directory": "/tmp/clank-container-native-GGcNGC",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final26-queue-14.log",
+        "sha256": "6b420b3a64e5eaf1109c281378f297848c4470d2adb2795b89da56de8835a86e",
+        "containerId": "c3b673122a6ba78b65cf64f657c5391123ea1658aa4a532cceba345532b1f288",
+        "directory": "/tmp/clank-container-native-0s7Pgf",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final26-replace-07.log",
+        "sha256": "3019ec02cc5f0446d42e961dd9344d89146cbd9f2d0a0d1843cf6b0d17e01b04",
+        "containerId": "4c12513d67699d60ea76b623d0bf80bf6201148f8bced51bdbb26d074fb1ad4e",
+        "directory": "/tmp/clank-container-native-XmRFD8",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final26-replace-14.log",
+        "sha256": "244ec774f4f723d35f9c4c163a1a6ac15e696a338fd3e6abdd40b2f87c8ca36b",
+        "containerId": "b168fe977de1aa89edc9d9729099e9786ed4d274c6da9d6da6ffb1f513a373e9",
+        "directory": "/tmp/clank-container-native-uYfKPt",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final26-revocation-07.log",
+        "sha256": "b86208bbf8a169b659d82db3c127d28d5d2601cb449b14a9be6d4cb119cd61b2",
+        "containerId": "187838c8db64d52b6865d6e85c8026a51f84563a7a51bc32878d498b9844cb98",
+        "directory": "/tmp/clank-container-native-aaQvYp",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final26-revocation-14.log",
+        "sha256": "fa5bdc4e1c7a08421a30e470fd657a528ab0fb64727ecd906ade795757604712",
+        "containerId": "e16b7580cd672b0a17fd71929a245bddff1f1781456a158f4825f1c36631d60c",
+        "directory": "/tmp/clank-container-native-1xVo1O",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final26-scope-07.log",
+        "sha256": "0c83bba8d0e2e4ac62c5983d31c905147e006b822146d9a84c7ae369ab2e345e",
+        "containerId": "7be2db558f31cb8f56f6037c74d492245d9cdb356111e9134f6e4907a87488ab",
+        "directory": "/tmp/clank-container-native-DL9K7H",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final26-scope-14.log",
+        "sha256": "58023d35f9e07a6bc82ff0814e72cac46c1b497de16fc9fa354599d6ed227e1c",
+        "containerId": "2ed0b20b0e20bbf6d810c98d87cce2071fbfdf84ec69dfa2cab3194354b0e110",
+        "directory": "/tmp/clank-container-native-ILh9J1",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final26-stop-07.log",
+        "sha256": "94d6fc9b3e19c82d5e02a06a61ac3ade5a62e140b5ae570e8471681a32c1233c",
+        "containerId": "b43ee82d51854b8e4648077b89a6bd37188cf6f324e9108d20674d0dae734643",
+        "directory": "/tmp/clank-container-native-6yXR7u",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native-final26-stop-14.log",
+        "sha256": "43eccfc062884860924cbe91e82414efc943c85ad0382047a857c55b6bee66e3",
+        "containerId": "0226e10809f9b456c24437ab6329af7ae7ac5a2a9c1455a3031e7154e28b2e18",
+        "directory": "/tmp/clank-container-native-YJhoac",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native26-old-between-13.log",
+        "sha256": "e0bff6d585eb64626b65e5e694896dfc91757a742a8fa694f8354c3067a5d659",
+        "containerId": "fb4bfca8aae5c12d7f2b8ee17aeaad6206265f5addd8fcfe8814238c950b1338",
+        "directory": "/tmp/clank-container-native-hGG0S9",
+        "complete": false,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": {
+          "stage": "worker authority",
+          "name": "AssertionError",
+          "message": "Missing expected rejection.",
+          "stack": "AssertionError [ERR_ASSERTION]: Missing expected rejection.\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at async file:///opt/clank-source-worker-authority-4b7176d-native-07/tests/fixtures/provider-source-worker-native.mjs:69:4"
+        },
+        "closeDeadline": null
+      },
+      {
+        "log": "native26-pipeline-03.log",
+        "sha256": "684a9f14f22d9640a22ec325d446410776e3918d91ec421e24cd6e3171fb0c52",
+        "containerId": "b26c92a41cdb7d25ccb152a247ae6bf867e9f6be7cf7163050ad034f87f58e2d",
+        "directory": "/tmp/clank-container-native-Ni9OkH",
+        "complete": false,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": {
+          "stage": "worker authority",
+          "name": "TypeError",
+          "message": "Cannot assign to property 'spawn' of [object Module]",
+          "stack": "TypeError: Cannot assign to property 'spawn' of [object Module]\n    at file:///opt/clank-source-worker-authority-4b7176d-native-01/tests/fixtures/provider-source-worker-native.mjs:54:10\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)"
+        },
+        "closeDeadline": null
+      },
+      {
+        "log": "native26-pipeline-04.log",
+        "sha256": "00d233d839758251875bfd16d2ecc66c1f23235e38249f62fb3dfb2bfe662311",
+        "containerId": "0b57c4466d3b120d209840956697abfb3b58420bd8db0f27058b09533260d2c6",
+        "directory": "/tmp/clank-container-native-cylLqK",
+        "complete": false,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": {
+          "stage": "worker authority",
+          "name": "Error",
+          "message": "unable to open database file",
+          "stack": "Error: unable to open database file\n    at file:///opt/clank-source-worker-authority-4b7176d-native-02/tests/fixtures/provider-source-worker-native.mjs:61:13\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)"
+        },
+        "closeDeadline": null
+      },
+      {
+        "log": "native26-pipeline-05.log",
+        "sha256": "aa8884d87aac9f75d7cc6a84ed38147cfff19b069d7b40aeb11520a6088ecd56",
+        "containerId": "053156e9fa4af6408604c9482943e0c0b8b7e90b6410d54b8d8080dd7a81a686",
+        "directory": "/tmp/clank-container-native-z0Xolc",
+        "complete": true,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "closeDeadline": null
+      },
+      {
+        "log": "native26-queue-08.log",
+        "sha256": "b507ceebd366aa765958a25d3f185cfec3f04b58bd96ade36f8f90d18f5cf66b",
+        "containerId": "fb5ac28a4497827781f7b0ff40230e6c02a7ccc6ed9171884bf8a7ee36be580a",
+        "directory": "/tmp/clank-container-native-vnCIw0",
+        "complete": false,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": {
+          "stage": "worker authority",
+          "name": "AssertionError",
+          "message": "The expression evaluated to a falsy value:\n\n  assert.ok(Date.now()<until)\n",
+          "stack": "AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:\n\n  assert.ok(Date.now()<until)\n\n    at file:///opt/clank-source-worker-authority-4b7176d-native-05/tests/fixtures/provider-source-worker-native.mjs:70:73"
+        },
+        "closeDeadline": null
+      }
+    ],
+    "exactOwnedContainers": [
+      "0226e10809f9b456c24437ab6329af7ae7ac5a2a9c1455a3031e7154e28b2e18",
+      "02856a7817cac87a57397991acb70294ea1f1f95718b6d1e465cdddb4ca1e969",
+      "03bd9cd1b3cba47259a8a6834ef75d0efeeef7505a38ff8ca808ad303a28bda8",
+      "04ee5765af2ea6ed31bbaf05d0285fdf731feb1b6179eb9643ed03eb288980f9",
+      "053156e9fa4af6408604c9482943e0c0b8b7e90b6410d54b8d8080dd7a81a686",
+      "0b57c4466d3b120d209840956697abfb3b58420bd8db0f27058b09533260d2c6",
+      "0f3bf723f0c9cd6adc55ede2a005c9b0dc18215e7ff1b24cb9ef069e3af25d8f",
+      "187838c8db64d52b6865d6e85c8026a51f84563a7a51bc32878d498b9844cb98",
+      "21bd817b0b7f2357ba21020c651c40c16f54890d4e9a7a7f6ac324d39c63e411",
+      "2818dd491da8aec1658f71c8cb8f6de5b9004da718e5e7d38647bb1164656abd",
+      "29f35389e29c14cb0acaa9c4d1f9237a265d0558576817f275264b69534c3817",
+      "2bd6995ef2cbe7698c8691466dc4b6bf38bf1b521003a153ecdba77272481a0a",
+      "2ed0b20b0e20bbf6d810c98d87cce2071fbfdf84ec69dfa2cab3194354b0e110",
+      "2f875ce3cc9c7e35dee9319ab8851c049e3147814a8c32c28d733b095d3ff075",
+      "326f572654d63a677240a2b00d369c7f3fc38b8fd03d74ad2a9ae604b47d3103",
+      "3a9285d1ab399b1edc4560bfe5a62ea5b8d09af9f08010b536235171105f9a01",
+      "3c70768531a335aaf78defbfe155845e1d27bac3cb62040918a15f7a78b59f44",
+      "3df675e2cba56bc4ae68fa52ad8315479b1e82eb119a3592896da73f8035fc9d",
+      "4c12513d67699d60ea76b623d0bf80bf6201148f8bced51bdbb26d074fb1ad4e",
+      "4d71e2264764c40a862087a5297137c41ecd127d0c2d647cc9effa96a8014084",
+      "7086ac15d0aab89ea8402629f10783d4e1487e1224a3f16a48809d282be3a74a",
+      "72463069692e502ff0b156ad62a660a84811cac572f4de317175ffa32a890f4c",
+      "7b176d46d1f8ca108d3d36e9e00e1ee03e8ee8e081a07d7074ccda62b8e4dc59",
+      "7be2db558f31cb8f56f6037c74d492245d9cdb356111e9134f6e4907a87488ab",
+      "80fc86e1716e105d29cf89a24674bcff0993fd4eac050d120b4198d002b190bb",
+      "82383351be37c81aeaa1f382613fe31a88bfcbe30b3303d51703c70e6edf5f00",
+      "8c21bd6268658d5184ba0776462b8c2084fcd36ba02fab2898af5c587e1f4d91",
+      "8d0877b6d8210548fe7d3f8ba97edea8ed48c63439bb6f538c642a22c1405f20",
+      "a1cf76d2996ff3072b6cd250aafcc26e370f60cfbc4fd6e5182869f04f02cbf8",
+      "a5d236b358e34310bf54ff8ec0101a0834ff5e302064ef4b1b61b184fe7ea53c",
+      "b0a07d4b14a73cc0f13bbdcdd2f888fdd800420af47a935376feabc7da934ac8",
+      "b168fe977de1aa89edc9d9729099e9786ed4d274c6da9d6da6ffb1f513a373e9",
+      "b26c92a41cdb7d25ccb152a247ae6bf867e9f6be7cf7163050ad034f87f58e2d",
+      "b43ee82d51854b8e4648077b89a6bd37188cf6f324e9108d20674d0dae734643",
+      "b670160ab7114114e676375e856d29cb0fbb17ffd863b7236e54170fafb256df",
+      "b9cad395e1128de3c7306fc0082fd0839572652985c3a1b9c04efba2fe711d90",
+      "c38492e61b68da5b67bc538a096592954c73e912333cfd5ddd9fc9de235549ed",
+      "c3b673122a6ba78b65cf64f657c5391123ea1658aa4a532cceba345532b1f288",
+      "d76651b22fc9612f8eb0beeb3e3cb6fe0be91380d7612ea865c02682e92e566d",
+      "dbc188197747f1c815b6c01dc5da2244c514c4c921530a92f6dcab566b307a52",
+      "e0aa2ccee8267376035adee390b6d8dca5640d9ef7ae9430171813bc93a36334",
+      "e16b7580cd672b0a17fd71929a245bddff1f1781456a158f4825f1c36631d60c",
+      "e92c293bd0ca5f84b271485b410f5b5add4b54c460b60819c4feda053379ce59",
+      "fb4bfca8aae5c12d7f2b8ee17aeaad6206265f5addd8fcfe8814238c950b1338",
+      "fb5ac28a4497827781f7b0ff40230e6c02a7ccc6ed9171884bf8a7ee36be580a",
+      "fda8250805f030743a9be176e201f1eb2de5f9690b4c4fa07c5a5237269f8f6b",
+      "fddd92871702c388517f72309a466b3ab48bd596ca39208ab0f175b1e8fe055c"
+    ],
+    "freshAbsent": true,
+    "daemonId": "0a2ad0ab-df92-4c7b-a346-3ea757783f52",
+    "availableBytes": 2818748416,
+    "reserveBytes": 2250000000,
+    "qualification": "Read-only check against the original daemon; no unowned cleanup."
+  },
+  "fullLocalGate": "Final persistent-workspace full gate running.",
+  "hostedChecks": "Not yet published; eight exact-head checks and protected delivery remain required.",
+  "earlierNative": {
+    "pairedCases": 20,
+    "originalFourteen": [
+      {
+        "version": "22",
+        "mode": "pipeline",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "2818dd491da8aec1658f71c8cb8f6de5b9004da718e5e7d38647bb1164656abd",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 3,
+          "mode": "pipeline",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 3.973087613005191
+      },
+      {
+        "version": "22",
+        "mode": "scope",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "04ee5765af2ea6ed31bbaf05d0285fdf731feb1b6179eb9643ed03eb288980f9",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 0,
+          "mode": "scope",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 2.2201418939512223
+      },
+      {
+        "version": "22",
+        "mode": "close",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "a1cf76d2996ff3072b6cd250aafcc26e370f60cfbc4fd6e5182869f04f02cbf8",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 1,
+          "mode": "close",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 2.6196673769736663
+      },
+      {
+        "version": "22",
+        "mode": "replace",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "d76651b22fc9612f8eb0beeb3e3cb6fe0be91380d7612ea865c02682e92e566d",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 1,
+          "mode": "replace",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 2.6706723630195484
+      },
+      {
+        "version": "22",
+        "mode": "data-close",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "b0a07d4b14a73cc0f13bbdcdd2f888fdd800420af47a935376feabc7da934ac8",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 1,
+          "mode": "data-close",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 2.6706436910899356
+      },
+      {
+        "version": "22",
+        "mode": "revocation",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "b9cad395e1128de3c7306fc0082fd0839572652985c3a1b9c04efba2fe711d90",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 1,
+          "mode": "revocation",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 2.769977096002549
+      },
+      {
+        "version": "22",
+        "mode": "stop",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "0f3bf723f0c9cd6adc55ede2a005c9b0dc18215e7ff1b24cb9ef069e3af25d8f",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 1,
+          "mode": "stop",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 2.6702855890616775
+      },
+      {
+        "version": "26",
+        "mode": "pipeline",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "2bd6995ef2cbe7698c8691466dc4b6bf38bf1b521003a153ecdba77272481a0a",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 3,
+          "mode": "pipeline",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 3.6723636450478807
+      },
+      {
+        "version": "26",
+        "mode": "scope",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "7be2db558f31cb8f56f6037c74d492245d9cdb356111e9134f6e4907a87488ab",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 0,
+          "mode": "scope",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 2.219429092016071
+      },
+      {
+        "version": "26",
+        "mode": "close",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "dbc188197747f1c815b6c01dc5da2244c514c4c921530a92f6dcab566b307a52",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 1,
+          "mode": "close",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 2.6199581099208444
+      },
+      {
+        "version": "26",
+        "mode": "replace",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "4c12513d67699d60ea76b623d0bf80bf6201148f8bced51bdbb26d074fb1ad4e",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 1,
+          "mode": "replace",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 2.6205732959788293
+      },
+      {
+        "version": "26",
+        "mode": "data-close",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "3df675e2cba56bc4ae68fa52ad8315479b1e82eb119a3592896da73f8035fc9d",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 1,
+          "mode": "data-close",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 2.620230519096367
+      },
+      {
+        "version": "26",
+        "mode": "revocation",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "187838c8db64d52b6865d6e85c8026a51f84563a7a51bc32878d498b9844cb98",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 1,
+          "mode": "revocation",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 2.6201530430698767
+      },
+      {
+        "version": "26",
+        "mode": "stop",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "b43ee82d51854b8e4648077b89a6bd37188cf6f324e9108d20674d0dae734643",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 1,
+          "mode": "stop",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 2.620691524934955
+      }
+    ],
+    "finalSix": [
+      {
+        "version": "22",
+        "mode": "pipeline",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "8c21bd6268658d5184ba0776462b8c2084fcd36ba02fab2898af5c587e1f4d91",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 3,
+          "mode": "pipeline",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 3.972787305014208
+      },
+      {
+        "version": "22",
+        "mode": "queue",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "29f35389e29c14cb0acaa9c4d1f9237a265d0558576817f275264b69534c3817",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 3,
+          "mode": "queue",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 2.6706604509381577
+      },
+      {
+        "version": "22",
+        "mode": "deadline",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "82383351be37c81aeaa1f382613fe31a88bfcbe30b3303d51703c70e6edf5f00",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 1,
+          "mode": "deadline",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 14.645652472041547
+      },
+      {
+        "version": "26",
+        "mode": "pipeline",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "21bd817b0b7f2357ba21020c651c40c16f54890d4e9a7a7f6ac324d39c63e411",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 3,
+          "mode": "pipeline",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 3.9725619229720905
+      },
+      {
+        "version": "26",
+        "mode": "queue",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "2f875ce3cc9c7e35dee9319ab8851c049e3147814a8c32c28d733b095d3ff075",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 3,
+          "mode": "queue",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 2.6197504659648985
+      },
+      {
+        "version": "26",
+        "mode": "deadline",
+        "exitCode": 0,
+        "complete": true,
+        "containerId": "fda8250805f030743a9be176e201f1eb2de5f9690b4c4fa07c5a5237269f8f6b",
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        },
+        "failure": null,
+        "worker": {
+          "spawns": 1,
+          "mode": "deadline",
+          "sourceBytesUnchanged": true,
+          "qualification": "Default native Bubblewrap execution and owned ChildProcess close. Worker descendant namespaces are not independently sampled; no host certificate."
+        },
+        "elapsedSeconds": 14.59603029396385
+      }
+    ],
+    "qualification": "Original native provider owner/domain/grants, data-store commits and C1 acknowledgments on immutable paired Node22/26 images. Actual default Bubblewrap workers and independent source/snapshot reads. Fourteen cases precede the equivalent final own-property guard; final six exercise it. Source application is a timer fixture, not C0 captured bootstrap. Worker descendant namespaces were not independently sampled. Deadline cases hold the framework close callback after an actual child is killed; they do not reproduce a kernel stall."
+  },
+  "workspaceLifetimeCorrection": {
+    "oldNativeFailure": "native26-old-between-13.log",
+    "reproduction": "Draft completed inspection after a base-directory replacement between backup and inspection. The native expected-refusal test failed. This demonstrates the unpublished draft adopted replacement workspace identity.",
+    "change": "Keep the same four host directory capabilities through all three operations; check inode, UID/GID, private mode and canonical path during idle/current use and active tasks. Parent closure schedules idle cleanup and close awaits it. Cleanup attempts all owned directory closes and preserves its asynchronous error.",
+    "proof": "Final native between-operation replacement and idle linked-data closure pass on both runtimes, alongside all previous modes."
+  }
+}

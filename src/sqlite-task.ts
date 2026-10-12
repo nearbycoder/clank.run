@@ -246,6 +246,13 @@ try {
 }
 `;
 
+async function sourceContext(token: object): Promise<any> {
+  const { retainProviderSourceWorker } = await import("./provider-handoff.ts");
+  const retained = (retainProviderSourceWorker as any)[SQLITE_INTERNAL].sourceContext(token);
+  if (retained) { retained.current(); return retained; }
+  return ((await import("./backend.ts")).openBackend as any)[SQLITE_INTERNAL].sourceContext(token);
+}
+
 /** Internal bridge; callers select only fixed framework worker modules. */
 export async function runSQLiteTask<T>(
   module: SQLiteTaskModule,
@@ -254,8 +261,12 @@ export async function runSQLiteTask<T>(
   directories: readonly PinnedSQLiteDirectory[] = [],
   sourceToken?:object,
 ): Promise<T> {
-  const authority=sourceToken===undefined?undefined:((await import("./backend.ts")).openBackend as any)[SQLITE_INTERNAL].sourceContext(sourceToken);
+  const authority=sourceToken===undefined?undefined:await sourceContext(sourceToken);
   if (!authority) return runSQLiteTaskOwned(module, operation, args, directories, sourceToken, authority);
+  if (Object.hasOwn(authority,"provider") && authority.provider === true && context?.getStore() === "trusted-process") {
+    const isolated = await createSQLiteTaskScope("namespace"); authority.current();
+    return isolated.run(() => runSQLiteTask<T>(module, operation, args, directories, sourceToken));
+  }
   // Source authority can disappear while admission or the native worker is
   // waiting. Keep this original context live until owned close/cleanup, and
   // cancel without publishing a result or releasing the scheduler slot early.
@@ -401,10 +412,10 @@ async function runSQLiteTaskOwned<T>(module: SQLiteTaskModule, operation: string
 }
 
 Object.defineProperty(runSQLiteTask, SQLITE_INTERNAL, { value: Object.freeze({
+  sourceContext,
   async sourceRequest(token: object, module: SQLiteTaskModule, operation: string,
     args: readonly unknown[], directories: readonly PinnedSQLiteDirectory[]): Promise<SourceSQLiteTaskRequest> {
-    const { openBackend } = await import("./backend.ts");
-    const authority = (openBackend as any)[SQLITE_INTERNAL].sourceContext(token);
+    const authority = await sourceContext(token);
     return (await projectSourceTask(authority, module, operation, args, directories)).request;
   },
 }) });
