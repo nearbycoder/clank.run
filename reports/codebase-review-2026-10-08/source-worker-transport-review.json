@@ -85,8 +85,8 @@
       "socket-owned-close-probe-04.json"
     ],
     "retainedFailure": "socket-owned-close-probe-03.mjs failed because fixture quoting produced invalid child syntax; empty output does not prove socket behavior.",
-    "focusedNode22": "Original head:focused22-final-15.log169/169 passed; corrected focused22-corrected-21.log still running.",
-    "focusedNode24": "Original head:focused24-final-15.log169/169 passed; corrected focused24-corrected-21.log still running.",
+    "focusedNode22": "focused22-corrected-21.log:171 tests/171 passes/zero failures, cancellations or skips",
+    "focusedNode24": "focused24-corrected-21.log:171 tests/171 passes/zero failures, cancellations or skips",
     "transportCases": 20,
     "earlierNode26": "Original head96c6ffb: full-check26-14.log passes all18 native broker cases but fails the browser import gate. This is not a completed release gate.",
     "typeContracts": "types-corrected-21.log:54 packed fixtures;149 inherited/zero new diagnostics relative to154 baseline.",
@@ -102,8 +102,107 @@
     "unpackedBytes": 7013658,
     "ceilingBytes": 8388608,
     "dependencies": 0,
-    "localGate": "Corrected full-check26-corrected-21.log in progress; terminal outcome required before delivery.",
-    "hostedGate": "Not yet published; all eight exact-head hosted checks and protected merge required."
+    "localGate": {
+      "file": "full-check26-corrected-21.log",
+      "counts": {
+        "tests": 3759,
+        "pass": 3722,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 37
+      },
+      "coverage": {
+        "lines": 91.96,
+        "branches": 82.31,
+        "functions": 90.18
+      },
+      "completed": true,
+      "docsConformanceSecurity": "Complete local gate passes."
+    },
+    "hostedGate": {
+      "head": "12763529fa604b8ffc5590a488ea3505b5b1c894",
+      "checks": [
+        {
+          "name": "CodeQL",
+          "id": 114736272426,
+          "conclusion": "success"
+        },
+        {
+          "name": "Node 22.16",
+          "id": 114735881703,
+          "conclusion": "success"
+        },
+        {
+          "name": "Semantic and packed consumer types",
+          "id": 114735881682,
+          "conclusion": "success"
+        },
+        {
+          "name": "Packaged-release conformance",
+          "id": 114735881662,
+          "conclusion": "success"
+        },
+        {
+          "name": "Native PostgreSQL / Node 26.10",
+          "id": 114735881634,
+          "conclusion": "success"
+        },
+        {
+          "name": "Native PostgreSQL / Node 22.16",
+          "id": 114735881560,
+          "conclusion": "success"
+        },
+        {
+          "name": "Node 24",
+          "id": 114735881303,
+          "conclusion": "success"
+        },
+        {
+          "name": "JavaScript and TypeScript analysis",
+          "id": 114735656404,
+          "conclusion": "success"
+        }
+      ],
+      "terminalSummaries": {
+        "node22": {
+          "file": "terminal-node22-26.json",
+          "counts": {
+            "tests": 3759,
+            "pass": 3722,
+            "fail": 0,
+            "cancelled": 0,
+            "skipped": 37
+          },
+          "returnedLogTruncated": true,
+          "claim": "Returned terminal summary only; unreturned full log bytes are not claimed."
+        },
+        "node24": {
+          "file": "terminal-node24-26.json",
+          "counts": {
+            "tests": 3759,
+            "pass": 3722,
+            "fail": 0,
+            "cancelled": 0,
+            "skipped": 37
+          },
+          "returnedLogTruncated": true,
+          "claim": "Returned terminal summary only; unreturned full log bytes are not claimed."
+        },
+        "package": {
+          "file": "terminal-package-26.json",
+          "counts": {
+            "tests": 3759,
+            "pass": 3722,
+            "fail": 0,
+            "cancelled": 0,
+            "skipped": 37
+          },
+          "returnedLogTruncated": true,
+          "claim": "Returned terminal summary only; unreturned full log bytes are not claimed."
+        }
+      },
+      "transientDiagnosticFailure": "One Node24 in-progress log request returned provider HTTP502. This was not treated as a terminal test failure or a reason to restart CI; final exact-head status and returned terminal summary pass."
+    }
   },
   "notClaimed": [
     "Authenticated dispatch to a genuine provider worker",
@@ -114,5 +213,23 @@
     "Target activation/ingress interruption acceptance",
     "Full host policy certification or independent broker namespace confinement"
   ],
-  "remaining": "Connect this raw primitive to the genuine owner/issued grant, fourth read-only channel mount, authenticated protocol receipts and retained provider worker, then explicit opt-in original backend bootstrap. Complete the original Feature07 writer exclusion/target/ingress acceptance separately."
+  "remaining": "Connect this raw primitive to the genuine owner/issued grant, fourth read-only channel mount, authenticated protocol receipts and retained provider worker, then explicit opt-in original backend bootstrap. Complete the original Feature07 writer exclusion/target/ingress acceptance separately.",
+  "delivery": {
+    "pr": "https://github.com/nearbycoder/clank.run/pull/382",
+    "reviewedHead": "12763529fa604b8ffc5590a488ea3505b5b1c894",
+    "mergedMain": "a01a1d0f1b405fd740e59d97b890e9a05cb1902b",
+    "tree": "09a7db020816d9bddbc8eb3ecc402aa91995e53a",
+    "protectedSquash": true,
+    "strictChecks": true,
+    "enforcedAdmins": true,
+    "linearHistory": true,
+    "requiredApprovals": 0,
+    "humanApprovalClaimed": false,
+    "unresolvedReviewThreads": 0,
+    "allHostedChecksPass": true,
+    "sourceAndOutputsMatch": true,
+    "originalFilesUnchanged": 23,
+    "openPullRequests": [],
+    "branch": "codex/provider-source-channel-grant-382"
+  }
 }

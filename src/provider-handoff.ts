@@ -360,6 +360,7 @@ export async function acquireProviderServiceOwnership(rootDirectory:string,creat
     c.database.exec("COMMIT; BEGIN IMMEDIATE");sync(c,c.file,c.service);
     const owner:ProviderServiceOwnership=Object.freeze({fs:promises,path,root:c.root.path,serviceDirectory:service,close(){
       if(c.closed)return;c.closed=true;c.mode="closed";const failures:unknown[]=[];
+      try{closeWorkerChannels(owner);}catch(error){failures.push(error);}
       try{closeSourceLeases(owner);}catch(error){failures.push(error);}
       try{c.database.close();}catch(error){failures.push(error);}
       try{releasePins(c,0);}catch(error){failures.push(error);}
@@ -561,6 +562,9 @@ export async function retainProviderSourceGrant(
       }
       const rootJSON=JSON.stringify(frame.root),stateJSON=JSON.stringify({state:frame.state,index:frame.indexRows});
       const binding=freezeValue(JSON.parse(grant.binding_json));
+      const prepared=bridgeWorkerChannels.get(bridge)?.get(input.grantId);
+      if(usedWorkerChannels.get(bridge)?.has(input.grantId)&&!prepared)fail("An attempted source channel has no completed original preparation.");
+      if(prepared){prepared.check();if(prepared.containerId()!==input.containerId||JSON.stringify(prepared.binding)!==JSON.stringify(binding))fail("Provider source channel grant binding differs.");}
       const retained:Pin[]=[],from=c.pins.length;
       try {
         const handoff=directory(c,c.service,"handoff"),catalogs=directory(c,handoff,"catalogs");
@@ -569,7 +573,7 @@ export async function retainProviderSourceGrant(
         // Lease pins have their own lifetime. Never leave them in the transient
         // owner-operation stack that another operation releases in finally.
         retained.push(...c.pins.splice(from));
-        let closed=false;const children=new Set<()=>void>();
+        let closed=false;const children=new Set<()=>void>();if(prepared)children.add(prepared.invalidate);
         const close=()=>{
           if(closed)return;closed=true;active.delete(result);
           const failures:unknown[]=[];
@@ -612,6 +616,155 @@ export async function retainProviderSourceGrant(
   }catch(error){
     try{lease?.close();}catch(cleanup){throw new AggregateError([error,cleanup],"Provider source grant publication failed.");}throw error;
   }finally{secret.fill(0);}
+}
+
+/** Original issued-grant channel preparation. This does not authorize workers. */
+export interface ProviderSourceWorkerChannel {
+  readonly mountSource:string;
+  assertCurrent():void;
+  verifyCurrent():Promise<void>;
+  bindCreated(input:ProviderHandoffContainerInput):Promise<import("./provider-source-worker-wire.ts").SourceWorkerChannelBinding>;
+  dispatch(container:ProviderSourceContainerLease):Promise<void>;
+  close():Promise<void>;
+}
+type SourceWorkerChannelContext={check:()=>void;invalidate:()=>void;binding:Row;containerId:()=>string|undefined;mountSource:string};
+const sourceWorkerChannels=new WeakMap<ProviderSourceWorkerChannel,SourceWorkerChannelContext>();
+const bridgeWorkerChannels=new WeakMap<ProviderHandoffBridge,Map<string,SourceWorkerChannelContext>>();
+const ownerWorkerChannels=new WeakMap<ProviderServiceOwnership,Set<SourceWorkerChannelContext>>();
+const usedWorkerChannels=new WeakMap<ProviderHandoffBridge,Set<string>>();
+const pendingWorkerChannels=new WeakMap<ProviderServiceOwnership,number>();
+function closeWorkerChannels(owner:ProviderServiceOwnership):void {
+  for(const channel of [...(ownerWorkerChannels.get(owner)??[])])channel.invalidate();
+}
+export function assertProviderSourceWorkerChannel(value:ProviderSourceWorkerChannel):void {
+  const channel=sourceWorkerChannels.get(value);if(!channel)fail("An original provider source worker channel is required.");channel.check();
+}
+export async function prepareProviderSourceWorkerChannel(
+  bridge:ProviderHandoffBridge,value:Readonly<{projectId:string;grantId:string;bindingSha256:string;expectedVersion:number}>,controlSecret:Uint8Array,
+):Promise<ProviderSourceWorkerChannel> {
+  const names=["projectId","grantId","bindingSha256","expectedVersion"],input:Row={};
+  if(!value||typeof value!=="object"||Array.isArray(value)||Reflect.ownKeys(value).length!==names.length)fail("Invalid issued source channel input.");
+  for(const name of names){const own=Object.getOwnPropertyDescriptor(value,name);if(!own||!("value"in own))fail("Issued source channel requires own data fields.");input[name]=own.value;}
+  if(!match(input.projectId,ID)||!match(input.grantId,UUID)||!match(input.bindingSha256,DIGEST)||input.expectedVersion!==2)fail("Issued source channel requires its first issued version.");
+  const typed=Object.getPrototypeOf(Uint8Array.prototype),length=Object.getOwnPropertyDescriptor(typed,"byteLength")!.get!,buffer=Object.getOwnPropertyDescriptor(typed,"buffer")!.get!,arrayLength=Object.getOwnPropertyDescriptor(ArrayBuffer.prototype,"byteLength")!.get!;
+  try{if(!(controlSecret instanceof Uint8Array)||!ArrayBuffer.isView(controlSecret)||length.call(controlSecret)!==32)fail();arrayLength.call(buffer.call(controlSecret));}catch{fail("Source channel requires 32 native non-shared control bytes.");}
+  const secret=new Uint8Array(controlSecret),retained:Pin[]=[],pins:Array<import("./sqlite-sandbox.ts").PinnedSQLiteDirectory>=[];
+  const registered=(()=>{try{return bridgeCurrent(bridge,true);}catch(error){secret.fill(0);throw error;}})(),c=registered.context;
+  const directoryIdentities=new Map<import("./sqlite-sandbox.ts").PinnedSQLiteDirectory,{dev:number;ino:number}>();
+  let sandbox:typeof import("./sqlite-sandbox.ts")|undefined;
+  const keep=(p:import("./sqlite-sandbox.ts").PinnedSQLiteDirectory)=>{pins.push(p);const stat=c.fs.fstatSync(p.fd);directoryIdentities.set(p,{dev:stat.dev,ino:stat.ino});};
+  let broker:import("./provider-source-worker-wire.ts").SourceWorkerSocketBroker|undefined,server:ReturnType<typeof import("./provider-source-worker-wire.ts").createSourceWorkerServerProtocol>|undefined;
+  let closed=false,published=false,reserved=false,bindingStarted=false,containerId:string|undefined,version=2,rootJSON="",otherJSON="",grantJSON="",grant:Row|undefined;
+  let watch:ReturnType<typeof setInterval>|undefined,cleanupFlight:Promise<void>|undefined;
+  let worker:ProviderSourceWorkerLease|undefined,dispatchFlight:Promise<void>|undefined,dispatchStarted=false;
+  let context:SourceWorkerChannelContext|undefined;
+  const cleanup=():Promise<void>=>{
+    if(cleanupFlight)return cleanupFlight;
+    cleanupFlight=(async()=>{
+      // Stop transport and worker admission immediately, then keep all channel
+      // pins until the original dispatch has settled its native work/cleanup.
+      const brokerClosing=broker?.close();void brokerClosing?.catch(()=>{});
+      void worker?.close().catch(()=>{});
+      await dispatchFlight?.then(()=>{},()=>{});await worker?.close();
+      if(broker){try{await brokerClosing;}catch(error){
+        // An expired observation is not settlement. Keep every original pin
+        // and wait for this same child; never create/adopt a replacement.
+        await broker.closed;await broker.close();
+      }}
+      const errors:unknown[]=[];
+      for(const pin of pins.splice(0).reverse())try{await pin.close();}catch(error){errors.push(error);}
+      for(const pin of retained.splice(0).reverse())try{c.fs.closeSync(pin.fd);}catch(error){errors.push(error);}
+      if(errors.length)throw new AggregateError(errors,"Source channel pin cleanup is uncertain.");
+      if(context)ownerWorkerChannels.get(registered.owner)?.delete(context);
+    })();void cleanupFlight.catch(()=>{});return cleanupFlight;
+  };
+  const invalidate=()=>{if(closed)return;closed=true;secret.fill(0);server?.close();if(watch!==undefined)clearInterval(watch);void worker?.close().catch(()=>{});if(published)void cleanup();};
+  const check=()=>{
+    try{
+      if(closed)fail("Provider source worker channel is closed.");
+      for(const p of retained)assertPin(c,p);
+      const frame=containerFrame(bridge,registered),source=frame.state.states.find(row=>row.projectId===input.projectId),next=source?.grant;
+      const other=JSON.stringify({projects:frame.state.projects,reservations:frame.state.reservations,index:frame.indexRows,states:frame.state.states.filter(row=>row.projectId!==input.projectId)});
+      if(JSON.stringify(frame.root)!==rootJSON||other!==otherJSON||!next||!grant
+        ||JSON.stringify({...next,state:grant.state,container_id:grant.container_id})!==grantJSON
+        ||!["issued","created","started"].includes(next.state)||source.version!==({issued:2,created:3,started:4} as Row)[next.state]
+        ||source.version<version||containerId!==undefined&&next.container_id!==containerId)fail("Issued source channel grant changed.");
+      version=source.version;
+      for(const p of pins){sandbox!.assertPinnedSQLiteDirectory(p);const held=c.fs.fstatSync(p.fd),visible=c.fs.lstatSync(p.path),identity=directoryIdentities.get(p)!,mode=p===pins[3]&&broker?0o500:0o700;if(!held.isDirectory()||!visible.isDirectory()||held.dev!==identity.dev||held.ino!==identity.ino||visible.dev!==identity.dev||visible.ino!==identity.ino||held.uid!==grant.binding.uid||held.gid!==grant.binding.gid||(held.mode&0o777)!==mode||c.fs.realpathSync(p.path)!==p.path)fail("Issued source channel directory changed.");}
+      broker?.assertCurrent();
+    }catch(error){invalidate();throw error;}
+  };
+  const close=async()=>{
+    invalidate();let timer:ReturnType<typeof setTimeout>|undefined;
+    try{await Promise.race([cleanup(),new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error("Provider source channel close is unsettled after 10000ms.")),10000);})]);}
+    finally{if(timer!==undefined)clearTimeout(timer);}
+  };
+  try{
+    const cryptoName="node:crypto",crypto=await import(cryptoName);bridgeCurrent(bridge,true);
+    const digest=crypto.createHash("sha256").update(secret).digest("hex");
+    await withBridge(bridge,true,()=>{
+      const frame=containerFrame(bridge,registered),source=frame.state.states.find(row=>row.projectId===input.projectId),record=source?.grant;
+      const used=usedWorkerChannels.get(bridge)??new Set<string>(),active=ownerWorkerChannels.get(registered.owner)?.size??0,pending=pendingWorkerChannels.get(registered.owner)??0;
+      if(!record||source.version!==2||record.state!=="issued"||record.grant_id!==input.grantId||record.binding_sha256!==input.bindingSha256||!crypto.timingSafeEqual(Buffer.from(record.control_secret_sha256,"hex"),Buffer.from(digest,"hex")))fail("Issued source channel authentication differs.");
+      if(active+pending>=2||used.has(input.grantId))fail("Issued source channel cannot be duplicated or recycled.");
+      const binding=JSON.parse(record.binding_json),process=(globalThis as any).process;
+      if(process.platform!=="linux"||!process.getuid?.()||binding.uid!==process.getuid()||binding.gid!==process.getgid())fail("Issued source channel requires its fixed native owner.");
+      used.add(input.grantId);usedWorkerChannels.set(bridge,used);pendingWorkerChannels.set(registered.owner,pending+1);reserved=true;
+      grantJSON=JSON.stringify(record);grant=Object.freeze({...record,binding:freezeValue(binding)});
+      rootJSON=JSON.stringify(frame.root);otherJSON=JSON.stringify({projects:frame.state.projects,reservations:frame.state.reservations,index:frame.indexRows,states:frame.state.states.filter(row=>row.projectId!==input.projectId)});
+      const from=c.pins.length;
+      try{const handoff=directory(c,c.service,"handoff"),catalogs=directory(c,handoff,"catalogs");pin(c,c.path.join(handoff.path,"index.sqlite"),false,INDEX_MAX);
+        for(const project of frame.state.projects){const dir=directory(c,catalogs,project.catalog_id);pin(c,c.path.join(dir.path,"catalog.sqlite"),false,BRIDGE_CATALOG_MAX);}retained.push(...c.pins.splice(from));
+      }catch(error){releasePins(c,from);throw error;}
+    });
+    check();sandbox=await import("./sqlite-sandbox.ts");check();
+    const root=await sandbox.pinSQLiteDirectory(c.root.path);keep(root);check();
+    const original=c.fs.fstatSync(root.fd);if(original.dev!==c.root.dev||original.ino!==c.root.ino)fail("Issued source channel root changed.");
+    const base=await sandbox.createPinnedSQLiteChildDirectory(root,".clank-source-worker-"+input.grantId,check);keep(base);check();
+    for(const name of ["listener","disposal","mount"]){const child=await sandbox.createPinnedSQLiteChildDirectory(base,name,check);keep(child);check();}
+    const wire=await import("./provider-source-worker-wire.ts");check();
+    broker=await wire.openSourceWorkerSocketBroker(pins[2]!,pins[3]!,pins[4]!);check();
+    const verifyCurrent=async()=>{check();await withBridge(bridge,true,()=>check());check();};
+    const bindCreated=async(value:ProviderHandoffContainerInput)=>{
+      check();if(bindingStarted)fail("Source channel binding cannot be duplicated or recycled.");
+      const inputCreated=containerInput(value,"created",true);
+      if(inputCreated.projectId!==input.projectId||inputCreated.grantId!==input.grantId||inputCreated.bindingSha256!==input.bindingSha256||inputCreated.expectedVersion!==3)fail("Source channel created binding differs.");
+      bindingStarted=true;try{await verifyCurrent();check();const frame=containerFrame(bridge,registered),source=frame.state.states.find(row=>row.projectId===input.projectId);
+      if(source?.version!==3||source.grant?.state!=="created"||source.grant.container_id!==inputCreated.containerId)fail("Source channel requires its exact created catalog transition.");
+      const client=domains.get(registered.domain)?.client;if(!client)fail();
+      const response=await runProviderDockerClient(client,["container","inspect","--format",CONTAINER_PROJECTION,inputCreated.containerId],{timeoutMs:15000,maxOutputBytes:65536});check();
+      containerObservation(response.stdout,inputCreated,grant!.binding,registered.domain,"created");await verifyCurrent();check();
+      // No await after the final checks and before consuming the original key.
+      containerId=inputCreated.containerId;server=wire.createSourceWorkerServerProtocol(secret,{bindingSha256:input.bindingSha256,containerId,sourceIncarnation:grant!.binding.sourceIncarnation});secret.fill(0);check();return server.binding;}catch(error){invalidate();throw error;}
+    };
+    const dispatch=(container:ProviderSourceContainerLease):Promise<void>=>{
+      try{
+        check();if(dispatchStarted||!server||!containerId)fail("Source channel dispatch is absent or already consumed.");
+        const actual=sourceContainerLeases.get(container);
+        if(!actual||actual.scope.parent.bridge!==bridge||actual.scope.parent.input.grantId!==input.grantId
+          ||actual.scope.parent.input.containerId!==containerId||sourceWorkerChannelFor(actual.scope)!==context)fail("Source channel requires its original coupled container.");
+        actual.check();dispatchStarted=true;
+      }catch(error){return Promise.reject(error);}
+      const pending=(async()=>{
+        worker=await retainProviderSourceWorker(container);check();
+        for(let sequence=0;sequence<3;sequence++){
+          const encoded=await broker!.receive();check();
+          const accepted=server!.accept(encoded);
+          const result=await worker.execute(accepted.task);check();
+          broker!.reply(server!.reply(accepted,result));check();
+        }
+        // IPC reply is not a source completion/readiness receipt. Keep the
+        // channel until its client disconnects or its original owner closes it.
+      })().catch(error=>{invalidate();throw error;});
+      dispatchFlight=pending;void pending.catch(()=>{});return pending;
+    };
+    context={check,invalidate,binding:grant!.binding,containerId:()=>containerId,mountSource:pins[4]!.path};
+    const result:ProviderSourceWorkerChannel=Object.freeze({mountSource:context.mountSource,assertCurrent:check,verifyCurrent,bindCreated,dispatch,close});
+    check();const active=ownerWorkerChannels.get(registered.owner)??new Set<SourceWorkerChannelContext>();active.add(context);ownerWorkerChannels.set(registered.owner,active);
+    const channels=bridgeWorkerChannels.get(bridge)??new Map<string,SourceWorkerChannelContext>();channels.set(input.grantId,context);bridgeWorkerChannels.set(bridge,channels);sourceWorkerChannels.set(result,context);published=true;
+    watch=setInterval(()=>{try{check();}catch{}},50);watch.unref?.();void broker.closed.then(()=>invalidate());check();return result;
+  }catch(error){invalidate();try{await close();}catch(failure){throw new AggregateError([error,failure],"Issued source channel preparation and cleanup failed.");}throw error;}
+  finally{if(!published)secret.fill(0);if(reserved)pendingWorkerChannels.set(registered.owner,(pendingWorkerChannels.get(registered.owner)??1)-1);}
 }
 
 export interface ProviderSourceRuntimeDataLease {
@@ -713,6 +866,12 @@ export interface ProviderSourceContainerLease {
 }
 type SourceContainerContext={check:()=>void;data:ProviderSourceRuntimeDataLease;scope:SourceRuntimeDataContext;children:Set<()=>void>;workerRetained:boolean};
 const sourceContainerLeases=new WeakMap<ProviderSourceContainerLease,SourceContainerContext>();
+function sourceWorkerChannelFor(context:SourceRuntimeDataContext):SourceWorkerChannelContext|undefined {
+  const channel=bridgeWorkerChannels.get(context.parent.bridge)?.get(context.parent.input.grantId);
+  if(!channel)return undefined;channel.check();
+  if(channel.containerId()!==context.parent.input.containerId||JSON.stringify(channel.binding)!==JSON.stringify(context.grant.binding))fail("Provider source channel ownership differs.");
+  return channel;
+}
 const SOURCE_CONTAINER_PROJECTION=`{"identity":${CONTAINER_PROJECTION},"host":{{json .HostConfig}},"mounts":{{json .Mounts}},"apparmor":{{json .AppArmorProfile}},"workingDirectory":{{json .Config.WorkingDir}}}`;
 const SOURCE_MASKED_PATHS=["/proc/asound","/proc/acpi","/proc/kcore","/proc/keys","/proc/latency_stats","/proc/timer_list","/proc/timer_stats","/proc/sched_debug","/proc/scsi","/sys/firmware","/sys/devices/virtual/powercap"];
 const SOURCE_READONLY_PATHS=["/proc/bus","/proc/fs","/proc/irq","/proc/sys","/proc/sysrq-trigger"];
@@ -741,6 +900,7 @@ function sourceContainerObservation(encoded:string,data:ProviderSourceRuntimeDat
   for(const [port,bindings] of Object.entries(ports))if(!/^[1-9][0-9]{0,4}\/tcp$/u.test(port)||Number(port.slice(0,-4))>65535||!Array.isArray(bindings)||bindings.length!==1
     ||!exact(bindings[0],["HostIp","HostPort"])||bindings[0].HostIp!=="127.0.0.1"||!match(bindings[0].HostPort,/^[1-9][0-9]{0,4}$/u)||Number(bindings[0].HostPort)>65535)fail("Provider source container port topology differs.");
   const expected=[{target:"/app",source:data.releaseDirectory,rw:false},{target:"/data",source:data.dataDirectory,rw:true},{target:"/run/clank-source",source:c.path.join(c.service.path,"handoff","catalogs",binding.catalogId),rw:false}];
+  const channel=sourceWorkerChannelFor(context);if(channel)expected.push({target:"/run/clank-source-worker",source:channel.mountSource,rw:false});
   if(!Array.isArray(value.mounts)||value.mounts.length!==expected.length)fail("Provider source container mount topology differs.");
   for(const wanted of expected){const mounts=value.mounts.filter((m:Row)=>m.Destination===wanted.target);
     if(mounts.length!==1||!exact(mounts[0],["Type","Source","Destination","Mode","RW","Propagation"])||mounts[0].Type!=="bind"||mounts[0].Source!==wanted.source||mounts[0].Mode!==""||mounts[0].RW!==wanted.rw||mounts[0].Propagation!=="rprivate")fail("Provider source container mount topology differs.");}
@@ -757,7 +917,7 @@ function sourceProcText(c:Context,path:string,maximum=65536):string {
     const visible=c.fs.lstatSync(path);if(visible.dev!==held.dev||visible.ino!==held.ino||length>maximum)fail("Provider source process metadata changed.");return new TextDecoder("utf-8",{fatal:true}).decode(bytes.subarray(0,length));
   }finally{c.fs.closeSync(fd);}
 }
-function sourceProcess(c:Context,pid:number,containerId:string,binding:Row):{birth:string;namespaces:Record<string,string>} {
+function sourceProcess(c:Context,pid:number,containerId:string,binding:Row,channel?:SourceWorkerChannelContext):{birth:string;namespaces:Record<string,string>} {
   const root=`/proc/${pid}`,stat=sourceProcText(c,root+"/stat"),end=stat.lastIndexOf(") "),fields=stat.slice(end+2).trim().split(/\s+/u);
   if(end<1||stat.slice(0,stat.indexOf(" "))!==String(pid)||fields.length<20||!["R","S","D","I"].includes(fields[0])||!match(fields[19],/^[1-9][0-9]{0,19}$/u))fail("Provider source process identity is unavailable.");
   const rows=new Map<string,string>();for(const line of sourceProcText(c,root+"/status").split("\n")){const colon=line.indexOf(":");if(colon!==-1){const key=line.slice(0,colon);if(rows.has(key))fail();rows.set(key,line.slice(colon+1).trim());}}
@@ -774,7 +934,9 @@ function sourceProcess(c:Context,pid:number,containerId:string,binding:Row):{bir
     if(sourceProcText(c,base+"/"+file,4096).trim()!==expected)fail("Provider source process kernel resource limits differ.");
   }
   const mounts=sourceProcText(c,root+"/mountinfo").trim().split("\n").map(line=>line.split(" "));
-  for(const [target,option] of [["/","ro"],["/app","ro"],["/data","rw"],["/run/clank-source","ro"]]){
+  const requiredMounts=[["/","ro"],["/app","ro"],["/data","rw"],["/run/clank-source","ro"]];
+  if(channel){channel.check();requiredMounts.push(["/run/clank-source-worker","ro"]);}
+  for(const [target,option] of requiredMounts){
     const entries=mounts.filter(row=>row[4]===target);if(entries.length!==1||entries[0].length<10||!entries[0][5].split(",").includes(option))fail("Provider source process kernel mount permissions differ.");
   }
   const namespaces:Record<string,string>={};for(const name of ["mnt","pid","net","ipc","cgroup","user"]){const link=c.fs.readlinkSync(root+"/ns/"+name),local=c.fs.readlinkSync("/proc/self/ns/"+name);
@@ -797,7 +959,7 @@ export async function retainProviderSourceContainer(data:ProviderSourceRuntimeDa
       await verifyDomain(parent.registered.owner,parent.registered.domain,true);scope.check();
       const args=["container","inspect","--format",SOURCE_CONTAINER_PROJECTION,parent.input.containerId];
       const response=await runProviderDockerClient(client,args,{timeoutMs:15000,maxOutputBytes:65536});scope.check();
-      const observed=sourceContainerObservation(response.stdout,data,scope),process=sourceProcess(c,observed.pid,parent.input.containerId,grant.binding);
+      const channel=sourceWorkerChannelFor(scope),observed=sourceContainerObservation(response.stdout,data,scope),process=sourceProcess(c,observed.pid,parent.input.containerId,grant.binding,channel);
       const root=`/proc/${observed.pid}/root`,held:number[]=[],children=new Set<()=>void>();let closed=false;
       const close=()=>{if(closed)return;closed=true;scope.children.delete(close);const errors:unknown[]=[];
         for(const child of [...children])try{child();}catch(error){errors.push(error);}
@@ -813,9 +975,10 @@ export async function retainProviderSourceContainer(data:ProviderSourceRuntimeDa
         const stat=c.fs.fstatSync(descriptor);if(String(stat.ino)!==link.slice(name.length+2,-1))fail("Provider source namespace pin identity differs.");return {descriptor,dev:stat.dev,ino:stat.ino};
       });
       const mounted=[{target:"/app",source:data.releaseDirectory},{target:"/data",source:data.dataDirectory},{target:"/run/clank-source",source:c.path.join(c.service.path,"handoff","catalogs",grant.binding.catalogId)}];
+      if(channel)mounted.push({target:"/run/clank-source-worker",source:channel.mountSource});
       const identity=mounted.map(m=>{const s=c.fs.lstatSync(m.source);return {...m,dev:s.dev,ino:s.ino};});
       const check=()=>{
-        try{if(closed)fail("Provider source container lease is closed.");scope.check();const fresh=sourceProcess(c,observed.pid,parent.input.containerId,grant.binding);
+        try{if(closed)fail("Provider source container lease is closed.");scope.check();const fresh=sourceProcess(c,observed.pid,parent.input.containerId,grant.binding,channel);
           if(fresh.birth!==process.birth||JSON.stringify(fresh.namespaces)!==JSON.stringify(process.namespaces))fail("Provider source process identity changed.");
           for(const p of namespacePins){const retained=c.fs.fstatSync(p.descriptor);if(retained.dev!==p.dev||retained.ino!==p.ino)fail("Provider source namespace pin changed.");}
           const retained=c.fs.fstatSync(fd),visible=c.fs.statSync(root);if(retained.dev!==visible.dev||retained.ino!==visible.ino)fail("Provider source process root changed.");
@@ -829,6 +992,7 @@ export async function retainProviderSourceContainer(data:ProviderSourceRuntimeDa
           await verifyDomain(parent.registered.owner,parent.registered.domain,true);check();},parent.bridge);check();
         }catch(error){try{close();}catch(cleanup){throw new AggregateError([error,cleanup],"Provider source container verification and cleanup failed.");}throw error;}
       };
+      if(channel)children.add(channel.invalidate);
       lease=Object.freeze({containerId:parent.input.containerId,pid:observed.pid,birth:process.birth,assertCurrent:check,verifyCurrent,close});
       check();sourceContainerLeases.set(lease,{check,data,scope,children,workerRetained:false});scope.children.add(close);scope.containerRetained=true;
       await verifyDomain(parent.registered.owner,parent.registered.domain,true);check();
