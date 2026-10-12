@@ -1,0 +1,84 @@
+{
+  "base": "137ad215e8460361ab57fee279d8e05a00ce42c8",
+  "branch": "codex/provider-source-launch-388",
+  "feature": "07",
+  "acceptedFeatures": 29,
+  "scope": "Private original committed data retention before source container creation. No production launch, readiness, control, write, all-role stop, target, ingress, fallback or interruption acceptance is claimed.",
+  "implementation": {
+    "authority": "Original opaque source service registry before caller binding descriptors; paths come exclusively from decoded original native committed metadata.",
+    "binding": [
+      "projectId",
+      "releaseId",
+      "generation",
+      "capsuleSha256",
+      "fence"
+    ],
+    "limits": {
+      "activeAndPendingLeases": 2,
+      "metadataBytes": 65536,
+      "databaseBytes": 2147483648
+    },
+    "lifetime": "Reserve each project and pending capacity synchronously before imports/awaits. Retain original descriptors, revalidate after the final await, permanently close on drift, and release on original owner close. No project recycling.",
+    "refusals": [
+      "public prepared DTOs and copied/proxied capabilities",
+      "accessor binding fields without evaluating getters",
+      "uncommitted journal",
+      "release/generation/capsule/fence mismatch",
+      "higher fence rewrite after idempotent data validation",
+      "inode or native metadata replacement, including restoration",
+      "intermediate symlink redirection",
+      "parallel budget overflow",
+      "late journal creation at native publication"
+    ]
+  },
+  "evidenceRoot": "/var/tmp/clank-source-launch-137ad21-by4_xx5k",
+  "focused": {
+    "node22": "launch-data22-03.log: 18/18 passes, zero failures/cancellations/skips",
+    "qualification": "Native SQLite, ownership and filesystem with explicitly scripted Docker-domain transport.",
+    "node22Regression": "source-data22-09.log:267/267 passes",
+    "node24Regression": "source-data24-04.log:117/117 plus source-grant24-10.log:150/150;267 total, zero failures/cancellations/skips",
+    "selectionObservation": "The first Node24 invocation included a nonexistent third file argument, which Node24 ignored. Its117 returned cases cover only the two existing selected files. The actual grant-lease file was then explicitly selected and its150 cases independently passed; no missing file is counted."
+  },
+  "native": {
+    "node22": "native-data22-08.log: 18/18 passes, zero failures/cancellations/skips; terminal SSH exit0",
+    "node26": "native-data26-09.log: 18/18 passes, zero failures/cancellations/skips; terminal SSH exit0",
+    "qualification": "Same original assertions, substituting only fixture Docker client configuration with the actual existing daemon. All322 guest production modules match the paired output hashes. No application/container/worker is launched or stopped.",
+    "moduleMap": "native-module-map-08.json",
+    "vm": "native-vm-identity-11.json",
+    "harness": "native-inputs-08.json"
+  },
+  "types": "54 packed positive/negative fixtures;149 inherited diagnostics, zero new versus154 baseline; packed OpenAPI examples pass",
+  "outputs": {
+    "count": 322,
+    "publicDeclarations": 146,
+    "declarationsUnchanged": true,
+    "pairedNode22Node26": true,
+    "onlyChanged": "provider-handoff.js"
+  },
+  "package": {
+    "files": 451,
+    "unpackedSize": 7053587,
+    "ceiling": 8388608,
+    "dependencies": 0
+  },
+  "originalLocalFiles": {
+    "verified": 23,
+    "evidence": "original-files-07.json"
+  },
+  "retainedFailures": [
+    {
+      "log": "launch-data-first26-01.log",
+      "tests": 16,
+      "pass": 15,
+      "fail": 1,
+      "reason": "The old metadata descriptor has nlink0 after actual atomic fence rewrite. Original private native-file validation correctly refuses; the fixture expected only narrower identity/change messages. The assertion now includes the existing native-file refusal without changing production behavior."
+    }
+  ],
+  "fullGate": {
+    "state": "running",
+    "session": 7517,
+    "log": "full-check26-04.log",
+    "frozenInputs": "frozen-inputs-04.json"
+  },
+  "delivery": "Not yet committed, pushed or merged. Fresh exact-head hosted checks and protected delivery remain required."
+}

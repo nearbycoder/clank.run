@@ -6,6 +6,22 @@ Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Twe
 
 A feature is complete only when its documented acceptance evidence exists. Proposed contracts do not count as implemented features. The review baseline remains historical evidence; this ledger records subsequent work.
 
+## Original committed source launch data review
+
+The private source launch observer derives database/release paths from the original committed provider metadata and binds the exact release, generation, capsule and fence. It reserves bounded capacity before awaits, retains native descriptors, refuses unsettled journals and path redirection, rechecks after its final await, and releases on closure. The actual higher-fence idempotent apply path invalidates an older observation instead of upgrading its authority. [Data retention review](source-launch-data-review.json).
+
+All18 focused Node22 cases and the same18 native cases on each Node22/26 pass. Native cases use the actual existing Docker daemon with all322 guest production modules verified; they create no application containers and claim no readiness/write/stop authority. Both compiled builds match,146 public declarations remain unchanged,54 packed type fixtures pass with149 inherited/zero new diagnostics, and451 package files total7,053,587 bytes below the unchanged8MiB ceiling with zero dependencies. All23 original files are preserved. The complete gate is running; fresh hosted checks and protected delivery remain required.
+
+Production launch consumption, original native completion/readiness/control/write admission, every-role writer stop and full target/ingress/fallback/interruption proof remain required. Browser admin-policy verification remains unresolved. Acceptance stays **29/40**.
+
+## Protected source service ownership delivery
+
+[PR #388](https://github.com/nearbycoder/clank.run/pull/388) merged normally after all eight corrected-head hosted checks pass. Reviewed head `2d1e95e9804f57a7683cf415b263d428d6d70204` becomes main `137ad215e8460361ab57fee279d8e05a00ce42c8`, with identical tree `b0b7f21ad0b6b98ddd9073c0a7548f1a82554678` and prior main `153d7e8` as its parent. Both original checkouts and the implementation root are synced; all23 original local files and all322 tested outputs are verified unchanged. No PR is open at this delivery boundary. [Ownership review](source-service-ownership-review.json).
+
+The final complete local gate and returned hosted Node22/24/package summaries report3,863 tests/3,826 passes/zero failures or cancellations/37 existing skips. Local measured coverage is91.97/82.29/90.11; conformance, documentation, dependency and repository/history security pass. Packed types54 pass with149 inherited/zero new diagnostics, and both native PostgreSQL jobs pass24 cases. Hosted logs are truncated; only returned terminal facts are claimed. The original seven-pass/Node24-failed head, unknown specific ECONNRESET cause, controlled TCP before/after proof, native admission publication/inode prototype failures and transient log HTTP502 observation remain retained. No assertion, quota, host profile, package limit or retry policy changed.
+
+The next branch is `codex/provider-source-launch-388`. The private source owner admission and stdin entry are delivered; actual production launch consumption, exact settled baseline/fence identity, original native completion/readiness/control/write admission and every-role writer stop remain required before full target/ingress/fallback/interruption acceptance. Browser admin-policy verification remains unresolved. Acceptance stays **29/40**.
+
 ## Private source service ownership review
 
 An explicit private source admission reserves exactly one genuine bridge owner before startup awaits. It independently verifies the original non-root Linux/Docker domain, empty initial catalog state, and retained namespace inodes. A final publication check refuses native changes after the last startup await; copies, ordinary owners, retained grants and unsupported versions cannot establish admission. The opaque facade resolves only its original owner and becomes permanently invalid after drift or closure. It grants no application, readiness, write or provider-wide stop authority. [Ownership review](source-service-ownership-review.json).
