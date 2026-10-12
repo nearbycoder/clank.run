@@ -1,8 +1,13 @@
 # Source worker channel integration plan
 
+Protected PR385 delivers original completion provenance plus native catalog replay refusal at main4fc4397395fba2237fda630b4bdccb77cc4129d6, exact reviewed treec57c2e51f751147e515bb051d8c0cdd614086b8b. All8 corrected-head checks pass; original23 files and321 outputs are preserved, and no PR remains open at delivery. The original native replay accepted a started-to-created version5 catalog; the correction binds bootstrap to created/version3 or started/version4 and permanently closes a failed reader, so exact row restoration cannot revive proof. [Completion review](source-completion-review.json).
+
+The next production integration must reserve original constructor ownership before ordinary access or jobs can open, resolve pre-commit health/post-commit initialization, and implement complete source readiness/control/write admission and every-role writer exclusion/stop. Existing identity capture before the first await is not production source reservation. All original transfer, target, ingress/fallback and interruption acceptance requirements remain;29/40 is unchanged.
+
+
 Feature 07 remains in progress. The implementation count remains 29 accepted and 11 pending. This plan and its native feasibility result do not complete source bootstrap, provider authorization, writer exclusion, target activation or the bounded ingress interruption requirement.
 
-The current integration basis is protected main `a01a1d0f1b405fd740e59d97b890e9a05cb1902b`, tree `09a7db020816d9bddbc8eb3ecc402aa91995e53a`. PR382 is merged, both original checkouts and the implementation root HEAD are synced, all23 original files are verified unchanged, and no PR is open. The original `d164/clank` recovery snapshot and its seven original file hashes remain preserved. The working branch is `codex/provider-source-channel-grant-382`. All eight exact-head hosted checks pass; final local and returned hosted runtime/package summaries each report3,759 tests /3,722 passes /zero failures or cancellations /37 existing skips. Genuine provider host worker ownership and raw native transport are delivered. Issued-grant directory ownership, the exact fourth read-only mount, authenticated dispatch and original captured-connection bootstrap remain required; this is not source readiness or full Feature07 acceptance.
+The historical PR382 delivery basis was main `a01a1d0f1b405fd740e59d97b890e9a05cb1902b`, tree `09a7db020816d9bddbc8eb3ecc402aa91995e53a`. At that delivery, both original checkouts and the implementation root were synced, all23 original files were verified unchanged, and no PR was open. The original `d164/clank` recovery snapshot and its seven original file hashes remain preserved. The next branch at that delivery was `codex/provider-source-channel-grant-382`. All eight exact-head hosted checks pass; final local and returned hosted runtime/package summaries each report3,759 tests /3,722 passes /zero failures or cancellations /37 existing skips. Genuine provider host worker ownership and raw native transport are delivered. Issued-grant directory ownership, the exact fourth read-only mount, authenticated dispatch and original captured-connection bootstrap remain required; this is not source readiness or full Feature07 acceptance.
 
 ## Protected source bootstrap integration
 
@@ -10,7 +15,7 @@ PR384 is protected main c21308cf962c7441577ef3571a729157d7003d55, exact reviewed
 
 The next production integration must resolve pre-commit HTTP health versus post-commit native worker authority, preserve original constructor reservation and gated ordinary traffic/writes, and implement original ready/control ownership validators. The existing first-base channel's retirement is not a readiness or provider-wide stop receipt. Full original transfer, all-role writer exclusion, target activation, ingress/fallback and interruption requirements remain intact;29/40 acceptance is unchanged. Historical sections below retain their original scope.
 
-## Current protected integration
+## Historical protected channel integration
 
 PR383 is protected main987adb7e8254b2db0cca0c8bf37883eab1741855, exact reviewed tree9e1287128a3a47b1abeaffb4bbd83d8c92a1ab4e; all8 checks pass, both original roots and23 original files verified. It delivers original issued-channel ownership, fourth read-only mount admission and authenticated provider dispatch. Following feasibility/history notes retain their original scope.
 

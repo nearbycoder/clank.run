@@ -61,7 +61,26 @@
       },
       "runtimeUnchanged": true
     },
-    "hosted": "Fresh exact-head hosted checks and protected delivery remain required.",
+    "hosted": {
+      "head": "3ba9148700e3dd067eae5b403b131622c08fe686",
+      "checks": 8,
+      "allPass": true,
+      "runtimeAndPackageCounts": {
+        "tests": 3797,
+        "pass": 3760,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 37
+      },
+      "types": {
+        "packed": 54,
+        "existing": 149,
+        "new": 0
+      },
+      "nativePostgreSQLCasesPerRuntime": 24,
+      "logsTruncated": true,
+      "qualification": "Only returned terminal facts are claimed; original backend jobs for Node22/24/package all complete successfully at the reviewed head."
+    },
     "catalogReplay": {
       "before": {
         "log": "native-catalog-regression22-before-21.log",
@@ -122,5 +141,18 @@
     "Original source readiness/control validators and write admission",
     "All-role source writer exclusion, seal/tail retention, target activation and ingress/fallback interruption proof",
     "All10 other pending original feature scopes"
-  ]
+  ],
+  "delivery": {
+    "pullRequest": "https://github.com/nearbycoder/clank.run/pull/385",
+    "reviewedHead": "3ba9148700e3dd067eae5b403b131622c08fe686",
+    "mergedMain": "4fc4397395fba2237fda630b4bdccb77cc4129d6",
+    "tree": "c57c2e51f751147e515bb051d8c0cdd614086b8b",
+    "parent": "c21308cf962c7441577ef3571a729157d7003d55",
+    "protectedAutoMerge": true,
+    "allHostedChecksPass": true,
+    "originalFilesUnchanged": 23,
+    "pairedOutputs": 321,
+    "openPullRequests": [],
+    "nextBranch": "codex/provider-source-control-385"
+  }
 }

@@ -961,7 +961,10 @@ test("deployed framework auth receives its exact managed public origin", async (
   }
 });
 
-test("workspace usage is durable, transparent, deletion-safe, and admission-enforced", async () => {
+test("workspace usage is durable, transparent, deletion-safe, and admission-enforced", async (t) => {
+  // This story compares counters within one UTC minute/month. Pin Date while
+  // retaining real process/network timers instead of assuming wall-clock phase.
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
   const root = await mkdtemp(join(tmpdir(), "clank-platform-usage-"));
   const dataDirectory = join(root, "platform");
   let platform = await openPlatform({

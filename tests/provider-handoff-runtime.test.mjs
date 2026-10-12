@@ -171,6 +171,16 @@ for(const change of ['created-advance','started-advance','started-regression'])t
  const restored=new DatabaseSync(f.catalog);try{restored.exec('BEGIN IMMEDIATE');restored.prepare('UPDATE clank_provider_handoff_source_grant SET state=? WHERE id=1').run(grant.state);restored.prepare('UPDATE clank_provider_handoff_bridge_state SET version=?,records_sha256=? WHERE id=1').run(metadata.version,metadata.records_sha256);restored.exec('COMMIT');}finally{restored.close();}
  p.send({attempt:2});assert.deepEqual(await p.next(),{phase:'completion-refused',attempt:2,catalogPinsReleased:true});await p.done();
 });
+test('constructor final await rejects a native writer after completion and releases all original pins',async t=>{
+ const f=await fixture(t),p=await child(t,f,'startup-final-native');assert.deepEqual(await p.next(),{ok:true,constructorRejected:true,pinsReleased:true});await p.done();
+ const db=new DatabaseSync(f.database,{readOnly:true});try{assert.equal(db.prepare('SELECT schema_hash FROM clank_pitr_state WHERE id=1').get().schema_hash,'f'.repeat(64));}finally{db.close();}
+});
+for(const grant of ['created','started'])test('original constructor initializes '+grant+' capture before returning its reserved native runtime',async t=>{
+ const f=await fixture(t);if(grant==='started')f.mutate(db=>db.exec("UPDATE clank_provider_handoff_source_grant SET state='started'"));
+ const p=await child(t,f,'startup'),message=await p.next();assert.equal(message.phase,'initialized');assert.equal(message.constructorReserved,true);assert.equal(message.completion.observedCursor.sequence,0);
+ p.send({});assert.deepEqual(await p.next(),{ok:true,records:0});await p.done();
+ const db=new DatabaseSync(f.database,{readOnly:true});try{const state=db.prepare('SELECT * FROM clank_pitr_state WHERE id=1').get();assert.equal(state.epoch,message.completion.captureEpoch);assert.equal(state.base_id,message.completion.baseBackupId);assert.equal(state.key_id,message.completion.keyId);assert.equal(state.sequence,0);assert.equal(db.prepare('SELECT count(*) AS n FROM clank_pitr_journal').get().n,0);}finally{db.close();}
+});
 for(const grant of ['created','started'])test('private completion data matches the actual '+grant+' native capture and retained base',async t=>{
  const f=await fixture(t);if(grant==='started')f.mutate(db=>db.exec("UPDATE clank_provider_handoff_source_grant SET state='started'"));
  const p=await child(t,f,'completion'),message=await p.next();assert.equal(message.phase,'initialized');const result=message.completion;

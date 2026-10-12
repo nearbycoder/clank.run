@@ -1,0 +1,207 @@
+{
+  "feature": 7,
+  "base": "4fc4397395fba2237fda630b4bdccb77cc4129d6",
+  "accepted": 29,
+  "pending": 11,
+  "files": {
+    "src/backend.ts": "93fc95cf7c674237143c6ccb10741498eb775fb70fad4b08a0277a279af80fec",
+    "tests/backend-source-runtime.test.mjs": "dcd1e1ddd4fbb7d81091cc6c73ffdf05845e103fbfa76697b41de0facc637840",
+    "tests/provider-handoff-runtime.test.mjs": "3eff9c9532db284bd3483db21d23bc4a1c1ea1cda6648f4eb69afb1d44e2273b",
+    "tests/fixtures/backend-source-startup.mjs": "58d63f079cfac7ba8b8c3a2f03e5be836a16d73b95ffc310bfe25628deb97654",
+    "tests/fixtures/provider-handoff-runtime.mjs": "e41594399a4b6f425f499a9939c9e92331ef3d644988e592bbe5b5d61b1ca8a6",
+    "tests/fixtures/provider-source-startup-native.mjs": "c62d27df611e3497f53791cb82080303d6ac23b528e46f08fd618fcd394a89f9",
+    "tests/platform-temporary-access.test.mjs": "d58c6e22115a6631c344bca45a821ae2ffef32388ad8b5ab46f74fbb4156858e",
+    "tests/platform.test.mjs": "bacbc434f10832a88b934fac73765e67dc65f31e032ee1a85de7a090c9d54de9"
+  },
+  "scope": "Explicit original constructor source startup reservation before the first await and native completion before returning a runtime. This does not integrate production launch/health/data ordering or readiness/write admission.",
+  "implementation": [
+    "Explicit private startup slot is bounded own data and consumed before the first await; failed claims and competing constructors cannot reopen the process. Ordinary no-slot startup and manual initialization remain supported.",
+    "Supplied databases and declared jobs are rejected before native open. Genuine original native cleanup is retained while constructing; source failure closes the original runtime/database and preserves cleanup uncertainty.",
+    "Only the private original constructor can supply its consumed bootstrap to shared initialization; public extra arguments are ignored. Constructor revalidates original completion after its own final await before returning."
+  ],
+  "verification": {
+    "focusedNode22": 178,
+    "focusedNode24": 178,
+    "types": {
+      "packed": 54,
+      "existing": 149,
+      "new": 0
+    },
+    "nativeFinalCases": 10,
+    "nativePrototypeSuperseded": 10,
+    "exactOwnedContainersAbsent": 38,
+    "pairedOutputs": 321,
+    "publicDeclarationsUnchanged": 146,
+    "changedOutputs": [
+      "backend.js"
+    ],
+    "package": {
+      "files": 450,
+      "bytes": 7037232,
+      "ceiling": 8388608,
+      "dependencies": 0
+    },
+    "firstFixtureFailure": {
+      "log": "focused26-first-fixture-failure-01.log",
+      "counts": {
+        "tests": 26,
+        "pass": 25,
+        "fail": 1
+      },
+      "cause": "Retry test spreads an accessor-bearing options object and invokes its database getter itself. Retry now uses fresh fixed options; getter assertions remain unchanged."
+    },
+    "finalAwaitRace": {
+      "before": "constructor-final-await-before-08.log",
+      "beforeExitCode": 1,
+      "beforeReason": "Missing expected rejection after actual native metadata writer runs between lower completion and constructor return.",
+      "after": "constructor-final-await-after-09.log",
+      "afterExitCode": 0,
+      "corrected": "Independent original completion assertion after constructor final await; all original catalog/recovery/database pins release before rejection."
+    },
+    "fullGate": {
+      "file": "full-check26-fixture-corrected-37.log",
+      "completed": true,
+      "exitCode": 0,
+      "counts": {
+        "tests": 3815,
+        "pass": 3778,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 37
+      },
+      "coverage": {
+        "lines": 91.98,
+        "branches": 82.27,
+        "functions": 90.11
+      },
+      "qualification": "Fresh corrected-fixture complete gate; original runtime/source/output/package/host policy unchanged. No automatic retry of assertion failure."
+    },
+    "hosted": "Original c1cec34 head completes with7 passed/Node24 failed. Fresh corrected-head checks and protected delivery required.",
+    "interruptedFullGate": {
+      "session": 33334,
+      "completed": true,
+      "exitCode": 1,
+      "file": "full-check26-final-14.log",
+      "returnedCounts": {
+        "tests": 2125,
+        "pass": 1970,
+        "fail": 148,
+        "cancelled": 0,
+        "skipped": 7
+      },
+      "errors": [
+        "# Owned native project recovery diagnostic: Error: ENOENT: no such file or directory, open '/proc/self/fd/29/clank'\\\\n    at async Module.open (node:internal/fs/promises:1425:25)\\\\n    at async pinSQLiteDirectory (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/sqlite-sandbox.js:61:24)\\\\n    at async prepareSQLiteSandbox (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/sqlite-sandbox.js:163:19)\\\\n    at async runSQLiteTaskOwned (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/sqlite-task.js:336:11)\\\\n    at async decryptAndVerify (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/recovery.js:261:1)\\\\n    at async Object.restore (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/recovery.js:485:16)\\\\n    at async restorePointInTime (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/point-in-time.js:753:1)\\\\n    at async restoreArchive (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/point-in-time.js:708:18)\\\\n    at async performRestore (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/platform-point-in-time.js:173:14)\\\\nOwned native project recovery diagnostic: Error: ENOENT: no such file or directory, open '/proc/self/fd/29/clank'\\\\n    at async Module.open (node:internal/fs/promises:1425:25)\\\\n    at async pinSQLiteDirectory (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/sqlite-sandbox.js:61:24)\\\\n    at async prepareSQLiteSandbox (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/sqlite-sandbox.js:163:19)\\\\n    at async runSQLiteTaskOwned (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/sqlite-task.js:336:11)\\\\n    at async decryptAndVerify (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/recovery.js:261:1)\\\\n    at async Object.restore (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/recovery.js:485:16)\\\\n    at async restorePointInTime (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/point-in-time.js:753:1)\\\\n    at async restoreArchive (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/point-in-time.js:708:18)\\\\n    at async performRestore (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/platform-point-in-time.js:173:14)\\\\n",
+        "error: \"ENOENT: no such file or directory, open '/home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/brand/apple-touch-icon.png'\"",
+        "error: \"ENOENT: no such file or directory, open '/home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/brand/favicon.ico'\"",
+        "{\"initial\":{\"status\":503,\"body\":{\"ok\":false,\"error\":{\"code\":\"PROVIDER_DEPLOYMENT_PENDING\",\"message\":\"The provider deployment is still pending. Retry this exact deploy.\",\"retryAfter\":1}}},\"events\":[{\"kind\":\"reconcile\",\"projectId\":\"JG7E4EbogWs_mQOXyPC44eLr\",\"generation\":1,\"mode\":\"initialize\",\"candidates\":[]},{\"kind\":\"reconcile\",\"projectId\":\"JG7E4EbogWs_mQOXyPC44eLr\",\"generation\":1,\"mode\":\"initialize\",\"candidates\":[]},{\"kind\":\"reconcile\",\"projectId\":\"JG7E4EbogWs_mQOXyPC44eLr\",\"generation\":1,\"mode\":\"initialize\",\"candidates\":[]}],\"errors\":[\"Error: ENOENT: no such file or directory, open '/proc/self/fd/32/clank'\\n    at async Module.open (node:internal/fs/promises:1425:25)\\n    at async pinSQLiteDirectory (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/sqlite-sandbox.js:61:24)\\n    at async prepareSQLiteSandbox (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/sqlite-sandbox.js:163:19)\\n    at async runSQLiteTaskOwned (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/sqlite-task.js:336:11)\\n    at async file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/provider-data.js:646:2\\n    at async exclusive (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/provider-data.js:234:8)\\n    at async file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/provider-service.js:1076:19\\n    at async exclusive (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/provider-service.js:412:8)\\n    at async Object.reconcile (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/tests/platform-provider-canary.test.mjs:92:480)\\n    at async reconcileDeploymentProvider (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/provider.js:324:1)\",\"Error: ENOENT: no such file or directory, open '/proc/self/fd/32/clank'\\n    at async Module.open (node:internal/fs/promises:1425:25)\\n    at async pinSQLiteDirectory (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/sqlite-sandbox.js:61:24)\\n    at async prepareSQLiteSandbox (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/sqlite-sandbox.js:163:19)\\n    at async runSQLiteTaskOwned (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/sqlite-task.js:336:11)\\n    at async file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/provider-data.js:646:2\\n    at async exclusive (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/provider-data.js:234:8)\\n    at async file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/provider-service.js:1076:19\\n    at async exclusive (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/provider-service.js:412:8)\\n    at async Object.reconcile (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/tests/platform-provider-canary.test.mjs:92:480)\\n    at async reconcileDeploymentProvider (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/provider.js:324:1)\",\"Error: ENOENT: no such file or directory, open '/proc/self/fd/32/clank'\\n    at async Module.open (node:internal/fs/promises:1425:25)\\n    at async pinSQLiteDirectory (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/sqlite-sandbox.js:61:24)\\n    at async prepareSQLiteSandbox (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/sqlite-sandbox.js:163:19)\\n    at async runSQLiteTaskOwned (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/sqlite-task.js:336:11)\\n    at async file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/provider-data.js:646:2\\n    at async exclusive (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/provider-data.js:234:8)\\n    at async file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/provider-service.js:1076:19\\n    at async exclusive (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/provider-service.js:412:8)\\n    at async Object.reconcile (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/tests/platform-provider-canary.test.mjs:92:480)\\n    at async reconcileDeploymentProvider (file:///home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank/dist/provider.js:324:1)\"],\"operations\":[{\"action\":\"reconcile\",\"state\":\"retry\",\"error\":\"Deployment execution failed.\"}],\"platform\":{\"kind\":\"status\",\"id\":\"492\",\"status\":{\"state\":\"leader\",\"epoch\":1,\"expiresAt\":1791823188937,\"responsibilities\":[\"startup-recovery\",\"tenant-runtimes\",\"domain-reconciliation\",\"preview-cleanup\",\"idle-sweep\",\"release-windows\",\"scheduled-backups\",\"invitation-delivery\",\"audit-export\",\"retention\",\"operations-monitor\"]},\"errors\":[\"Error: The provider deployment is still pending. Retry this exact deploy.\"]}}"
+      ],
+      "errorKind": "Active implementation worktree removed by recorded Codex startup-cleanup snapshot during the original gate. Test failures reference removed repository files.",
+      "recovery": "worktree-recovery-result-19.json",
+      "original6InputsUnchanged": true,
+      "rebuilt321OutputsMatchOriginalProof": true,
+      "original23FilesUnchanged": true,
+      "worktreeLocked": true,
+      "newGateRequired": "Fresh complete gate after actual checkout/environment recovery; no threshold/assertion/skip weakening and no observation-timeout restart."
+    },
+    "worktreeRecovery": {
+      "snapshot": "39b76b70ea9b5d1f5721c324df563b97d369568e",
+      "ref": "refs/codex/snapshots/4e4b036c9faf7514afc338b8781eec0f15ad663f",
+      "exactRecoveredFiles": 28,
+      "frozenInputsUnchanged": 6,
+      "rebuiltOutputsMatch": 321,
+      "originalFilesUnchanged": 23,
+      "activeWorktreeLocked": true
+    },
+    "supersededLocalFullGate": {
+      "file": "full-check26-recovered-21.log",
+      "completed": true,
+      "exitCode": 0,
+      "counts": {
+        "tests": 3815,
+        "pass": 3778,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 37
+      },
+      "coverage": {
+        "lines": 91.98,
+        "branches": 82.27,
+        "functions": 90.11
+      },
+      "qualification": "Fresh complete byte-identical final-code gate after exact startup-cleanup recovery on the original owned TMPDIR; no assertion/coverage/skip weakening."
+    },
+    "hostedFixtureCorrections": {
+      "pullRequest": 386,
+      "originalHead": "c1cec340bbe6c8d4d4404fda5ab050572e756aed",
+      "originalHosted": {
+        "allChecksTerminal": true,
+        "pass": 7,
+        "fail": 1,
+        "failedJob": 114919680842,
+        "runtimeCounts": {
+          "tests": 3815,
+          "pass": 3776,
+          "fail": 2,
+          "cancelled": 0,
+          "skipped": 37
+        },
+        "failures": [
+          {
+            "test": "SIGKILL of the native controller retires active privileges and preserves historical exact receipts",
+            "cause": "Fixture native membership seed INSERT uses default zero busy timeout while another writer holds control.sqlite; hosted code5 at setup line24. Exact holder not identified by hosted trace.",
+            "controlled": "native-seed-lock-before-after-34.log proves immediateSQLITE_BUSY with timeout0, versus one inserted row after a separately held writer releases with bounded1000ms native wait."
+          },
+          {
+            "test": "workspace usage is durable, transparent, deletion-safe, and admission-enforced",
+            "cause": "Test expects rate denial using earlier requests without pinning the minute window. Controlled next-minute request reproduces200 vs429.",
+            "controlled": "usage-minute-boundary-before-33.log retains original429 assertion with Date.now advanced to prior recorded window+60001; source legitimately admits the new window."
+          }
+        ]
+      },
+      "corrections": {
+        "nativeSeed": "tests/platform-temporary-access.test.mjs adds only PRAGMA busy_timeout=1000 to its native seed connection; one mutation, no manual retry/threshold/role changes.",
+        "clock": "tests/platform.test.mjs pins only Date with native test mock timer while retaining real process/network timers; all original quota/count/privacy/deletion assertions remain.",
+        "focused": {
+          "node22": {
+            "temporaryAccess": 11,
+            "usage": 1,
+            "exitCode": 0,
+            "sessions": [
+              31647,
+              74088
+            ]
+          },
+          "node24": {
+            "temporaryAccess": 11,
+            "usage": 1,
+            "exitCode": 0,
+            "sessions": [
+              21809,
+              80658
+            ]
+          }
+        },
+        "runtimeSourcesUnchanged": true,
+        "compiledOutputsUnchanged": 321,
+        "nativeConstructorProofStillApplies": true
+      },
+      "autoMergeDisabled": true,
+      "freshFullGate": {
+        "session": 61442,
+        "confirmedLive": true,
+        "file": "full-check26-fixture-corrected-37.log",
+        "inputs": "full-gate-corrected-inputs-37.json",
+        "terminalReceiptRequired": true
+      },
+      "acceptance": "29/40 unchanged",
+      "next": "After actual fresh terminal success, verify eight frozen inputs/all321 outputs, save and restore only19 owned generated example diffs, update report/ledger/body to retain original hosted failure and corrected proofs, commit and push corrected PR386 head, require new exact-head all8 checks and protected merge."
+    }
+  },
+  "remaining": [
+    "Production source entry/bootstrap delivery and pre-commit health/post-commit initialization",
+    "Original source readiness/control/write admission",
+    "Complete every-role writer exclusion/stop, target activation, ingress/fallback and original interruption acceptance",
+    "Original ten other pending feature scopes"
+  ],
+  "browser": "Chrome admin policy verification unresolved; pending question retained; no bypass or indirect browser target."
+}
