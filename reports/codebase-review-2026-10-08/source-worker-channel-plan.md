@@ -4,6 +4,12 @@ Feature 07 remains in progress. The implementation count remains 29 accepted and
 
 The current integration basis is protected main `a01a1d0f1b405fd740e59d97b890e9a05cb1902b`, tree `09a7db020816d9bddbc8eb3ecc402aa91995e53a`. PR382 is merged, both original checkouts and the implementation root HEAD are synced, all23 original files are verified unchanged, and no PR is open. The original `d164/clank` recovery snapshot and its seven original file hashes remain preserved. The working branch is `codex/provider-source-channel-grant-382`. All eight exact-head hosted checks pass; final local and returned hosted runtime/package summaries each report3,759 tests /3,722 passes /zero failures or cancellations /37 existing skips. Genuine provider host worker ownership and raw native transport are delivered. Issued-grant directory ownership, the exact fourth read-only mount, authenticated dispatch and original captured-connection bootstrap remain required; this is not source readiness or full Feature07 acceptance.
 
+## Current protected integration
+
+PR383 is protected main987adb7e8254b2db0cca0c8bf37883eab1741855, exact reviewed tree9e1287128a3a47b1abeaffb4bbd83d8c92a1ab4e; all8 checks pass, both original roots and23 original files verified. It delivers original issued-channel ownership, fourth read-only mount admission and authenticated provider dispatch. Following feasibility/history notes retain their original scope.
+
+The next reviewed increment connects explicit v2 bootstrap to the original backend through a fixed native client. Paired real-container proof includes original C0/native completion and independently sampled worker namespaces. [Backend/channel review](source-backend-bootstrap-review.json). Readiness/write admission, production launch/health/data sequencing and full transfer/stop/target/ingress remain required;29/40 acceptance is unchanged.
+
 ## Established native feasibility
 
 The private socket prototype completed on genuine immutable Docker images for Node22.16.0 and Node26.10.0, paired with the same exact native host runtime versions. The application kept the Docker default seccomp/AppArmor policy, zero effective capabilities, no-new-privileges, non-root1000:1000, read-only root, production memory/CPU/PID/tmpfs/log settings, app/data mounts and bridge network. Its extra channel mount was read-only and contained only its diagnostic socket.

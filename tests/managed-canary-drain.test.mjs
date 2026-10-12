@@ -52,6 +52,9 @@ async function fixture(t, { provider = false, streaming = false, durationMs = 10
   return {
     ingress, canaries, metrics, selections, requests, received, disconnected, assertion,
     catalogPath: join(root, 'control.sqlite'), settle: () => run, failures,
+    assertLeaseCurrent: () => lease.assertCurrent(),
+    ingressWithRetries: retries => createManagedIngress({ routes: () => source(), retries, timeoutMs: 2000,
+      assertCanaryCurrent: assertion, onRequest: metric => { metrics.push(metric); canaries.record(metric); } }),
     get held() { return held; }, get candidateRequests() { return candidateRequests; },
     request: path => new Request(`https://app.example.test${path}`),
     reuseSelection: route => { source = () => [route]; },
@@ -69,6 +72,17 @@ async function fixture(t, { provider = false, streaming = false, durationMs = 10
     },
   };
 }
+
+for (const retries of [0, 2]) test(`withdrawn local canary cannot turn a failed admitted fetch into ${retries} fresh retries`, { timeout: 15000 }, async t => {
+  const f = await fixture(t), ingress = f.ingressWithRetries(retries);
+  const pending = ingress.handle(f.request('/held')); await f.received.promise;
+  await f.fail(); f.assertLeaseCurrent();
+  const before = f.candidateRequests;assert.equal(before, 2);
+  f.held.destroy();const response = await pending;
+  assert.equal(f.candidateRequests, before, 'Drain admission must never authorize a new candidate fetch.');
+  assert.equal(response.status, 503);assert.equal((await response.json()).error.code, 'CANARY_UNAVAILABLE');
+  assert.equal(ingress.activeRequests(f.selections[0].canary.upstream), 0);
+});
 
 test('an admitted local request drains while even its exact cached selection cannot admit a new request', { timeout: 15000 }, async t => {
   const f = await fixture(t);

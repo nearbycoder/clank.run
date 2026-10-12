@@ -96,7 +96,22 @@
       "originalResults": "Seven exact-head checks pass. Both runtime terminal summaries report3774 tests/3737 passes/zero failures or cancellations/37 existing skips. Packaged conformance is cancelled; its annotation confirms the25-minute job timeout.",
       "originalDiagnostics": "terminal-package-cancelled-28.json and package-timeout-annotation-29.json retain returned truncated diagnostics. The returned bytes do not include an earlier retry marker; a retry on this specific hosted attempt is not claimed.",
       "correction": "Only the conformance job budget increases25 to45 minutes to cover the already-bounded two-run coverage-artifact policy, Linux setup and packed conformance. Runtime budgets, assertions, coverage thresholds, the one narrowly recognized retry limit and branch protection remain intact. No unchanged-head rerun.",
-      "delivery": "Corrected exact-head checks and protected merge remain required."
+      "delivery": {
+        "pullRequest": "https://github.com/nearbycoder/clank.run/pull/383",
+        "reviewedHead": "71c197f782a9a4b6e7e22e8415218d4eb8b72c42",
+        "main": "987adb7e8254b2db0cca0c8bf37883eab1741855",
+        "tree": "9e1287128a3a47b1abeaffb4bbd83d8c92a1ab4e",
+        "allHostedChecksPass": 8,
+        "counts": {
+          "tests": 3774,
+          "pass": 3737,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 37
+        },
+        "originalFilesUnchanged": 23,
+        "qualification": "Returned Node22/24/package logs truncated; actual terminal summaries claimed. Normal protection/linear squash, exact reviewed tree and original roots verified."
+      }
     },
     "hostedShadowFixtureRepair": {
       "head": "31a1c81336383988ce35adc851ae666c725d8a46",
@@ -104,8 +119,8 @@
       "controlledReproduction": "shadow-positive-original22-34.log:real candidate headers delayed1500ms under the original1000ms budget settle as unknown candidate-timeout1/comparable0 and reproduce the exact assertion. The returned hosted bytes do not include its unknown-reason map; that specific hosted timeout reason is not claimed.",
       "fix": "Only the positive comparison fixture gets an explicit10000ms request/30000ms session budget and a real1500ms delayed response; it still requires one reserved/settled/comparable result, matching status/media, both bounded EOFs, no candidate timeout and unchanged primary response. Existing short deadline refusal/cancellation/cleanup tests are unchanged. Production source and all321 compiled outputs remain identical.",
       "focused": "Complete40-case native observer suite passes on Node22 and Node24, including both strict candidate deadline cases.",
-      "localFullGate": "full-check26-shadow-corrected-35.log running; fresh terminal outcome required.",
-      "hosted": "A corrected review head and fresh exact-head checks are required; no unchanged-head rerun."
+      "localFullGate": "full-check26-shadow-corrected-35.log terminal PASS:3774/3737/0/0/37, coverage91.95/82.29/90.13.",
+      "hosted": "All8 corrected-head checks pass; protected merge987adb7 matches the exact reviewed tree. Both original roots and23 original files verified."
     }
   },
   "remaining": [

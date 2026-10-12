@@ -189,6 +189,105 @@ export function createSourceWorkerClientProtocol(controlSecret: Uint8Array, chan
   });
 }
 
+/** Fixed source-side transport only; the captured backend retains source authority. */
+export async function openSourceWorkerSocketClient(controlSecret: Uint8Array, channel: SourceWorkerChannelBinding, uid: number, gid: number) {
+  const protocol = createSourceWorkerClientProtocol(controlSecret, channel);
+  const fsName = "node:fs", netName = "node:net";
+  const [fs, net] = await Promise.all([import(fsName), import(netName)]).catch(error => { protocol.close(); throw error; });
+  const process = (globalThis as any).process, root = "/run/clank-source-worker", endpoint = root + "/sqlite.sock";
+  let directory: number | undefined, socketPin: number | undefined, socket: any;
+  let closed = false, complete = false, finalized = false, connected = false, sequence = 0, failed: unknown;
+  let pending: { resolve(value: SourceWorkerInspection | undefined): void; reject(error: unknown): void } | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const clear = () => { if (timer !== undefined) clearTimeout(timer); timer = undefined; };
+  const close = (error: unknown = new Error("Private source worker channel is closed.")) => {
+    if (closed) return; closed = true; failed = error; clear(); protocol.close();
+    const held = pending; pending = undefined; held?.reject(error); socket?.destroy();
+    for (const fd of [socketPin, directory]) if (fd !== undefined) fs.closeSync(fd);
+    socketPin = directory = undefined;
+  };
+  try {
+    if (process.platform !== "linux" || !Number.isSafeInteger(uid) || !Number.isSafeInteger(gid)
+      || uid <= 0 || gid <= 0 || process.getuid() !== uid || process.getgid() !== gid) invalid();
+    const mount = () => {
+      const contents = fs.readFileSync("/proc/self/mountinfo", "utf8"); if (contents.length > 262144) invalid();
+      const rows = contents.split("\n").map((line: string) => line.split(" ")).filter((parts: string[]) => parts[4] === root);
+      if (rows.length !== 1 || !rows[0][5].split(",").includes("ro")
+        || rows[0].slice(6, rows[0].indexOf("-")).some((field: string) => /^(shared|master|propagate_from):/u.test(field))) invalid();
+    };
+    mount();
+    const before = fs.lstatSync(root);
+    directory = fs.openSync(root, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
+    const anchor = "/proc/self/fd/" + directory, retained = fs.fstatSync(directory);
+    if (!before.isDirectory() || before.dev !== retained.dev || before.ino !== retained.ino || fs.realpathSync(root) !== root) invalid();
+    const original = fs.lstatSync(endpoint);
+    // Linux O_PATH retains a socket inode without opening a second peer.
+    socketPin = fs.openSync(anchor + "/sqlite.sock", 0x200000 | fs.constants.O_NOFOLLOW);
+    const check = () => {
+      if (closed) throw failed;
+      mount();
+      const visible = fs.lstatSync(root), held = fs.fstatSync(directory!);
+      for (const stat of [visible, held]) if (!stat.isDirectory() || stat.uid !== uid || stat.gid !== gid
+        || (stat.mode & 0o777) !== 0o700 || stat.dev !== retained.dev || stat.ino !== retained.ino) invalid();
+      const entries = fs.readdirSync(anchor);
+      if (fs.realpathSync(root) !== root || entries.join("\0") !== "sqlite.sock" && !(finalized && entries.length === 0)) invalid();
+      const pinned = fs.fstatSync(socketPin!), sockets = [pinned];
+      try { sockets.push(fs.lstatSync(endpoint)); } catch (error) { if (!finalized || (error as any)?.code !== "ENOENT") throw error; }
+      for (const stat of sockets) if (!stat.isSocket() || stat.uid !== uid || stat.gid !== gid
+        || (stat.mode & 0o777) !== 0o600 || (!finalized ? stat.nlink !== 2 : stat.nlink > 2) || stat.dev !== original.dev || stat.ino !== original.ino) invalid();
+    };
+    check();
+    socket = net.createConnection(anchor + "/sqlite.sock");
+    let text = "", bytes = 0;
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    socket.on("error", close);
+    socket.on("close", () => { if (!finalized) close(new Error("Private source worker disconnected before completion.")); });
+    socket.on("data", (chunk: Uint8Array) => {
+      if (closed) return;
+      try {
+        if (!pending || (bytes += chunk.byteLength) > SOURCE_WORKER_RESPONSE_MAX_BYTES + 1) invalid();
+        text += decoder.decode(chunk, { stream: true });
+        const end = text.indexOf("\n");
+        if (end < 0) return;
+        if (chunk[chunk.byteLength - 1] !== 10 || end !== text.length - 1 || text.includes("\r")
+          || Buffer.byteLength(text.slice(0, end)) > SOURCE_WORKER_RESPONSE_MAX_BYTES) invalid();
+        check(); const value = protocol.finish(text.slice(0, end)); check();
+        const held = pending; pending = undefined; clear(); text = ""; bytes = 0;
+        if (++sequence === 3) complete = true;
+        held.resolve(value);
+      } catch (error) { close(error); }
+    });
+    await new Promise<void>((resolve, reject) => {
+      const failure = (error: unknown) => { close(error); reject(error); };
+      timer = setTimeout(() => failure(new Error("Private source worker connect exceeded its 10000ms deadline.")), 10000);
+      socket.once("error", failure);
+      socket.once("close", () => { if (!connected) failure(new Error("Private source worker connect closed.")); });
+      socket.once("connect", () => { try { check(); connected = true; clear(); socket.off("error", failure); resolve(); } catch (error) { failure(error); } });
+    });
+    return Object.freeze({
+      assertCurrent() { try { check(); } catch (error) { close(error); throw error; } },
+      complete() {
+        // Three worker replies are not the original source's native completion.
+        // Keep observing peer loss through its repository publication/readback.
+        try { check(); if (!complete || pending || finalized) invalid(); finalized = true; socket.end(); }
+        catch (error) { close(error); throw error; }
+      },
+      execute(request: SourceSQLiteTaskRequest): Promise<SourceWorkerInspection | undefined> {
+        if (pending) return Promise.reject(new Error("Private source worker already has an owned request."));
+        try {
+          check(); if (complete) invalid(); const encoded = protocol.begin(request);
+          return new Promise((resolve, reject) => {
+            pending = { resolve, reject };
+            timer = setTimeout(() => close(new Error("Private source worker response exceeded its 30000ms deadline.")), 30000);
+            socket.write(encoded + "\n", (error: unknown) => { if (error) close(error); });
+          });
+        } catch (error) { close(error); return Promise.reject(error); }
+      },
+      close: () => close(),
+    });
+  } catch (error) { close(error); throw error; }
+}
+
 /** Authenticated task receipts are wire correlation, never worker authority. */
 export function createSourceWorkerServerProtocol(controlSecret: Uint8Array, identity: SourceWorkerIdentity) {
   // A new server never adopts an old channel epoch or its replay history.

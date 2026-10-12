@@ -261,10 +261,14 @@ export function createManagedIngress(options: {
       let metricSent = false;
       let selectedUpstream: string | undefined, selectedReleaseId: string | undefined;
       let selectedCanaryRoute: Readonly<IngressRoute> | undefined, canaryAuthorityFailed = false;
-      const assertCanaryCurrent = (): void => {
+      const assertCanaryCurrent = (newAttempt = false): void => {
         if (!selectedCanaryRoute || !canaryAssertion) return;
         try {
-          const result: unknown = canaryAssertion(selectedCanaryRoute);
+          // An admitted local response may drain after withdrawal. Its cached
+          // admission must not authorize another fetch: a fresh immutable key
+          // rechecks the still-published candidate without that drain receipt.
+          const selected = newAttempt ? Object.freeze({ ...selectedCanaryRoute }) : selectedCanaryRoute;
+          const result: unknown = canaryAssertion(selected);
           if (result !== undefined) {
             void Promise.resolve(result).catch(() => undefined);
             throw new TypeError("Canary authority assertions must synchronously return undefined.");
@@ -514,6 +518,7 @@ export function createManagedIngress(options: {
         const timeout = setTimeout(() => controller.abort(), timeoutMs);
         let response: Response | undefined;
         try {
+          if (attempt > 0) assertCanaryCurrent(true);
           assertCanaryCurrent();
           response = await fetcher(target, {
             method: request.method,
@@ -549,7 +554,7 @@ export function createManagedIngress(options: {
           lastError = error;
           // Rejected fetches also cross an asynchronous ownership boundary.
           if (!canaryAuthorityFailed) {
-            try { assertCanaryCurrent(); } catch (authorityError) { lastError = authorityError; }
+            try { assertCanaryCurrent(true); } catch (authorityError) { lastError = authorityError; }
           }
           if (canaryAuthorityFailed) {
             controller.abort(lastError);
