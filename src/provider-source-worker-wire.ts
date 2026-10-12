@@ -229,3 +229,126 @@ export function createSourceWorkerServerProtocol(controlSecret: Uint8Array, iden
     close,
   });
 }
+
+
+// Raw bounded UNIX transport only. Neither filesystem capabilities nor wire
+// formatting mint provider/source authority. Its caller must retain the genuine
+// grant/container/worker and use the authenticated protocol before execution.
+const SOCKET_BROKER_BOOTSTRAP = `
+const net=await import('node:net'),fs=await import('node:fs');
+const send=value=>process.stdout.write(JSON.stringify(value)+'\\n');
+let client,used=false,pending=false,closed=false,input='',command='',requests=0,frameBytes=0,frameTimer;
+const incoming=new TextDecoder('utf-8',{fatal:true}),commands=new TextDecoder('utf-8',{fatal:true});
+const dispose=()=>{if(closed)return;closed=true;clearTimeout(frameTimer);client?.destroy();process.chdir('/proc/self/fd/4');server.close(()=>process.exit(0));};
+process.chdir('/proc/self/fd/3');
+const server=net.createServer(socket=>{
+ if(closed||used){socket.destroy();return;}used=true;client=socket;frameTimer=setTimeout(dispose,10000);
+ socket.on('error',dispose);socket.on('close',dispose);
+ socket.on('data',chunk=>{
+  if(closed||pending||(frameBytes+=chunk.length)>2049){dispose();return;}
+  try{input+=incoming.decode(chunk,{stream:true});}catch{dispose();return;}const end=input.indexOf('\\n');if(end<0)return;
+  // A streaming decoder can hide an incomplete suffix after the newline.
+  if(chunk[chunk.length-1]!==10||end!==input.length-1||Buffer.byteLength(input.slice(0,end))>2048||input.includes('\\r')||input.includes('\\uFFFD')){dispose();return;}
+  if(++requests>3){dispose();return;}clearTimeout(frameTimer);frameTimer=setTimeout(dispose,30000);pending=true;send({kind:'request',body:input.slice(0,end)});input='';
+ });
+});
+server.on('error',()=>process.exit(1));server.listen('socket',()=>{fs.chmodSync('socket',0o600);send({kind:'ready'});});
+process.stdin.on('end',dispose);process.stdin.on('data',chunk=>{
+ if(closed||chunk.length>50176||Buffer.byteLength(command)+chunk.length>50176){dispose();return;}
+ try{command+=commands.decode(chunk,{stream:true});}catch{dispose();return;}const end=command.indexOf('\\n');if(end<0)return;
+ if(end!==command.length-1){dispose();return;}let value;try{value=JSON.parse(command.slice(0,end));}catch{dispose();return;}command='';
+ if(value.kind==='close'){dispose();return;}
+ if(value.kind!=='reply'||!pending||!client||typeof value.body!=='string'||Buffer.byteLength(value.body)>8192||value.body.includes('\\n')||value.body.includes('\\r')){dispose();return;}
+ pending=false;frameBytes=0;clearTimeout(frameTimer);frameTimer=setTimeout(dispose,10000);client.write(value.body+'\\n');
+});
+`;
+export interface SourceWorkerSocketBroker {
+  readonly socketPath:string;
+  receive():Promise<string>;
+  reply(encoded:string):void;
+  close():Promise<void>;
+}
+/** Internal transport; the three directories must be original retained capabilities. */
+export async function openSourceWorkerSocketBroker(
+  listener:import("./sqlite-sandbox.ts").PinnedSQLiteDirectory,
+  disposal:import("./sqlite-sandbox.ts").PinnedSQLiteDirectory,
+  mount:import("./sqlite-sandbox.ts").PinnedSQLiteDirectory,
+):Promise<SourceWorkerSocketBroker> {
+  const sandbox=await import("./sqlite-sandbox.ts"),fs=await import("node:fs"),cp=await import("node:child_process");
+  const process=(globalThis as any).process;
+  if(process.platform!=="linux"||!process.getuid?.()||!process.getgid?.())throw new Error("Private UNIX transport requires its native non-root Linux owner.");
+  const pins=[listener,disposal,mount],identities=pins.map(pin=>{sandbox.assertPinnedSQLiteDirectory(pin);const held=fs.fstatSync(pin.fd),visible=fs.lstatSync(pin.path);
+    if(!held.isDirectory()||!visible.isDirectory()||held.dev!==visible.dev||held.ino!==visible.ino||held.uid!==process.getuid()||held.gid!==process.getgid()
+      ||(held.mode&0o777)!==0o700||fs.realpathSync(pin.path)!==pin.path)throw new Error("Private UNIX transport directory differs.");return {dev:held.dev,ino:held.ino};});
+  if(new Set(identities.map(p=>p.dev+":"+p.ino)).size!==3)throw new Error("Private UNIX transport directories must be distinct.");
+  // Change only the original, retained disposal inode. The broker then closes
+  // its relative binding from this empty non-writable directory, so Node never
+  // unlinks a replacement at the listener or public endpoint pathname.
+  if(fs.readdirSync(disposal.anchor).length)throw new Error("Private UNIX disposal directory must be empty.");
+  const original=listener.anchor+"/socket",endpoint=mount.anchor+"/sqlite.sock";
+  for(const path of [original,endpoint]){let present=false;try{fs.lstatSync(path);present=true;}catch(error){if((error as any).code!=="ENOENT")throw error;}
+    if(present)throw new Error("Private UNIX endpoint cannot be adopted.");}
+  fs.fchmodSync(disposal.fd,0o500);
+  let closed=false,ready=false,published=false,socketFd:number|undefined,socketIdentity:{dev:number;ino:number}|undefined;
+  const outputDecoder=new TextDecoder("utf-8",{fatal:true});
+  let active=false;
+  let partial='',waiting:((value:string)=>void)|undefined,rejectWaiting:((error:Error)=>void)|undefined,queued:string|undefined;
+  let readyResolve!:()=>void,readyReject!:(error:Error)=>void;const readiness=new Promise<void>((resolve,reject)=>{readyResolve=resolve;readyReject=reject;});
+  const child=cp.spawn("/usr/bin/setpriv",["--inh-caps=-all","--ambient-caps=-all","--no-new-privs","/usr/bin/prlimit",...sandbox.SQLITE_RESOURCE_LIMITS,"--",process.execPath,"--jitless","--max-old-space-size=64","--input-type=module","--eval",SOCKET_BROKER_BOOTSTRAP],{
+    stdio:["pipe","pipe","pipe",listener.fd,disposal.fd],env:{NODE_NO_WARNINGS:"1"},windowsHide:true,
+  });
+  let closeResolve!:()=>void;const actualClose=new Promise<void>(resolve=>closeResolve=resolve);
+  const fail=(error:Error)=>{closed=true;readyReject(error);rejectWaiting?.(error);waiting=undefined;rejectWaiting=undefined;queued=undefined;child.kill("SIGKILL");};
+  // These three streams are pipes in the fixed spawn configuration above.
+  const stdin=child.stdin!,stdout=child.stdout!,stderr=child.stderr!;
+  child.on("error",fail);stdin.on("error",fail);stderr.resume();
+  stdout.on("data",(chunk:Uint8Array)=>{
+    if(chunk.length>16384||Buffer.byteLength(partial)+chunk.length>16384){fail(new Error("Private UNIX broker output exceeds its bound."));return;}
+    try{partial+=outputDecoder.decode(chunk,{stream:true});}catch{fail(new Error("Invalid private UNIX output encoding."));return;}let end;while((end=partial.indexOf("\n"))>=0){
+    const line=partial.slice(0,end);partial=partial.slice(end+1);let value:Record<string,unknown>;
+    try{value=JSON.parse(line);if(JSON.stringify(value)!==line)throw Error();}catch{fail(new Error("Invalid private UNIX broker output."));return;}
+    if(value.kind==="ready"&&Object.keys(value).length===1&&!ready){ready=true;readyResolve();continue;}
+    if(value.kind!=="request"||Object.keys(value).length!==2||typeof value.body!=="string"||Buffer.byteLength(value.body)>2048||queued!==undefined){fail(new Error("Invalid private UNIX request frame."));return;}
+    try{current();}catch(error){fail(error as Error);return;}
+    if(waiting){const resolve=waiting;waiting=undefined;rejectWaiting=undefined;active=true;resolve(value.body);}else queued=value.body;
+    }
+  });
+  child.on("close",()=>{closed=true;readyReject(new Error("Private UNIX broker closed."));rejectWaiting?.(new Error("Private UNIX broker closed."));closeResolve();});
+  const current=()=>{
+    if(closed)throw new Error("Private UNIX broker is closed.");
+    for(let i=0;i<pins.length;i++){sandbox.assertPinnedSQLiteDirectory(pins[i]!);const held=fs.fstatSync(pins[i]!.fd),visible=fs.lstatSync(pins[i]!.path),expected=identities[i]!;
+      if(held.dev!==expected.dev||held.ino!==expected.ino||visible.dev!==expected.dev||visible.ino!==expected.ino||!visible.isDirectory()
+        ||held.uid!==process.getuid()||held.gid!==process.getgid()||(held.mode&0o777)!==(i===1?0o500:0o700)||fs.realpathSync(pins[i]!.path)!==pins[i]!.path)throw new Error("Private UNIX directory changed.");}
+    if(published){const held=fs.fstatSync(socketFd!),visible=fs.lstatSync(endpoint),source=fs.lstatSync(original);
+      if(!held.isSocket()||!visible.isSocket()||!source.isSocket()||[held,visible,source].some(p=>p.dev!==socketIdentity!.dev||p.ino!==socketIdentity!.ino||p.uid!==process.getuid()||p.gid!==process.getgid()||(p.mode&0o777)!==0o600||p.nlink!==2))throw new Error("Private UNIX socket identity changed.");}
+  };
+  const close=async()=>{
+    if(!closed){closed=true;try{stdin.end(JSON.stringify({kind:"close"})+"\n");}catch{child.kill("SIGKILL");}}
+    let timer:ReturnType<typeof setTimeout>|undefined;
+    try{await Promise.race([actualClose,new Promise<never>((_,reject)=>{timer=setTimeout(()=>{child.kill("SIGKILL");reject(new Error("Private UNIX broker close is unsettled after 10000ms."));},10000);})]);}
+    finally{if(timer!==undefined)clearTimeout(timer);}
+    // A pathname is cleanup authority only while it still names the pinned
+    // socket. Preserve unknown replacements and partial acquisition evidence.
+    if(socketFd!==undefined){const held=fs.fstatSync(socketFd);
+      for(const [directory,path,index] of [[mount,endpoint,2],[listener,original,0]] as const){
+        // Caller-owned directory capabilities must outlive actual broker close;
+        // an FD number reused after their closure is never cleanup authority.
+        sandbox.assertPinnedSQLiteDirectory(directory);const parent=fs.fstatSync(directory.fd),expected=identities[index]!;
+        if(!parent.isDirectory()||parent.dev!==expected.dev||parent.ino!==expected.ino)throw new Error("Private UNIX cleanup directory changed.");
+        let visible;try{visible=fs.lstatSync(path);}catch(error){if((error as any).code==="ENOENT")continue;throw error;}
+        if(visible.isSocket()&&visible.dev===held.dev&&visible.ino===held.ino)fs.unlinkSync(path);}
+      fs.closeSync(socketFd);socketFd=undefined;}
+  };
+  try{
+    let timer:ReturnType<typeof setTimeout>|undefined;
+    try{await Promise.race([readiness,new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error("Private UNIX broker readiness exceeded 10000ms.")),10000);})]);}
+    finally{if(timer!==undefined)clearTimeout(timer);}
+    current();const before=fs.lstatSync(original);if(!before.isSocket()||before.uid!==process.getuid()||before.gid!==process.getgid()||(before.mode&0o777)!==0o600||before.nlink!==1)throw new Error("Private UNIX listener differs.");
+    // Linux O_PATH pins a socket inode without attempting a filesystem open
+    // as a stream. O_NOFOLLOW prevents a substituted symbolic link.
+    socketFd=fs.openSync(original,0x200000|fs.constants.O_NOFOLLOW);const held=fs.fstatSync(socketFd);if(!held.isSocket()||held.dev!==before.dev||held.ino!==before.ino)throw new Error("Private UNIX listener changed.");
+    socketIdentity={dev:held.dev,ino:held.ino};fs.linkSync(original,endpoint);published=true;current();
+    return Object.freeze({socketPath:mount.path+"/sqlite.sock",receive(){current();if(active)return Promise.reject(new Error("Private UNIX broker already has an unanswered frame."));if(waiting)return Promise.reject(new Error("Private UNIX broker already has a receiver."));if(queued!==undefined){const body=queued;queued=undefined;active=true;return Promise.resolve(body);}return new Promise<string>((resolve,reject)=>{waiting=resolve;rejectWaiting=reject;});},
+      reply(encoded:string){current();if(!active)throw new Error("Private UNIX broker has no unanswered frame.");if(typeof encoded!=="string"||Buffer.byteLength(encoded)>8192||/[\r\n]/u.test(encoded))throw new Error("Private UNIX response exceeds its frame.");active=false;stdin.write(JSON.stringify({kind:"reply",body:encoded})+"\n");},close});
+  }catch(error){try{await close();}catch(cleanup){throw new AggregateError([error,cleanup],"Private UNIX broker acquisition and cleanup failed.");}throw error;}
+}
