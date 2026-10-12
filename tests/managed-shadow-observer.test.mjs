@@ -74,10 +74,13 @@ async function fixture(t,options={}){
 const hashToken=value=>createHash('sha256').update(value).digest('base64url');
 
 test('actual anonymous native GET reserves and settles one detached candidate without changing primary',async t=>{
- const f=await fixture(t);await f.start();assert.deepEqual(await f.request({headers:{accept:'application/json','user-agent':'never-forward'}}),{status:200,body:'primary'});
+ // This is a positive metadata-comparison story, not a one-second deadline
+ // story. A real delayed candidate also proves that primary delivery remains
+ // independent; dedicated deadline tests below retain their short limits.
+ const f=await fixture(t,{policy:{maxRequestMs:10000,maxDurationMs:30000},candidate:async(req,res)=>{await delay(1500);res.setHeader('content-type','application/json');res.end('candidate')}});await f.start();assert.deepEqual(await f.request({headers:{accept:'application/json','user-agent':'never-forward'}}),{status:200,body:'primary'});
  await until(()=>f.read().operation.report.counters.settled===1,'one native settlement');
  assert.equal(f.events.length,1);assert.equal(f.events[0].path,'/candidate/catalog');assert.equal(f.events[0].headers.accept,'application/json');assert.notEqual(f.events[0].headers['user-agent'],'never-forward');
- const report=f.read().operation.report;assert.equal(report.counters.reserved,1);assert.equal(report.counters.comparable,1);assert.equal(report.counters.statusClassEqual,1);assert.equal(report.counters.mediaTypeEqual,1);assert.equal(report.counters.bothComplete,1);assert.deepEqual(f.read().operation.reservations,[]);
+ const report=f.read().operation.report;assert.equal(report.counters.reserved,1);assert.equal(report.counters.comparable,1);assert.equal(report.counters.statusClassEqual,1);assert.equal(report.counters.mediaTypeEqual,1);assert.equal(report.counters.bothComplete,1);assert.equal(report.counters.unknown['candidate-timeout'],0);assert.deepEqual(f.read().operation.reservations,[]);
 });
 test('bodyless native HEAD finishes before handoff but still creates exactly one comparable observation',async t=>{
  const f=await fixture(t);await f.start();assert.deepEqual(await f.request({method:'HEAD'}),{status:200,body:''});await until(()=>f.read().operation.report.counters.settled===1,'HEAD native settlement');assert.equal(f.events.length,1);assert.equal(f.events[0].method,'HEAD');assert.equal(f.read().operation.report.counters.comparable,1);

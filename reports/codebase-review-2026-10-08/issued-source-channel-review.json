@@ -97,6 +97,15 @@
       "originalDiagnostics": "terminal-package-cancelled-28.json and package-timeout-annotation-29.json retain returned truncated diagnostics. The returned bytes do not include an earlier retry marker; a retry on this specific hosted attempt is not claimed.",
       "correction": "Only the conformance job budget increases25 to45 minutes to cover the already-bounded two-run coverage-artifact policy, Linux setup and packed conformance. Runtime budgets, assertions, coverage thresholds, the one narrowly recognized retry limit and branch protection remain intact. No unchanged-head rerun.",
       "delivery": "Corrected exact-head checks and protected merge remain required."
+    },
+    "hostedShadowFixtureRepair": {
+      "head": "31a1c81336383988ce35adc851ae666c725d8a46",
+      "failure": "terminal-package-budget-failure-33.json:3774 reported/3736 passes/one failure/zero cancellations/37 skips; existing managed-shadow-observer.test.mjs positive comparison has comparable0 instead of1.",
+      "controlledReproduction": "shadow-positive-original22-34.log:real candidate headers delayed1500ms under the original1000ms budget settle as unknown candidate-timeout1/comparable0 and reproduce the exact assertion. The returned hosted bytes do not include its unknown-reason map; that specific hosted timeout reason is not claimed.",
+      "fix": "Only the positive comparison fixture gets an explicit10000ms request/30000ms session budget and a real1500ms delayed response; it still requires one reserved/settled/comparable result, matching status/media, both bounded EOFs, no candidate timeout and unchanged primary response. Existing short deadline refusal/cancellation/cleanup tests are unchanged. Production source and all321 compiled outputs remain identical.",
+      "focused": "Complete40-case native observer suite passes on Node22 and Node24, including both strict candidate deadline cases.",
+      "localFullGate": "full-check26-shadow-corrected-35.log running; fresh terminal outcome required.",
+      "hosted": "A corrected review head and fresh exact-head checks are required; no unchanged-head rerun."
     }
   },
   "remaining": [
