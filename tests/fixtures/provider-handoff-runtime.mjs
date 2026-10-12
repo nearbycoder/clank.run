@@ -212,6 +212,16 @@ try{
    }assert.throws(()=>runtime.database.transaction(()=>{}));if(config.fault)assert.equal(held,true);if(config.fault==='worker-active'){assert.equal(activeWorkerClosed,true,'rejection must await actual child close');assert.equal(fs.existsSync('/proc/'+activeWorker.pid),false,'owned worker must be absent');assert.equal(activeWorker.signalCode,'SIGKILL');}if(config.fault==='worker-queued-cancel'){assert.equal(spawns,2,'no source worker was spawned while queued');for(const send of queuedInputs)send();await Promise.all(queueTasks);assert.equal(spawns,2);const again=await runSQLiteTask('inspection','inspectSQLite',[config.database]);assert.ok(again);}if(config.fault==='worker-queue'){await Promise.all(queueTasks);assert.equal(spawns,2);const again=await runSQLiteTask('inspection','inspectSQLite',[config.database]);assert.ok(again);}report({ok:true,mode:config.mode,spawns});}
   else {
    const completion=await pending;
+   if(config.mode==='completion-recheck'){
+    anchor.assertSourceRuntimeCompletion(runtime,completion);report({phase:'initialized'});
+    for(let attempt=1;attempt<=2;attempt++){
+     const command=JSON.parse((await lines.next()).value);assert.equal(command.attempt,attempt);
+     assert.throws(()=>anchor.assertSourceRuntimeCompletion(runtime,completion),/grant|bootstrap|closed/);
+     assert.throws(()=>runtime.database.transaction(()=>{}),/grant|bootstrap|closed/);
+     const catalogPins=fs.readdirSync('/proc/self/fd').flatMap(fd=>{try{const path=fs.readlinkSync('/proc/self/fd/'+fd);return path==='/run/clank-source'||path==='/run/clank-source/catalog.sqlite'?[path]:[];}catch{return [];}});
+     assert.deepEqual(catalogPins,[]);report({phase:'completion-refused',attempt,catalogPinsReleased:true});
+    }
+   }else{
    if(config.mode==='completion'){
     assert.ok(completion&&typeof completion==='object','successful initialization must return completion data');
     assert.deepEqual(Object.keys(completion),['captureEpoch','keyId','schemaHash','baseBackupId','observedCursor']);
@@ -230,6 +240,7 @@ try{
    if(command.revoke)assert.throws(()=>runtime.database.transaction(db=>db.table('records').insert({value:'revoked'})),/grant|catalog|bootstrap/);
    else {assert.throws(()=>runtime.database.transaction(db=>db.table('records').insert({value:'must-not-commit'})),/bootstrap|write|permission/);assert.throws(()=>cached.run(),/bootstrap|write|permission/);}
    report({ok:true,records:runtime.database.read(db=>db.table('records').collect()).length});
+   }
   }
  }
 }finally{runtime.close();}

@@ -58,7 +58,7 @@ try{
   const host=fs.lstatSync(channel.mountSource),mounted=fs.statSync('/proc/'+container.pid+'/root/run/clank-source-worker');assert.equal(mounted.dev,host.dev);assert.equal(mounted.ino,host.ino);events.channelInode={dev:host.dev,ino:host.ino};
   const probe=await command(['container','exec',cid,'node','--input-type=module','--eval',"import fs from 'node:fs';const p='/run/clank-source-worker/sqlite.sock';const s=fs.lstatSync(p);let code;try{fs.unlinkSync(p);}catch(e){code=e.code;}process.stdout.write(JSON.stringify({socket:s.isSocket(),mode:s.mode&511,code})+'\\n');"]);
   events.nativeReadOnlyProbe=JSON.parse(probe.stdout);assert.deepEqual(events.nativeReadOnlyProbe,{socket:true,mode:384,code:'EROFS'});
-  assert.ok(['bootstrap','completion-drift','completion-close'].includes(mode));
+  assert.ok(['bootstrap','completion-drift','completion-close','completion-catalog-replay','completion-catalog-advance'].includes(mode));
   const sourceData=join(root,'projects',project.projectId,'data'),ready=join(sourceData,'source-ready.json'),resultPath=join(sourceData,'source-result.json');
   const waitFile=async file=>{const until=Date.now()+45000;while(!fs.existsSync(file)){if(Date.now()>until)throw Error('native source fixture deadline');await new Promise(r=>setTimeout(r,25));}return JSON.parse(fs.readFileSync(file,'utf8'));};
   events.originalSource=await waitFile(ready);assert.ok(events.originalSource.pid>0);assert.equal(events.originalSource.uid,1000);assert.equal(events.originalSource.gid,1000);
@@ -85,7 +85,7 @@ try{
   try{
    events.sourceResult=await waitFile(resultPath);events.namespaceSamples=samples;
    assert.equal(events.sourceResult.bootstrapConsumed,true);
-   if(['bootstrap','completion-drift','completion-close'].includes(mode)){
+   if(['bootstrap','completion-drift','completion-close','completion-catalog-replay','completion-catalog-advance'].includes(mode)){
     assert.equal(events.sourceResult.complete,true,JSON.stringify(events.sourceResult));await dispatch;
     assert.equal(spawns.length,3);assert.equal(samples.length,3);for(const spawn of spawns){assert.ok(spawn.args.includes('--unshare-all'));assert.deepEqual(spawn.environmentNames,['NODE_NO_WARNINGS']);}events.workerSpawns=spawns;
     assert.equal(events.sourceResult.writesFenced,true);assert.equal(events.sourceResult.secondInitializationRefused,true);
@@ -93,10 +93,19 @@ try{
     events.originalConnectionCompletion=true;
     assert.equal(events.sourceResult.originalCompletionVerified,true);assert.equal(events.sourceResult.copiedCompletionsRefused,true);assert.equal(events.sourceResult.completionGetterReads,0);
     const checked=async(attempt,action)=>{fs.writeFileSync(join(sourceData,'source-proof-go-'+attempt),action,{flag:'wx',mode:0o600});return waitFile(join(sourceData,'source-proof-result-'+attempt));};
-    let originalSchema;
+    let originalSchema,originalCatalog;
+    const catalogMode=['completion-catalog-replay','completion-catalog-advance'].includes(mode),catalogPath=join(root,'service','handoff','catalogs',project.catalogId,'catalog.sqlite');
+    if(catalogMode){const mutable=new DatabaseSync(catalogPath);try{
+     mutable.exec('BEGIN IMMEDIATE');const grant=mutable.prepare('SELECT * FROM clank_provider_handoff_source_grant WHERE id=1').get(),metadata=mutable.prepare('SELECT version,records_sha256 FROM clank_provider_handoff_bridge_state WHERE id=1').get();
+     assert.equal(grant.state,'started');assert.equal(metadata.version,4);originalCatalog={state:grant.state,...metadata};
+     const next=mode==='completion-catalog-replay'?'created':'started';mutable.prepare('UPDATE clank_provider_handoff_source_grant SET state=? WHERE id=1').run(next);
+     const records={grant:{...mutable.prepare('SELECT * FROM clank_provider_handoff_source_grant WHERE id=1').get()},transfer:null,operations:[],spools:[]};
+     mutable.prepare('UPDATE clank_provider_handoff_bridge_state SET version=5,records_sha256=? WHERE id=1').run(hash(JSON.stringify(records)));mutable.exec('COMMIT');events.catalogReplay={from:'started',to:next,version:5,mirror:hash(JSON.stringify(records))};
+    }finally{mutable.close();}}
     if(mode==='completion-drift'){const mutable=new DatabaseSync(data.databasePath);try{originalSchema=mutable.prepare('SELECT schema_hash FROM clank_pitr_state WHERE id=1').get().schema_hash;mutable.prepare('UPDATE clank_pitr_state SET schema_hash=? WHERE id=1').run('f'.repeat(64));}finally{mutable.close();}}
     events.firstCompletionCheck=await checked(1,mode==='completion-close'?'close':'verify');assert.equal(events.firstCompletionCheck.current,mode==='bootstrap');
     if(mode==='completion-drift'){const mutable=new DatabaseSync(data.databasePath);try{mutable.prepare('UPDATE clank_pitr_state SET schema_hash=? WHERE id=1').run(originalSchema);}finally{mutable.close();}}
+    if(catalogMode){const mutable=new DatabaseSync(catalogPath);try{mutable.exec('BEGIN IMMEDIATE');mutable.prepare('UPDATE clank_provider_handoff_source_grant SET state=? WHERE id=1').run(originalCatalog.state);mutable.prepare('UPDATE clank_provider_handoff_bridge_state SET version=?,records_sha256=? WHERE id=1').run(originalCatalog.version,originalCatalog.records_sha256);mutable.exec('COMMIT');events.catalogRestored=true;}finally{mutable.close();}}
     events.secondCompletionCheck=await checked(2,'verify');assert.equal(events.secondCompletionCheck.current,mode==='bootstrap','Native drift or original close must not revive a copied/cached completion after metadata restoration.');
 
    }else{

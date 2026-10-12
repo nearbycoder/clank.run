@@ -7,20 +7,23 @@
   "files": {
     "src/backend.ts": "6ee2b20573feec40f8107e75c854914a7b3bdd564b87dcc0343d21b6c8d82c05",
     "src/point-in-time.ts": "9ad5a9cb82bf7e1b98331492be5902d663070c457c7e8d3175f9bd20381e644c",
+    "src/provider-handoff.ts": "47b437984ae65c0161a96380b50e71efbce6a9daf455db4f77efb4235fa0ac5f",
     "tests/backend-source-runtime.test.mjs": "ac5951e2e8012a9f802df4e81f2889a559226081eb9468de3459e81379c7c10d",
-    "tests/fixtures/provider-source-completion-native.mjs": "890118e18553903daf3c1773e4cf3c484a322f1783e122a8cdb9096f56911076",
-    "tests/fixtures/provider-handoff-runtime.mjs": "52a28a1edc452374a286bc082f000873c0cb2940261cf3bd85ce7c8974b928a1"
+    "tests/provider-handoff-runtime.test.mjs": "051d0959f02dce27540551b662cb2b1ff525bda9f6f07b1bc74f04aef5b23816",
+    "tests/fixtures/provider-handoff-runtime.mjs": "765dc0f80d652f1bde0afe14a47c28e02ed60383993590b543927d6ba5fcb61b",
+    "tests/fixtures/provider-source-completion-native.mjs": "c88b84ab061a2ccac651c9890c50bd4d8d46cfcb6c120a7f4e162c8d94852e9b"
   },
   "implementation": [
     "Retain exact original completion only after independent native completion and worker-client finalization succeed. Original constructor/runtime and result object identity are required before touching claimed status fields.",
     "Recheck original runtime definition/database identity and actual idleness, current original catalog/native directory pins and sealed capture metadata through the original connection. Compare independent native epoch/key/schema/base/cursor to retained original completion.",
-    "Closing the original backend, native metadata drift/another writer, or catalog/namespace loss prevents proof. Restoring external metadata cannot clear the original capture seal failure. Existing ordinary runtime behavior is unchanged; private initialization still fences ordinary writes."
+    "Closing the original backend, native metadata drift/another writer, or catalog/namespace loss prevents proof. Restoring external metadata cannot clear the original capture seal failure. Existing ordinary runtime behavior is unchanged; private initialization still fences ordinary writes.",
+    "Source bootstrap accepts only original created/version3 or started/version4 transitions. Any failed native authority check permanently closes its reader, zeros retained keys, closes the worker client and releases catalog pins; restored native rows cannot revive completion."
   ],
   "verification": {
-    "focusedNode22": 157,
-    "focusedNode24": 157,
-    "native": "native-completion-matrix-05.json:6 paired real Node22/26 cases prove exact original/copy/accessor/active-read checks, original completion after actual native drift/restoration and after original runtime close.",
-    "cleanup": "All7 exact owned containers absent on original unchanged daemon; unchanged2.25GB reserve maintained.",
+    "focusedNode22": 160,
+    "focusedNode24": 160,
+    "native": "native-catalog-matrix-26.json:10 paired real Node22/26 cases cover original completion, copy/accessor/active-read refusal, metadata drift/restoration, original close, unsupported started version and higher-version lifecycle regression with exact catalog restoration.",
+    "cleanup": "All18 exact owned containers, including original cases and failed before replay, absent on original unchanged daemon; unchanged2.25GB reserve maintained.",
     "types": {
       "packed": 54,
       "existing": 149,
@@ -30,31 +33,14 @@
     "publicDeclarationsUnchanged": 146,
     "changedOutputs": [
       "backend.js",
-      "point-in-time.js"
+      "point-in-time.js",
+      "provider-handoff.js"
     ],
     "package": {
       "files": 450,
-      "bytes": 7035081,
+      "bytes": 7035420,
       "ceiling": 8388608,
       "dependencies": 0
-    },
-    "fullGate": {
-      "file": "full-check26-corrected-11.log",
-      "completed": true,
-      "exitCode": 0,
-      "counts": {
-        "tests": 3794,
-        "pass": 3757,
-        "fail": 0,
-        "cancelled": 0,
-        "skipped": 37
-      },
-      "coverage": {
-        "lines": 91.97,
-        "branches": 82.25,
-        "functions": 90.11
-      },
-      "qualification": "Fresh final-code complete gate on original owned regular-filesystem TMPDIR; no assertion or coverage requirement weakening."
     },
     "faultInstrumentation": {
       "gate": "full-check26-05.log",
@@ -75,7 +61,60 @@
       },
       "runtimeUnchanged": true
     },
-    "hosted": "Fresh exact-head hosted checks and protected delivery remain required."
+    "hosted": "Fresh exact-head hosted checks and protected delivery remain required.",
+    "catalogReplay": {
+      "before": {
+        "log": "native-catalog-regression22-before-21.log",
+        "exitCode": 1,
+        "actualCurrent": true,
+        "state": "created",
+        "version": 5,
+        "mirrorValid": true,
+        "meaning": "Original proof accepted a native started-to-created replay at a higher version; container cleanup/absence confirmed."
+      },
+      "correction": "Exact original bootstrap state/version pairs plus irreversible reader close on any failed native authority check. Restoring original rows does not revive proof.",
+      "componentCases": 3,
+      "nativeCases": 4,
+      "pairedMatrixCases": 10,
+      "originalHostedHead": "7e79bb92ec71219bbfde45028e864f4ee45e7801",
+      "originalHostedChecks": "All8 pass on original head; they do not cover the new native catalog replay and cannot qualify the corrected head."
+    },
+    "supersededFullGate": {
+      "file": "full-check26-corrected-11.log",
+      "completed": true,
+      "exitCode": 0,
+      "counts": {
+        "tests": 3794,
+        "pass": 3757,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 37
+      },
+      "coverage": {
+        "lines": 91.97,
+        "branches": 82.25,
+        "functions": 90.11
+      },
+      "qualification": "Fresh final-code complete gate on original owned regular-filesystem TMPDIR; no assertion or coverage requirement weakening."
+    },
+    "fullGate": {
+      "file": "full-check26-catalog-25.log",
+      "completed": true,
+      "exitCode": 0,
+      "counts": {
+        "tests": 3797,
+        "pass": 3760,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 37
+      },
+      "coverage": {
+        "lines": 91.97,
+        "branches": 82.26,
+        "functions": 90.12
+      },
+      "qualification": "Fresh final-code complete gate on the original owned regular-filesystem TMPDIR; no assertion or coverage requirement weakening."
+    }
   },
   "browserBlock": "Chrome refused fixture access because its admin-enforced policy could not be verified. No bypass, alternative controls, indirect target or permission weakening. User asked once to restore policy verification; native browser acceptance remains pending.",
   "remaining": [
