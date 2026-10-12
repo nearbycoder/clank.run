@@ -1,0 +1,107 @@
+{
+  "feature": 7,
+  "acceptance": {
+    "accepted": 29,
+    "pending": 11,
+    "complete": false
+  },
+  "base": {
+    "commit": "ae645b6dcbd11d6d699f4a44cf4f94bde632bea2",
+    "tree": "10b886586d19826dad93920950a5b780a92b14a5"
+  },
+  "scope": "Private raw UNIX framing and native socket/ChildProcess ownership. Filesystem capabilities do not authenticate a source or authorize provider SQLite work.",
+  "implementation": {
+    "module": "src/provider-source-worker-wire.ts",
+    "sha256": "f84575cf2dd31128520a4388e24e25eff4c1f7b6f6a502431e788362ff267aef",
+    "directories": "Three original retained, distinct private native Linux directory capabilities: listener, empty disposal and public mount directory; caller retains them through actual close. No caller paths or adopted endpoints.",
+    "socket": "Relative private bind, mode0600, original O_PATH socket FD, one known hardlink in public directory. Both links and directory identities checked before receive/reply/delivery.",
+    "broker": "Fixed script in exact owned ChildProcess, cleared inherited/ambient capabilities, no-new-privileges, existing SQLite resource bounds, 64MiB Node heap and fixed minimal environment; no source/control key in child.",
+    "frames": {
+      "peers": 1,
+      "requests": 3,
+      "unanswered": 1,
+      "requestBytes": 2048,
+      "responseBytes": 8192,
+      "requestCollectionDeadlineMs": 10000,
+      "replyDeadlineMs": 30000,
+      "startupDeadlineMs": 10000,
+      "closeObservationDeadlineMs": 10000,
+      "maxEncodedReplyIPCBytes": 50176
+    },
+    "cleanup": "Child moves to original non-writable disposal directory before Node server.close. Parent waits for actual close, then unlinks only original socket inode names through genuine retained directories. Unknown replacements/partial acquisition/uncertain close are preserved."
+  },
+  "reviewFindings": [
+    {
+      "finding": "Node automatic server.close can unlink a replaced bound pathname.",
+      "evidence": "socket-close-probe-01.json reproduced replacementPreserved=false on native Linux; corrected relative/owned FD probes02/04 preserve replacements.",
+      "fix": "Dispose from a separate empty mode0500 directory, pin the actual socket inode, and perform known-inode cleanup after actual child close."
+    },
+    {
+      "finding": "existsSync misses dangling symlinks at prospective endpoints.",
+      "kind": "Code inspection; native corrected regression.",
+      "fix": "Use lstat/ENOENT before changing disposal permissions or spawning."
+    },
+    {
+      "finding": "An 8192-byte raw reply can require49152 bytes of JSON string escaping, exceeding the initial16KiB IPC bound.",
+      "kind": "Code inspection; native corrected maximum-escaping regression.",
+      "fix": "Keep raw response8192 and bound encoded IPC50176; exactly one consumed reply per received frame."
+    },
+    {
+      "finding": "Directory/socket identity may drift after receive begins and before request delivery.",
+      "kind": "Code inspection; native corrected directory and socket-mode replacement regressions.",
+      "fix": "Revalidate all original pins and socket identity immediately before delivery; terminate the exact owned broker on failure."
+    },
+    {
+      "finding": "Fixed extra FD spawn configuration gives nullable pipe types in Node declarations.",
+      "evidence": "types-10.log: five new TS18047 diagnostics.",
+      "fix": "Retain named non-null pipe handles from the fixed three pipe configuration. types-final-15.log confirms zero new diagnostics."
+    },
+    {
+      "finding": "UTF-8 decoder state can temporarily retain bytes not counted by decoded string size.",
+      "kind": "Code inspection.",
+      "fix": "Count incoming native bytes per frame, including incomplete UTF-8; never reset collection timer from additional bytes."
+    },
+    {
+      "finding": "Reused caller directory FD numbers must not become cleanup authority.",
+      "kind": "Code inspection.",
+      "fix": "Require genuine still-open directory capabilities and original retained directory dev/ino during cleanup."
+    }
+  ],
+  "nativeEvidence": {
+    "directory": "/tmp/clank-review-2026-10-08/source-worker-channel-ae645b6-01",
+    "probes": [
+      "socket-close-probe-01.json",
+      "socket-relative-close-probe-02.json",
+      "socket-owned-close-probe-04.json"
+    ],
+    "retainedFailure": "socket-owned-close-probe-03.mjs failed because fixture quoting produced invalid child syntax; empty output does not prove socket behavior.",
+    "focusedNode22": "focused22-final-15.log:169 tests/169 passes/zero failures, cancellations or skips",
+    "focusedNode24": "focused24-final-15.log:169 tests/169 passes/zero failures, cancellations or skips",
+    "transportCases": 18,
+    "earlierNode26": "native-transport26-13.log:17 tests passed before the final cleanup-capability check and socket-mode regression. Final18 cases are included in the complete release gate.",
+    "typeContracts": "54 packed positive/negative fixtures;149 inherited/zero new diagnostics relative to154 baseline."
+  },
+  "release": {
+    "pairedOutputs": 321,
+    "publicDeclarationsUnchanged": 146,
+    "changedOutputs": [
+      "provider-source-worker-wire.js"
+    ],
+    "files": 450,
+    "unpackedBytes": 7013546,
+    "ceilingBytes": 8388608,
+    "dependencies": 0,
+    "localGate": "In progress; terminal outcome required before delivery.",
+    "hostedGate": "Not yet published; all eight exact-head hosted checks and protected merge required."
+  },
+  "notClaimed": [
+    "Authenticated dispatch to a genuine provider worker",
+    "An original issued-grant channel directory lifecycle",
+    "Exact fourth read-only container mount and its current native validation",
+    "Original captured C0 backend bootstrap/capture/readiness",
+    "Source heartbeat or provider-wide writer-stop certificate",
+    "Target activation/ingress interruption acceptance",
+    "Full host policy certification or independent broker namespace confinement"
+  ],
+  "remaining": "Connect this raw primitive to the genuine owner/issued grant, fourth read-only channel mount, authenticated protocol receipts and retained provider worker, then explicit opt-in original backend bootstrap. Complete the original Feature07 writer exclusion/target/ingress acceptance separately."
+}

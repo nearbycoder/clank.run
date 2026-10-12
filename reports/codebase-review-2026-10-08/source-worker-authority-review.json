@@ -1217,8 +1217,68 @@
     "reserveBytes": 2250000000,
     "qualification": "Read-only check against the original daemon; no unowned cleanup."
   },
-  "fullLocalGate": "Final persistent-workspace full gate running.",
-  "hostedChecks": "Not yet published; eight exact-head checks and protected delivery remain required.",
+  "fullLocalGate": {
+    "head": "ac1edc07a772854c97cb12a06577d1961dafb614",
+    "counts": {
+      "tests": 3739,
+      "pass": 3702,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 37
+    },
+    "complete": true,
+    "exitCode": 0,
+    "logSha256": "737e5e83bf3e8115362aeec0dffbf260dca7145d86fa6e1eb8eb4e20dbffed84",
+    "coverage": {
+      "lines": 91.95,
+      "branches": 82.32,
+      "functions": 90.19
+    },
+    "package": {
+      "files": 450,
+      "bytes": 7002821,
+      "ceilingBytes": 8388608,
+      "dependencies": 0
+    },
+    "scope": "Final build, dependency contract, coverage, docs, packed-release conformance and package/tree/history security passed."
+  },
+  "hostedChecks": {
+    "head": "ac1edc07a772854c97cb12a06577d1961dafb614",
+    "all8Pass": true,
+    "returnedSummaries": {
+      "node22": {
+        "counts": {
+          "tests": 3739,
+          "pass": 3702,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 37
+        },
+        "logTruncated": true
+      },
+      "node24": {
+        "counts": {
+          "tests": 3739,
+          "pass": 3702,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 37
+        },
+        "logTruncated": true
+      },
+      "package": {
+        "counts": {
+          "tests": 3739,
+          "pass": 3702,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 37
+        },
+        "logTruncated": true
+      }
+    },
+    "qualification": "Hosted logs are truncated; only returned terminal summaries are claimed. No independent human approval is claimed."
+  },
   "earlierNative": {
     "pairedCases": 20,
     "originalFourteen": [
@@ -1612,5 +1672,78 @@
     "reproduction": "Draft completed inspection after a base-directory replacement between backup and inspection. The native expected-refusal test failed. This demonstrates the unpublished draft adopted replacement workspace identity.",
     "change": "Keep the same four host directory capabilities through all three operations; check inode, UID/GID, private mode and canonical path during idle/current use and active tasks. Parent closure schedules idle cleanup and close awaits it. Cleanup attempts all owned directory closes and preserves its asynchronous error.",
     "proof": "Final native between-operation replacement and idle linked-data closure pass on both runtimes, alongside all previous modes."
+  },
+  "delivery": {
+    "main": "ae645b6dcbd11d6d699f4a44cf4f94bde632bea2",
+    "tree": "10b886586d19826dad93920950a5b780a92b14a5",
+    "reviewedHead": "ac1edc07a772854c97cb12a06577d1961dafb614",
+    "all8HostedPass": true,
+    "originals": {
+      "/home/nearby/Sites/clank": {
+        "head": "ae645b6dcbd11d6d699f4a44cf4f94bde632bea2",
+        "files": 16,
+        "unchanged": true
+      },
+      "/home/nearby/.vnc/codex-home/.codex/worktrees/d164/clank": {
+        "head": "ae645b6dcbd11d6d699f4a44cf4f94bde632bea2",
+        "files": 7,
+        "unchanged": true
+      }
+    },
+    "implementationHead": "ae645b6dcbd11d6d699f4a44cf4f94bde632bea2",
+    "openPRs": [],
+    "compiledOutputsMatched": 321,
+    "acceptance": "29/40; complete feature evidence remains required",
+    "pullRequest": "https://github.com/nearbycoder/clank.run/pull/381"
+  },
+  "originalCheckoutRecovery": {
+    "root": "/home/nearby/.vnc/codex-home/.codex/worktrees/d164/clank",
+    "restored": true,
+    "head": "4b7176dbfd578846a483ab8865d9a827423ba07c",
+    "snapshot": "a63a4e0060856448f4e2a56045552e0bf52cee4e",
+    "snapshotRef": "refs/codex/snapshots/4e42f08a9397998c44c3c2c51842224752d41cff",
+    "snapshotParent": "4b7176dbfd578846a483ab8865d9a827423ba07c",
+    "snapshotChanges": [
+      "reports/codebase-review-2026-10-08/document-review-desktop.jpg",
+      "reports/codebase-review-2026-10-08/document-review-mobile.jpg",
+      "reports/codebase-review-2026-10-08/hydration-desktop.png",
+      "reports/codebase-review-2026-10-08/hydration-mobile.png",
+      "reports/codebase-review-2026-10-08/translation-desktop.jpg",
+      "reports/codebase-review-2026-10-08/translation-mobile.jpg",
+      "reports/codebase-review-2026-10-08/typecheck.txt"
+    ],
+    "files": {
+      "reports/codebase-review-2026-10-08/document-review-desktop.jpg": {
+        "bytes": 44834,
+        "sha256": "d49220c37978cdcba7702339c796af4e462de9e30712a8727ca0019e4ae31005"
+      },
+      "reports/codebase-review-2026-10-08/document-review-mobile.jpg": {
+        "bytes": 37635,
+        "sha256": "01bf4c738a85d6c1973319b42da7395a04ab754c02ad2391b6f03978b39b082f"
+      },
+      "reports/codebase-review-2026-10-08/hydration-desktop.png": {
+        "bytes": 128575,
+        "sha256": "0abc0169105b3d0ace669c67b26ca2899e520a67e683a57118e2e0cd846badfa"
+      },
+      "reports/codebase-review-2026-10-08/hydration-mobile.png": {
+        "bytes": 93112,
+        "sha256": "b16e3521715a556194fa7a1571e2c5508a0c0708da71540fd3a95372433cfc8f"
+      },
+      "reports/codebase-review-2026-10-08/translation-desktop.jpg": {
+        "bytes": 36022,
+        "sha256": "ac3f5d183e3a01c269b11fabf6613f6458649b0c6cb3560629db797670da1469"
+      },
+      "reports/codebase-review-2026-10-08/translation-mobile.jpg": {
+        "bytes": 30177,
+        "sha256": "a2139e74833fed76d869037f2e79e8b8911bed9e87fe66ef0fee35291a10b504"
+      },
+      "reports/codebase-review-2026-10-08/typecheck.txt": {
+        "bytes": 67807,
+        "sha256": "5541323f687749d772917f4128f4e1df4f98b9db490e8de57d961eb8a3575e2c"
+      }
+    },
+    "statusMatchesOriginal": true,
+    "backupDirectory": "/tmp/clank-review-2026-10-08/source-worker-authority-4b7176d-01/recovered-original-d164-files-19",
+    "qualification": "Snapshot reports startup-cleanup. Original tracked tree and all seven file bytes are independently verified; snapshot/reference were preserved."
   }
 }

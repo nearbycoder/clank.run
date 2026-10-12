@@ -6,6 +6,22 @@ Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Twe
 
 A feature is complete only when its documented acceptance evidence exists. Proposed contracts do not count as implemented features. The review baseline remains historical evidence; this ledger records subsequent work.
 
+## Native private source-worker transport review
+
+The source-worker wire module now contains a raw UNIX broker using three original private directory capabilities, a pinned socket inode and a fixed owned ChildProcess. It bounds one peer, three sequential frames, one unanswered request, native UTF-8 bytes, escaped IPC and absolute collection/reply deadlines. Directory and socket identity are checked before frame delivery. It mints no provider/source authority and executes no SQLite operations. [Transport review](source-worker-transport-review.json).
+
+Native review reproduced Node's automatic listener cleanup deleting a replacement pathname. The broker now closes from a separate empty non-writable directory and waits for actual child close before removing only its pinned socket names. Unknown endpoint replacements are preserved. Further review fixes dangling-symlink admission, JSON-escaped maximum replies, waiting-frame identity drift, decoder byte accounting and reused directory-FD cleanup authority. All169 focused cases pass on Node22 and Node24;54 packed type fixtures pass with149 inherited and zero new diagnostics. All321 paired outputs match,146 public declarations are unchanged and the450-file package is7,013,546 bytes under its unchanged8MiB ceiling with zero dependencies. Final complete local and hosted gates and protected delivery remain required.
+
+This implements raw socket ownership only. Genuine issued-grant preparation, fourth read-only mount, authenticated provider worker dispatch, original captured backend bootstrap/readiness, writer exclusion and target/ingress acceptance remain required. Acceptance stays **29/40**.
+
+## Protected provider worker authority delivery
+
+[PR #381](https://github.com/nearbycoder/clank.run/pull/381) merged through main protection as `ae645b6dcbd11d6d699f4a44cf4f94bde632bea2`, tree `10b886586d19826dad93920950a5b780a92b14a5`, identical to reviewed `ac1edc0`. All eight hosted checks pass. Final local Node26 and returned Node22/Node24/package summaries each report3,739 tests /3,702 passes /zero failures or cancellations /37 existing skips. Coverage, packed types, conformance, docs and repository/history security pass. Hosted diagnostics remain truncated terminal summaries. [Worker review](source-worker-authority-review.json).
+
+Both original checkouts and the implementation root match protected main. All23 original local files are verified unchanged, no PR is open, and all321 compiled outputs match the tested pair. During final delivery, the original `d164/clank` checkout disappeared. Git's startup-cleanup snapshot `a63a4e0`, whose parent is prior main `4b7176d`, contains exactly its seven original untracked files with identical sizes and hashes. The checkout was restored at that prior main, those exact files restored as untracked, and normal protected-main synchronization completed. The snapshot reference and an independent recovery copy remain intact; no unrelated data was removed. Subsequent work uses `codex/provider-source-worker-transport-381`.
+
+This delivers genuine provider-derived fixed host workers and persistent workspace identity through their three-operation lifetime. Socket/channel mounts, coupled original-connection bootstrap, readiness/write admission, all-writer exclusion and complete handoff/target/ingress evidence remain required. Acceptance stays **29/40**.
+
 ## Genuine provider source worker review
 
 A private capability can now be minted only from the original retained provider container/data/grant ownership. It derives source paths and holds four native host directory capabilities through backup, inspection and verification of one backup. Inode, UID/GID, private mode and canonical-path checks continue between operations. Provider tasks always use default namespaces through trusted hosting; constructor source and ordinary helper policies retain their contracts. Close awaits owned work/cleanup; its ten-second deadline reports uncertainty while retaining the original flight and any unsettled ownership. Native task scheduler release continues to follow actual task close. [Worker review](source-worker-authority-review.json).
