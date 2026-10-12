@@ -70,15 +70,15 @@ test('startup enrollment respects the configuration revision committed by a conc
   }finally{clearTimeout(release);if(!released)f.observer.exec('ROLLBACK');}
 });
 
-test('startup enrollment refuses a still-held native writer at its bounded deadline',{timeout:15000},async t=>{
-  const f=await fixture(t),retained=f.observer.prepare('SELECT * FROM clank_platform_supervisor_lease').get();
+for(const runningOwner of [false,true])test('startup enrollment refuses a still-held native writer at its bounded deadline'+(runningOwner?' with a running owner':''),{timeout:15000},async t=>{
+  const f=await fixture(t);if(runningOwner)f.first.acquire();const retained=f.observer.prepare('SELECT * FROM clank_platform_supervisor_lease').get();
   f.observer.exec('BEGIN IMMEDIATE');const started=performance.now();
   try{
     await assert.rejects(f.open(),error=>error.code==='ERR_SQLITE_ERROR'&&error.errcode===5);
     assert.ok(performance.now()-started>=4900,'Enrollment must honor its 5-second monotonic wait budget.');
     assert.deepEqual(f.observer.prepare('SELECT * FROM clank_platform_supervisor_lease').get(),retained);
   }finally{f.observer.exec('ROLLBACK');}
-  const available=await f.open();assert.equal(available.acquire(),true);assert.equal(available.status('leader').epoch,1);
+  const available=await f.open();assert.equal(available.acquire(),true);assert.equal(available.status('leader').epoch,runningOwner?2:1);
 });
 
 test('catalog contention never lets an existing owner silently retain or renew unchecked authority',async t=>{

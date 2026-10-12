@@ -79,6 +79,10 @@ for(const signal of ['SIGKILL','SIGSTOP'])test(`actual ${signal} after native re
  const response=await new Promise((resolve,reject)=>{const request=nativeHttpRequest(owner.ready.url,{headers:{host:'shadow.test',accept:'application/json'}},response=>{const chunks=[];response.on('data',chunk=>chunks.push(chunk));response.on('end',()=>resolve({status:response.statusCode,body:Buffer.concat(chunks).toString()}));response.on('error',reject)});request.on('error',reject);request.end()});assert.equal(response.status,200,response.body);assert.equal(JSON.parse(response.body).label,'primary');await until(()=>held.entered.done,'actual sole candidate response held',15000);
  const retained=f.raw(),samples=()=>f.events.filter(event=>event.kind==='traffic'&&event.projectId.startsWith('canary_')).length;
  assert.equal(retained.operation.report.counters.reserved,1);assert.equal(retained.operation.report.counters.settled,0);assert.deepEqual(retained.operation.reservations,[1]);assert.equal(samples(),1);
+ // A real SIGSTOP can land inside SQLite's write transaction. Retain that
+ // lock deterministically so successor startup must wait for the original
+ // guardian's actual process fence, rather than relying on a lucky signal.
+ if(signal==='SIGSTOP'){owner.child.send({kind:'hold-native-writer'});await until(()=>{const failure=owner.messages.find(m=>m.kind==='error');if(failure)throw Error(failure.error);return owner.messages.some(m=>m.kind==='native-writer-held')},'actual source write lock');}
  assert.equal(await linuxProcessBirth(owner.child.pid),owner.birth);owner.child.kill(signal);
  if(signal==='SIGKILL')assert.deepEqual(await owner.exited,{code:null,signal:'SIGKILL'});
  const successor=await f.successor();assert.equal((await successor.rpc({kind:'status'})).status.state,'leader');const after=f.raw();

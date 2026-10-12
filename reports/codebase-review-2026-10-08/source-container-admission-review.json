@@ -196,5 +196,6 @@
       "skipped": 0
     }
   },
-  "review": "Single-agent source/diff/native-boundary review, not independent human approval. Caller copy/getter refusal, owner/data/grant child lifetimes, pre-publication checks, seven-descriptor acquisition/cleanup, PID reuse, validated mount ordering, native resource enforcement and exact cleanup examined."
+  "review": "Single-agent source/diff/native-boundary review, not independent human approval. Caller copy/getter refusal, owner/data/grant child lifetimes, pre-publication checks, seven-descriptor acquisition/cleanup, PID reuse, validated mount ordering, native resource enforcement and exact cleanup examined.",
+  "supervisorFollowup": "Original container-observation379 head passes7 hosted checks but packaged release discovers existing stopped-owner enrollment lock race. See supervisor-frozen-lock-review.json for deterministic old failure, corrected native proof and full3730/3693/0/0/37 gate. Container-observation code and its native proof remain unchanged; corrected-head hosted checks still required."
 }

@@ -16,7 +16,7 @@ const root=process.env.CLANK_SUPERVISOR_FIXTURE_ROOT,options=JSON.parse(process.
 if(!root || !process.send)throw new Error('Owned shadow controller root and IPC required.');
 const send=value=>{if(process.connected)process.send(value,()=>{})};
 const hash=value=>createHash('sha256').update(value).digest('hex');
-let platform,server,owner,lease,guardian,database,orchestrator,leaseTimer,projectLease,projectTimer,nativeHeaderMutation,observeNativeReply=false,nativeReply=null,serializationFault;
+let platform,server,owner,lease,guardian,database,orchestrator,leaseTimer,projectLease,projectTimer,nativeHeaderMutation,observeNativeReply=false,nativeReply=null,serializationFault,nativeWriteHold;
 // Fault only after the real framework has serialized a JSON-RPC envelope.
 // The independent native connection changes actual credential state, never the response.
 const faultSerialized=value=>{if(!serializationFault||value?.jsonrpc!=='2.0')return;const fault=serializationFault;serializationFault=undefined;const db=new DatabaseSync(join(root,'control.sqlite'));try{const result=db.prepare('UPDATE clank_platform_tokens SET revoked_at=? WHERE id=? AND revoked_at IS NULL').run(Date.now(),fault.tokenId);if(result.changes!==1)throw new Error('Owned serialization revocation did not affect one real credential.');}finally{db.close()}};
@@ -24,6 +24,7 @@ const originalStringify=JSON.stringify,originalResponseJson=Response.json;
 JSON.stringify=function(...args){const result=originalStringify.apply(JSON,args);faultSerialized(args[0]);return result};
 Response.json=function(...args){const response=originalResponseJson.apply(Response,args);faultSerialized(args[0]);return response};
 const close=async()=>{
+  if(nativeWriteHold){nativeWriteHold.exec('ROLLBACK');nativeWriteHold.close();nativeWriteHold=undefined;}
   if(platform){await server.close();await platform.close();return;}
   await owner?.close();await server?.close();clearInterval(projectTimer);if(projectLease)await orchestrator.releaseLease(projectLease);
   await guardian?.stop();clearInterval(leaseTimer);orchestrator?.close();database?.close();lease?.release();lease?.close();
@@ -77,6 +78,11 @@ process.on('message',message=>void(async()=>{
   if(message?.kind==='observe-next-native-reply'){nativeReply=null;observeNativeReply=true;send({kind:'armed',id:message.id});return}
   if(message?.kind==='native-reply'){send({kind:'observed',id:message.id,reply:nativeReply});return}
   if(message?.kind==='mutate-native-header'&&platform){nativeHeaderMutation=message.header;send({kind:'armed',id:message.id});return}
+  if(message?.kind==='hold-native-writer'&&!platform&&database&&lease){
+    lease.assertCurrent();clearInterval(leaseTimer);clearInterval(projectTimer);
+    nativeWriteHold=new DatabaseSync(join(root,'control.sqlite'));nativeWriteHold.exec('PRAGMA busy_timeout=250;BEGIN IMMEDIATE');
+    send({kind:'native-writer-held',id:message.id});return;
+  }
   if(message?.kind==='status'){send({kind:'status',id:message.id,status:platform?.supervisor()});return}
   if(message?.kind==='request'&&platform){const input=new Request(message.url,{method:message.method,headers:message.headers,...(message.body===null?{}:{body:Buffer.from(message.body,'base64')})});const pending=platform.handle(input);if(message.mutateHeader)input.headers.set(...message.mutateHeader);const response=await pending;send({kind:'response',id:message.id,status:response.status,headers:[...response.headers],body:Buffer.from(await response.arrayBuffer()).toString('base64')});}
 })().catch(error=>send({kind:'error',id:message?.id,error:String(error)})));
