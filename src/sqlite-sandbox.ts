@@ -1,5 +1,5 @@
 import { SQLITE_INTERNAL } from "./sqlite-internal.ts";
-async function sourceGuard(token:object):Promise<()=>void> {return ((await import("./backend.ts")).openBackend as any)[SQLITE_INTERNAL].sourceContext(token).current;}
+async function sourceGuard(token:object):Promise<()=>void> {return (await ((await import("./sqlite-task.ts")).runSQLiteTask as any)[SQLITE_INTERNAL].sourceContext(token)).current;}
 /** Linux filesystem capabilities for internal SQLite workers. No application path is resolved after it is pinned. */
 export interface PinnedSQLiteDirectory {
   readonly path: string;
