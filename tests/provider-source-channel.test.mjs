@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {join} from 'node:path';
+import {tmpdir} from 'node:os';
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 import * as h from '../dist/provider-handoff.js';
@@ -11,7 +12,7 @@ const hash=v=>createHash('sha256').update(v instanceof Uint8Array?v:typeof v==='
 const limits={maxProjects:10,maxOperations:32,maxArchiveBytes:33554432,maxBatchEntries:256,maxBatchBytes:4194304,maxCaptureTransactionBytes:4194304,maxCaptureStateBytes:33554432,maxJournalEntries:10000,maxJournalBytes:67108864,maxSpoolBytes:268435456,controlTimeoutMs:30000};
 const cid='f'.repeat(64),zero='0001-01-01T00:00:00Z';
 async function fixture(t){
- const dir=fs.mkdtempSync('/tmp/clank-issued-channel-'),root=join(dir,'provider'),executable=join(dir,'docker.mjs'),log=join(dir,'commands');
+ const dir=fs.mkdtempSync(join(tmpdir(),'clank-issued-channel-')),root=join(dir,'provider'),executable=join(dir,'docker.mjs'),log=join(dir,'commands');
  let owner,secret;const channels=[];t.after(async()=>{try{for(const channel of channels)await channel.close();}finally{owner?.close();secret?.fill(0);fs.rmSync(dir,{recursive:true,force:true});}});
  fs.writeFileSync(log+'.container.json','{}');
  fs.copyFileSync(new URL('./fixtures/provider-handoff-container.mjs',import.meta.url),executable);fs.chmodSync(executable,0o700);
