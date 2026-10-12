@@ -135,6 +135,24 @@ export interface ProviderHandoffBridgeLimits {readonly maxProjects:number;readon
 export interface ProviderHandoffBridge {readonly enablementId:string;readonly mode:ProviderHandoffOwnerMode}
 type BridgeContext={owner:ProviderServiceOwnership;domain:ProviderHandoffDomain;enablementId:string};
 const bridges=new WeakMap<ProviderHandoffBridge,BridgeContext>();
+// Retained grant observations are deliberately distinct from worker authority.
+// No task, path, socket, process or ordinary write is authorized by this lease.
+export interface ProviderSourceGrantLease {
+  readonly binding: Readonly<Record<string, any>>;
+  assertCurrent(): void;
+  verifyCurrent(): Promise<void>;
+  close(): void;
+}
+const sourceGrantLeases=new WeakMap<ProviderSourceGrantLease,()=>void>();
+const ownerSourceLeases=new WeakMap<ProviderServiceOwnership,Set<ProviderSourceGrantLease>>();
+const retainedSourceGrants=new WeakMap<ProviderHandoffBridge,Set<string>>();
+const MAX_SOURCE_GRANT_LEASES=2;
+function closeSourceLeases(owner:ProviderServiceOwnership):void {
+  const failures:unknown[]=[];
+  for(const lease of [...(ownerSourceLeases.get(owner)??[])])try{lease.close();}catch(error){failures.push(error);}
+  if(failures.length===1)throw failures[0];
+  if(failures.length)throw new AggregateError(failures,"Provider source grant leases failed to close.");
+}
 const LIMIT_KEYS=["maxProjects","maxOperations","maxArchiveBytes","maxBatchEntries","maxBatchBytes","maxCaptureTransactionBytes","maxCaptureStateBytes","maxJournalEntries","maxJournalBytes","maxSpoolBytes","controlTimeoutMs"] as const;
 const LIMIT_MAX=[100,256,268435456,1000,8388608,8388608,134217728,100000,1073741824,1073741824,60000];
 function bridgeLimits(value:unknown):ProviderHandoffBridgeLimits {
@@ -338,7 +356,13 @@ export async function acquireProviderServiceOwnership(rootDirectory:string,creat
     if(c.database.prepare("SELECT name FROM sqlite_schema LIMIT 1").all().length===0)c.database.exec(OWNER_SQL+"; INSERT INTO clank_provider_service_owner VALUES(1)");
     marker(c);if(!c.marked){if(createRoot)fs.fchmodSync(c.root.fd,0o700);fs.fchmodSync(c.service.fd,0o700);}c.root.normalize=false;c.service.normalize=false;for(const p of c.pins)assertPin(c,p);
     c.database.exec("COMMIT; BEGIN IMMEDIATE");sync(c,c.file,c.service);
-    const owner:ProviderServiceOwnership=Object.freeze({fs:promises,path,root:c.root.path,serviceDirectory:service,close(){if(c.closed)return;c.closed=true;c.mode="closed";try{c.database.close();}finally{releasePins(c,0);}}});owners.set(owner,c);return owner;
+    const owner:ProviderServiceOwnership=Object.freeze({fs:promises,path,root:c.root.path,serviceDirectory:service,close(){
+      if(c.closed)return;c.closed=true;c.mode="closed";const failures:unknown[]=[];
+      try{closeSourceLeases(owner);}catch(error){failures.push(error);}
+      try{c.database.close();}catch(error){failures.push(error);}
+      try{releasePins(c,0);}catch(error){failures.push(error);}
+      if(failures.length===1)throw failures[0];if(failures.length)throw new AggregateError(failures,"Provider service ownership failed to close cleanly.");
+    }});owners.set(owner,c);return owner;
   }catch(error){try{c.database?.close();}finally{releasePins(c,0);}if(typeof (error as any)?.errcode==="number"&&((error as any).errcode&255)===5)throw new Error("Provider service root already has an active writer.");throw error;}
 }
 function identity(input:unknown):Row {
@@ -485,12 +509,106 @@ type ProviderHandoffContainerAcknowledgment=Readonly<{grantId:string;bindingSha2
 const CONTAINER_PROJECTION="[{{json .Id}},{{json .Image}},{{json .Config.Image}},{{json .Config.User}},{{json .Config.Labels}},{{json .HostConfig.RestartPolicy.Name}},{{json .HostConfig.RestartPolicy.MaximumRetryCount}},{{json .State.Status}},{{json .State.Running}},{{json .State.Paused}},{{json .State.Restarting}},{{json .State.Dead}},{{json .State.Pid}},{{json .State.StartedAt}},{{json .State.FinishedAt}},{{json .RestartCount}},{{json .Created}}]";
 const GRANT_CONTAINER_CAS="UPDATE clank_provider_handoff_source_grant SET state=?,container_id=? WHERE id=1 AND protocol=2 AND grant_id=? AND binding_json=? AND binding_sha256=? AND grant_secret_sha256=? AND control_secret_sha256=? AND state=? AND container_id IS ? AND readiness_json IS NULL AND readiness_sha256 IS NULL";
 const CONTAINER_MIRROR_CAS="UPDATE clank_provider_handoff_bridge_state SET version=version+1,records_sha256=? WHERE id=1 AND protocol=2 AND enablement_id=? AND version=? AND records_sha256=?";
-function containerInput(value:ProviderHandoffContainerInput,state:"created"|"started"):ProviderHandoffContainerInput {
+function containerInput(value:ProviderHandoffContainerInput,state:"created"|"started",observationOnly=false):ProviderHandoffContainerInput {
   const keys=["projectId","grantId","bindingSha256","containerId","expectedVersion"],copy:Row={};
   if(!value||typeof value!=="object"||Array.isArray(value)||Reflect.ownKeys(value).length!==keys.length)fail("Provider handoff container input is invalid.");
   for(const key of keys){const descriptor=Object.getOwnPropertyDescriptor(value,key);if(!descriptor||!("value" in descriptor))fail("Provider handoff container input requires own data fields.");copy[key]=descriptor.value;}
-  if(!match(copy.projectId,ID)||!match(copy.grantId,UUID)||!match(copy.bindingSha256,DIGEST)||!match(copy.containerId,DIGEST)||!positive(copy.expectedVersion)||copy.expectedVersion>Number.MAX_SAFE_INTEGER-1||copy.expectedVersion<(state==="created"?2:3))fail("Provider handoff container input is invalid.");
+  if(!match(copy.projectId,ID)||!match(copy.grantId,UUID)||!match(copy.bindingSha256,DIGEST)||!match(copy.containerId,DIGEST)||!positive(copy.expectedVersion)||copy.expectedVersion>Number.MAX_SAFE_INTEGER-(observationOnly?0:1)||copy.expectedVersion<(state==="created"?2:3))fail("Provider handoff container input is invalid.");
   return Object.freeze(copy) as unknown as ProviderHandoffContainerInput;
+}
+/** Require an original retained lease; copied methods/serialized rows are not authority. */
+export function assertProviderSourceGrantLease(lease:ProviderSourceGrantLease):void {
+  const check=sourceGrantLeases.get(lease);if(!check)fail("A genuine provider source grant lease is required.");check();
+}
+/**
+ * Retain the exact started catalog observation and authenticate its control key.
+ * This proves catalog ownership only. Native container/mount/worker admission,
+ * source readiness and provider-wide writer exclusion still require their own
+ * checks. In particular, C1's started row is not current process/security proof.
+ */
+export async function retainProviderSourceGrant(
+  bridge:ProviderHandoffBridge,value:ProviderHandoffContainerInput,controlSecret:Uint8Array,
+):Promise<ProviderSourceGrantLease> {
+  const input=containerInput(value,"started",true);
+  if(input.expectedVersion<4)fail("A started provider source grant version is required.");
+  // Copy only native slots before the first await. Never call a caller getter,
+  // iterator or conversion, and never retain/mutate its key or shared memory.
+  const typed=Object.getPrototypeOf(Uint8Array.prototype);
+  const length=Object.getOwnPropertyDescriptor(typed,"byteLength")!.get!;
+  const buffer=Object.getOwnPropertyDescriptor(typed,"buffer")!.get!;
+  const arrayLength=Object.getOwnPropertyDescriptor(ArrayBuffer.prototype,"byteLength")!.get!;
+  try {
+    if(!(controlSecret instanceof Uint8Array)||!ArrayBuffer.isView(controlSecret)||length.call(controlSecret)!==32)fail();
+    arrayLength.call(buffer.call(controlSecret));
+  }catch{fail("Provider source control key requires 32 native non-shared bytes.");}
+  const secret=new Uint8Array(controlSecret);
+  let lease:ProviderSourceGrantLease|undefined;
+  try {
+    const registered=bridgeCurrent(bridge,true),cryptoName="node:crypto";
+    const crypto=await import(cryptoName);bridgeCurrent(bridge,true);
+    const secretHash=crypto.createHash("sha256").update(secret).digest("hex");secret.fill(0);
+    lease=await withBridge(bridge,true,(c,_root,_state)=>{
+      const active=ownerSourceLeases.get(registered.owner)??new Set<ProviderSourceGrantLease>();
+      const used=retainedSourceGrants.get(bridge)??new Set<string>();
+      if(active.size>=MAX_SOURCE_GRANT_LEASES||used.has(input.grantId))fail("Provider source grant lease cannot be duplicated or recycled.");
+      const frame=containerFrame(bridge,registered),source=frame.state.states.find(row=>row.projectId===input.projectId),grant=source?.grant;
+      if(!grant||source.version!==input.expectedVersion||grant.state!=="started"||grant.grant_id!==input.grantId
+        ||grant.binding_sha256!==input.bindingSha256||grant.container_id!==input.containerId
+        ||!crypto.timingSafeEqual(Buffer.from(grant.control_secret_sha256,"hex"),Buffer.from(secretHash,"hex"))) {
+        fail("Provider source retained grant differs.");
+      }
+      const rootJSON=JSON.stringify(frame.root),stateJSON=JSON.stringify({state:frame.state,index:frame.indexRows});
+      const binding=freezeValue(JSON.parse(grant.binding_json));
+      const retained:Pin[]=[],from=c.pins.length;
+      try {
+        const handoff=directory(c,c.service,"handoff"),catalogs=directory(c,handoff,"catalogs");
+        pin(c,c.path.join(handoff.path,"index.sqlite"),false,INDEX_MAX);
+        for(const project of frame.state.projects){const target=directory(c,catalogs,project.catalog_id);pin(c,c.path.join(target.path,"catalog.sqlite"),false,BRIDGE_CATALOG_MAX);}
+        // Lease pins have their own lifetime. Never leave them in the transient
+        // owner-operation stack that another operation releases in finally.
+        retained.push(...c.pins.splice(from));
+        let closed=false;
+        const close=()=>{
+          if(closed)return;closed=true;active.delete(result);
+          const failures:unknown[]=[];
+          for(const p of retained.splice(0).reverse())try{c.fs.closeSync(p.fd);}catch(error){failures.push(error);}
+          if(failures.length===1)throw failures[0];
+          if(failures.length)throw new AggregateError(failures,"Provider source grant retained pins failed to close.");
+        };
+        const check=()=>{
+          try {
+            if(closed)fail("Provider source grant lease is closed.");
+            for(const p of retained)assertPin(c,p);
+            containerFrame(bridge,registered,rootJSON,stateJSON);
+          }catch(error){try{close();}catch(cleanup){throw new AggregateError([error,cleanup],"Provider source grant observation and cleanup failed.");}throw error;}
+        };
+        const verifyCurrent=async()=>{
+          try {
+            // Probe the retained domain on both sides of the fresh native read.
+            // A response captured before a daemon change cannot acknowledge a
+            // verification after that change while the owner lane is held.
+            check();await withBridge(bridge,true,()=>check());check();
+          }catch(error){try{close();}catch(cleanup){throw new AggregateError([error,cleanup],"Provider source grant verification and cleanup failed.");}throw error;}
+        };
+        const result:ProviderSourceGrantLease=Object.freeze({binding,assertCurrent:check,verifyCurrent,close});
+        check();sourceGrantLeases.set(result,check);active.add(result);used.add(input.grantId);
+        ownerSourceLeases.set(registered.owner,active);retainedSourceGrants.set(bridge,used);lease=result;
+        return result;
+      }catch(error){
+        // Includes failure before a facade exists; every owned descriptor gets
+        // one close attempt even if an earlier close reports uncertainty.
+        const failures:unknown[]=[error];
+        for(const p of retained.splice(0).reverse())try{c.fs.closeSync(p.fd);}catch(cleanup){failures.push(cleanup);}
+        try{releasePins(c,from);}catch(cleanup){failures.push(cleanup);}
+        if(failures.length>1)throw new AggregateError(failures,"Provider source grant retention failed.");throw error;
+      }
+    });
+    // withBridge's final domain probe and exclusive lane completion both await.
+    // Check retained inode/state again before publishing the original facade.
+    assertProviderSourceGrantLease(lease);return lease;
+  }catch(error){
+    try{lease?.close();}catch(cleanup){throw new AggregateError([error,cleanup],"Provider source grant publication failed.");}throw error;
+  }finally{secret.fill(0);}
 }
 function containerTimestamp(value:unknown):boolean {
   if(typeof value!=="string"||value==="0001-01-01T00:00:00Z")return false;

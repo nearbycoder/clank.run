@@ -1,0 +1,136 @@
+{
+  "scope": "Native provider owner/grant/catalog observation lease only; no worker, filesystem data path, socket, running-container mount/security, readiness or writer-stop authority. Feature07 remains incomplete.",
+  "base": "32379212060cbea623446ea8fee5879b0a603473",
+  "sourceHashes": {
+    "src/provider-handoff.ts": "5916db85b462bf97a8c51bde0a5278a9390cd9f07faf862925c93fe278d00591",
+    "tests/provider-source-grant-lease.test.mjs": "deaf42d7603aa685b074b94e8e159137ff1da6e9e53168c2fbf8b3621d3eafb5"
+  },
+  "implementation": {
+    "genuineOwnerBridge": true,
+    "requiresExactStartedGrantAndVersion": true,
+    "controlSecret": "Own native 32-byte non-shared copy before awaits; SHA256 checked against native grant; local copy zeroed on every exit; caller bytes unchanged; no raw key returned or retained.",
+    "retainedPins": "Separate per-lease inode/fd lifetime for handoff/index/full immutable catalog roster; strict native UID/mode/schema/mirror/binding/version checks; removed from transient owner operation pin stack.",
+    "verification": "Exclusive owner lane and native domain probes before/after fresh catalog check; retained state and pins rechecked after await completion before acknowledgment.",
+    "scopeInvalidation": "Fresh revocation, version drift/rollback, key digest drift, schema/mirror/mode/inode replacement, failed/closed owner or changed domain causes sticky refusal and owned pin cleanup.",
+    "limits": "At most two open leases per genuine owner; one mint per grant per bridge lifetime; existing fixed16 owner-operation queue ceiling. This is not a full worker-channel queue/close deadline claim.",
+    "cleanup": "Idempotent facade close; owner closure attempts every lease, native database and owner pin close; multiple failures retained as AggregateError; no deletion/adoption of unknown files.",
+    "MAXVersion": "Read-only MAX_SAFE_INTEGER observation accepted without increments; existing C1 mutation bound preserved."
+  },
+  "nativeTests": {
+    "22": {
+      "lease": {
+        "log": "/tmp/clank-review-2026-10-08/source-grant-lease-3237921-01/lease-native22-final-10.log",
+        "sha256": "1d82639dc7bca2266e20ce821b3d70bf72e70b540e4fe7dc6001d060c188be69",
+        "counts": {
+          "tests": 47,
+          "pass": 47,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 0
+        }
+      },
+      "broaderSelection": {
+        "log": "/tmp/clank-review-2026-10-08/source-grant-lease-3237921-01/native22-final-09.log",
+        "sha256": "3af69fa8e002ddf008489d865964962cc91a80ed5a1acd9d76d175b3ebf4fcca",
+        "counts": {
+          "tests": 290,
+          "pass": 290,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 0
+        }
+      }
+    },
+    "24": {
+      "lease": {
+        "log": "/tmp/clank-review-2026-10-08/source-grant-lease-3237921-01/lease-native24-final-10.log",
+        "sha256": "7d0485bfb221e925093f45d0b1d73101add59434013aee7eaf450ccdccd5840c",
+        "counts": {
+          "tests": 47,
+          "pass": 47,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 0
+        }
+      },
+      "broaderSelection": {
+        "log": "/tmp/clank-review-2026-10-08/source-grant-lease-3237921-01/native24-final-09.log",
+        "sha256": "1635c4296e81b459c928ee1414da6951838ba36b39e798b942712c17c2d552fc",
+        "counts": {
+          "tests": 290,
+          "pass": 290,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 0
+        }
+      }
+    },
+    "26": {
+      "lease": {
+        "log": "/tmp/clank-review-2026-10-08/source-grant-lease-3237921-01/lease-native26-final-10.log",
+        "sha256": "e415c809a2962ce19f398def1335a6a427736d2896ad7899edf6422a6d2a3cb7",
+        "counts": {
+          "tests": 47,
+          "pass": 47,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 0
+        }
+      },
+      "broaderSelection": {
+        "log": "/tmp/clank-review-2026-10-08/source-grant-lease-3237921-01/native26-final-09.log",
+        "sha256": "448d32a483e115ab9dba557e16079bc7150558d613a43989b8c37fbdb630a66d",
+        "counts": {
+          "tests": 290,
+          "pass": 290,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 0
+        }
+      }
+    }
+  },
+  "fixtureQualification": "Docker domain transport is explicitly scripted. Native SQLite, filesystem pins, keys and closure are real. C1 started row in this test is explicit component row setup. No Docker source launch, current process proof or host certification is claimed.",
+  "retainedEarlierFailures": {
+    "native24FirstSelection": {
+      "tests": 287,
+      "pass": 285,
+      "fail": 2,
+      "cancelled": 0,
+      "skipped": 0,
+      "log": "/tmp/clank-review-2026-10-08/source-grant-lease-3237921-01/native24-final-07.log",
+      "reason": "Node24 copy created directory mode0755 from0700; production correctly refused permissions before inode comparison. Fixture now verifies identical bytes/modes before the inode test."
+    },
+    "independentReturnedNode24CopyProbe": {
+      "node": "v24.21.0",
+      "umask": "22",
+      "sourceDirectory": "700",
+      "copiedDirectory": "755",
+      "sourceFile": "600",
+      "copiedFile": "600"
+    },
+    "pairedCollector06": "Collector compared 175 JS outputs then mistakenly expected321 total JS/declaration outputs. No successful manifest was saved; corrected08 compares all321 outputs."
+  },
+  "pairedBuild": {
+    "outputs": 321,
+    "node22EqualsNode26": true,
+    "changedExistingOutputs": [
+      "provider-handoff.js"
+    ],
+    "newOutputs": [],
+    "record": "/tmp/clank-review-2026-10-08/source-grant-lease-3237921-01/paired-build-08.json"
+  },
+  "typeContracts": {
+    "packedFixtures": 54,
+    "inheritedDiagnostics": 149,
+    "baseline": 154,
+    "newDiagnostics": 0,
+    "log": "/tmp/clank-review-2026-10-08/source-grant-lease-3237921-01/types-final-09.log"
+  },
+  "fullGate": "In progress; complete final local gate and required hosted checks still required before protected merge.",
+  "acceptance": {
+    "accepted": 29,
+    "pending": 11,
+    "feature07": "in progress"
+  }
+}
