@@ -91,7 +91,13 @@
       "outputs": 321,
       "declarationsUnchanged": 146
     },
-    "hostedGate": "Not yet published; all eight exact-head gates and normal protected merge remain required."
+    "hostedGate": {
+      "originalHead": "a29a611adab09e971dc8f8378a5576812e83c1cb",
+      "originalResults": "Seven exact-head checks pass. Both runtime terminal summaries report3774 tests/3737 passes/zero failures or cancellations/37 existing skips. Packaged conformance is cancelled; its annotation confirms the25-minute job timeout.",
+      "originalDiagnostics": "terminal-package-cancelled-28.json and package-timeout-annotation-29.json retain returned truncated diagnostics. The returned bytes do not include an earlier retry marker; a retry on this specific hosted attempt is not claimed.",
+      "correction": "Only the conformance job budget increases25 to45 minutes to cover the already-bounded two-run coverage-artifact policy, Linux setup and packed conformance. Runtime budgets, assertions, coverage thresholds, the one narrowly recognized retry limit and branch protection remain intact. No unchanged-head rerun.",
+      "delivery": "Corrected exact-head checks and protected merge remain required."
+    }
   },
   "remaining": [
     "Source-side bounded native socket client and explicit opt-in original backend bootstrap",
