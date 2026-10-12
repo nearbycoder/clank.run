@@ -59,7 +59,27 @@
     "receipt": "owned-upload-archive-relocation-06.json",
     "qualification": "Only a verified completed task-owned upload archive was relocated to its identical regular-filesystem copy, preserving the original path as a symlink. VM inode/profile, guest reserve, cached images, user files and failed evidence unchanged."
   },
-  "fullGate": "running session32058 on owned regular-filesystem TMPDIR; no completed gate claimed yet",
+  "fullGate": {
+    "head": "ba38edc60d26ee9a7f0dfc45b7e84c32ff0ecbff",
+    "tree": "6b9b5c8687883be9049cd4e9d7d349ed8cf2072a",
+    "session": 32058,
+    "exit": 0,
+    "counts": {
+      "tests": 3862,
+      "pass": 3825,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 37
+    },
+    "coverage": {
+      "lines": 91.97,
+      "branches": 82.28,
+      "functions": 90.11
+    },
+    "conformanceDocsDependenciesRepositoryHistorySecurity": "passed",
+    "ownedGeneratedOutputsPreservedAndRestored": 19,
+    "reviewedFilesUnchanged": 7
+  },
   "evidenceRoot": "/var/tmp/clank-source-service-153d7e8-d0w31cr3",
   "accepted": 29,
   "pending": [
@@ -75,5 +95,49 @@
     38,
     40
   ],
-  "next": "Consume the genuine source admission before production startup cleanup and couple source launch to settled committed baseline/entry/grant/native completion without adopting prepared DTOs or synthetic health; finish original readiness/control/every-role stop/target/ingress/fallback/interruption acceptance."
+  "next": "Consume the genuine source admission before production startup cleanup and couple source launch to settled committed baseline/entry/grant/native completion without adopting prepared DTOs or synthetic health; finish original readiness/control/every-role stop/target/ingress/fallback/interruption acceptance.",
+  "hostedHttpFixtureRepair": {
+    "originalHead": "ba38edc60d26ee9a7f0dfc45b7e84c32ff0ecbff",
+    "originalHosted": {
+      "tests": 3862,
+      "pass": 3824,
+      "fail": 1,
+      "cancelled": 0,
+      "skipped": 37
+    },
+    "failedTest": "native HTTP shadow history preserves disabled policy and current read-only membership",
+    "error": "NATIVE_PLATFORM_TRANSPORT_CLOSED / ECONNRESET",
+    "returnedEvidence": "Exact Node24 job log and check annotations; log truncated, no failed request phase or reused-socket field available.",
+    "causeQualification": "Controlled native TCP close reproduces the exact reset on the original fixture helper with one reused connection. This establishes a fixture defect, not the unknown specific hosted reset cause.",
+    "beforeEachNode22And24": {
+      "connections": 1,
+      "requests": 1,
+      "nativeCode": "ECONNRESET"
+    },
+    "correction": "agent:false in the private test helper; one fresh connection per logical operation, no replay/retry and transport closure remains failure.",
+    "afterEachNode22And24": {
+      "connections": 2,
+      "requests": 2,
+      "failed": false
+    },
+    "statusEachNode22And24": {
+      "tests": 20,
+      "pass": 20,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0
+    },
+    "productionOutputsUnchanged": 322,
+    "packageUnchanged": true,
+    "typesAndNativeOwnerProofUnchanged": true,
+    "firstLocalGatePassed": {
+      "tests": 3862,
+      "pass": 3825,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 37
+    },
+    "correctedFullGate": "running session10094; fresh exact-head hosted checks and protected delivery still required",
+    "autoMerge": "Original queue15 executed successfully then explicitly disabled on Node24 failure; old merge16 has never executed."
+  }
 }
