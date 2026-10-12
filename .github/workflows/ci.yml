@@ -104,7 +104,10 @@ jobs:
   conformance:
     name: Packaged-release conformance
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    # The complete gate may repeat coverage once, only after every test passes
+    # and Node produces the recognized malformed coverage artifact. Budget both
+    # bounded runs plus Linux setup and packed conformance; no gate is skipped.
+    timeout-minutes: 45
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

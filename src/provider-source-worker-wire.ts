@@ -264,6 +264,8 @@ process.stdin.on('end',dispose);process.stdin.on('data',chunk=>{
 `;
 export interface SourceWorkerSocketBroker {
   readonly socketPath:string;
+  readonly closed:Promise<void>;
+  assertCurrent():void;
   receive():Promise<string>;
   reply(encoded:string):void;
   close():Promise<void>;
@@ -348,7 +350,7 @@ export async function openSourceWorkerSocketBroker(
     // as a stream. O_NOFOLLOW prevents a substituted symbolic link.
     socketFd=fs.openSync(original,0x200000|fs.constants.O_NOFOLLOW);const held=fs.fstatSync(socketFd);if(!held.isSocket()||held.dev!==before.dev||held.ino!==before.ino)throw new Error("Private UNIX listener changed.");
     socketIdentity={dev:held.dev,ino:held.ino};fs.linkSync(original,endpoint);published=true;current();
-    return Object.freeze({socketPath:mount.path+"/sqlite.sock",receive(){current();if(active)return Promise.reject(new Error("Private UNIX broker already has an unanswered frame."));if(waiting)return Promise.reject(new Error("Private UNIX broker already has a receiver."));if(queued!==undefined){const body=queued;queued=undefined;active=true;return Promise.resolve(body);}return new Promise<string>((resolve,reject)=>{waiting=resolve;rejectWaiting=reject;});},
+    return Object.freeze({socketPath:mount.path+"/sqlite.sock",closed:actualClose,assertCurrent:current,receive(){current();if(active)return Promise.reject(new Error("Private UNIX broker already has an unanswered frame."));if(waiting)return Promise.reject(new Error("Private UNIX broker already has a receiver."));if(queued!==undefined){const body=queued;queued=undefined;active=true;return Promise.resolve(body);}return new Promise<string>((resolve,reject)=>{waiting=resolve;rejectWaiting=reject;});},
       reply(encoded:string){current();if(!active)throw new Error("Private UNIX broker has no unanswered frame.");if(typeof encoded!=="string"||Buffer.byteLength(encoded)>8192||/[\r\n]/u.test(encoded))throw new Error("Private UNIX response exceeds its frame.");active=false;stdin.write(JSON.stringify({kind:"reply",body:encoded})+"\n");},close});
   }catch(error){try{await close();}catch(cleanup){throw new AggregateError([error,cleanup],"Private UNIX broker acquisition and cleanup failed.");}throw error;}
 }

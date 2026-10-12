@@ -1,0 +1,119 @@
+{
+  "feature": 7,
+  "acceptance": {
+    "accepted": 29,
+    "pending": 11,
+    "complete": false
+  },
+  "base": "a01a1d0f1b405fd740e59d97b890e9a05cb1902b",
+  "scope": "Original issued-grant channel directories, native fourth read-only mount admission and authenticated first-base dispatch to a genuine provider worker. Preparation/binding alone grant no SQLite work.",
+  "implementation": {
+    "files": {
+      "src/provider-handoff.ts": "a813cb766da5b2750588d0eed3b87f5c5edaa5f118036e0411293312e7ee45ed",
+      "src/provider-source-worker-wire.ts": "67c79959ebab4eae33a2e09c9dc7491f0929e7236a547b674106e362a0cb61e7"
+    },
+    "issued": "Authenticate original live bridge, exact first issued grant version2 and copied32 non-shared native key bytes. Retain the original complete catalog/index roster and derive all private directories from the original root. No caller path or stale namespace adoption. Maximum2 active/pending channels per owner; used grants cannot recycle. Failed opt-in preparation cannot fall back to a started source observer.",
+    "created": "Require original created transition version3 and fresh native original-daemon container identity. One binding attempt is consumed before its first await; concurrent calls cannot mint a second channel epoch. Zero the retained control copy after protocol derivation.",
+    "mount": "Only an original prepared/bound channel registry admits the exact fourth read-only rprivate bind at /run/clank-source-worker. Validate Docker source/target/profile, actual kernel ro permission, native UID/security/resources, original process root/namespaces and directory dev/ino. Closing the original grant/container/owner invalidates the channel.",
+    "dispatch": "Require the original coupled container/data/grant capability and matching binding. Mint the existing genuine provider worker; authenticate canonical frames before submitting backup/inspection/verification of one backup. No caller executor, SQL, path, module or descriptor argument. Provider tasks continue forcing default namespaces through trusted hosting.",
+    "close": "Peer loss/owner invalidation zeroes keys, stops admission and cancels exact owned work. Cleanup retains channel pins until dispatch/native worker cleanup settles. The10-second whole close observation deadline preserves the original cleanup flight and ownership; late actual broker close is resettled without replacement or body replay."
+  },
+  "reviewFindings": [
+    {
+      "finding": "Initial fixture configuration was read before its control JSON existed.",
+      "evidence": "issued-channel26-03.log:12 setup failures, no channel behavior proof. Initial disposable fixture dirs remain retained.",
+      "fix": "Write the initial control JSON and register fixture cleanup before acquisition."
+    },
+    {
+      "finding": "The unpublished candidate compared an augmented binding object with an unaugmented native catalog row.",
+      "evidence": "issued-channel26-04.log:6 native candidate refusals and6 input refusals; positive preparation fails.",
+      "fix": "Retain a separate complete original catalog-row JSON projection and compare only the two owning state/container transition fields."
+    },
+    {
+      "finding": "Concurrent created-binding calls could both pass the initial unbound check.",
+      "fix": "Consume a private attempt flag before the first await. Native component concurrency regression passes."
+    },
+    {
+      "finding": "Failed opt-in preparation left no published channel registry and could permit a subsequent legacy observer path.",
+      "fix": "A consumed grant without completed original channel preparation refuses the observer. New native catalog/C1 component regression passes."
+    },
+    {
+      "finding": "Active dispatch needs actual peer-loss observation and cleanup must await its worker.",
+      "fix": "Raw broker exposes its original actual-close promise/current check. Channel links peer closure to genuine worker cancellation and retains dispatch/cleanup flights."
+    }
+  ],
+  "verification": {
+    "nativeDirectory": "/tmp/clank-review-2026-10-08/source-worker-channel-a01a1d0-01",
+    "component": "issued-channel26-12.log:15/15 passed; native SQLite/socket/capabilities with scripted Docker metadata, qualified separately from native container proof.",
+    "node24Focused": "focused24-16.log:271/271 passed, zero failures/cancellations/skips.",
+    "node22Focused": "focused22-19.log:271/271 passed, zero failures/cancellations/skips.",
+    "types": "types-16.log:54 packed fixtures;149 inherited/zero new diagnostics relative to154 baseline.",
+    "nativeContainers": {
+      "matrix": "native-channel-matrix-15.json:16 paired Node22/26 cases on immutable images.",
+      "enhancedDispatch": "native-channel-final-dispatch-18.json:6 final paired cases additionally enforce namespaces through trusted hosting and zero worker spawn before authentication. Dispatch has3 genuine SQLite operations; bad authentication refuses; peer disconnect terminates its exact owned worker in20ms/32ms and releases pins.",
+      "readOnly": "Independent native container-side unlink fails EROFS; host/mounted dir dev/ino match; seven original process/root/namespace descriptors remain retained.",
+      "cleanup": "native-ownership-and-absence-20.json:all33 exact owned containers absent on the original daemon;2,791,436,288 available bytes remains above unchanged2,250,000,000 reserve.",
+      "qualification": "Client is a host process; application entry remains a timer. Original captured C0 bootstrap/completion/readiness, independent worker descendant namespace sampling and full host policy certification are not claimed."
+    },
+    "pairedBuild": "paired-build-19.json:321 identical Node22/26 outputs; only provider-handoff.js and provider-source-worker-wire.js differ from main;146 public declarations unchanged.",
+    "package": "package-19.json:450 files/7,027,013 bytes under unchanged8MiB/zero dependencies.",
+    "fullGate": {
+      "file": "full-check26-16.log",
+      "completed": true,
+      "counts": {
+        "tests": 3774,
+        "pass": 3737,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 37
+      },
+      "coverage": {
+        "lines": 91.95,
+        "branches": 82.3,
+        "functions": 90.13
+      },
+      "types": {
+        "packed": 54,
+        "existing": 149,
+        "new": 0
+      },
+      "focused": {
+        "node22": 271,
+        "node24": 271
+      },
+      "native": "16 paired cases plus6 final namespace/dispatch/auth/close checks",
+      "package": {
+        "files": 450,
+        "bytes": 7027013,
+        "ceiling": 8388608,
+        "dependencies": 0
+      },
+      "outputs": 321,
+      "declarationsUnchanged": 146
+    },
+    "hostedGate": {
+      "originalHead": "a29a611adab09e971dc8f8378a5576812e83c1cb",
+      "originalResults": "Seven exact-head checks pass. Both runtime terminal summaries report3774 tests/3737 passes/zero failures or cancellations/37 existing skips. Packaged conformance is cancelled; its annotation confirms the25-minute job timeout.",
+      "originalDiagnostics": "terminal-package-cancelled-28.json and package-timeout-annotation-29.json retain returned truncated diagnostics. The returned bytes do not include an earlier retry marker; a retry on this specific hosted attempt is not claimed.",
+      "correction": "Only the conformance job budget increases25 to45 minutes to cover the already-bounded two-run coverage-artifact policy, Linux setup and packed conformance. Runtime budgets, assertions, coverage thresholds, the one narrowly recognized retry limit and branch protection remain intact. No unchanged-head rerun.",
+      "delivery": "Corrected exact-head checks and protected merge remain required."
+    },
+    "hostedShadowFixtureRepair": {
+      "head": "31a1c81336383988ce35adc851ae666c725d8a46",
+      "failure": "terminal-package-budget-failure-33.json:3774 reported/3736 passes/one failure/zero cancellations/37 skips; existing managed-shadow-observer.test.mjs positive comparison has comparable0 instead of1.",
+      "controlledReproduction": "shadow-positive-original22-34.log:real candidate headers delayed1500ms under the original1000ms budget settle as unknown candidate-timeout1/comparable0 and reproduce the exact assertion. The returned hosted bytes do not include its unknown-reason map; that specific hosted timeout reason is not claimed.",
+      "fix": "Only the positive comparison fixture gets an explicit10000ms request/30000ms session budget and a real1500ms delayed response; it still requires one reserved/settled/comparable result, matching status/media, both bounded EOFs, no candidate timeout and unchanged primary response. Existing short deadline refusal/cancellation/cleanup tests are unchanged. Production source and all321 compiled outputs remain identical.",
+      "focused": "Complete40-case native observer suite passes on Node22 and Node24, including both strict candidate deadline cases.",
+      "localFullGate": "full-check26-shadow-corrected-35.log running; fresh terminal outcome required.",
+      "hosted": "A corrected review head and fresh exact-head checks are required; no unchanged-head rerun."
+    }
+  },
+  "remaining": [
+    "Source-side bounded native socket client and explicit opt-in original backend bootstrap",
+    "Original captured application connection/native completion evidence",
+    "Source readiness/control/export/enrollment and write admission",
+    "Barrier/quiescence/seal/tail retention and every provider writer role stopped",
+    "Stopped target staging, activation, ingress/fallback and original interruption bound",
+    "Other10 pending original feature scopes"
+  ]
+}
