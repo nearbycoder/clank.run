@@ -105,13 +105,21 @@
       "terminalExit": 1,
       "cause": "Only final package audit fails because exact manifest lacks newly added module; derived required-file messages follow the empty accepted manifest. Actual packed required files remain present.",
       "repair": "Exactly one actual module path added to exact release manifest.8MiB ceiling,dependency and forbidden-path assertions unchanged."
+    },
+    {
+      "log": "full-check26-corrected-16.log",
+      "terminalSession": 17133,
+      "terminalExit": 1,
+      "counts": "3894/3853/4/0/37",
+      "coverage": "91.95/82.26/90.04",
+      "cause": "Four exact-inventory tests still expected prior451 paths/counts after actual reviewed module adds452nd path.",
+      "repair": "Tests now preserve all422/449/450/451 historical manifests and enforce exact452current, cross-manifest rejection, swapped paths,missing paths and unchanged8MiB ceiling.12/12 cases pass eachNode22/24. Production/output/native/type/package bytes unchanged."
     }
   ],
   "fullGate": {
-    "state": "running",
-    "session": 17133,
-    "log": "full-check26-corrected-16.log",
-    "frozenInputs": "frozen-inputs-corrected-16.json"
+    "state": "fresh test-corrected gate required",
+    "previous": "full-check26-corrected-16.log failed4 inventory tests",
+    "nextFrozenInputs": "frozen-inputs-inventory-corrected-26.json"
   },
   "delivery": "Not yet committed, pushed or merged. Fresh final native/complete local and exact-head hosted gates remain required.",
   "originalFeatureScope": "All11 pending features and each original acceptance requirement remain. Source generation bootstrap does not complete online transfer.",
