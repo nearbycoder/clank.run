@@ -76,7 +76,26 @@
       },
       "qualification": "Fresh corrected-fixture complete gate; original runtime/source/output/package/host policy unchanged. No automatic retry of assertion failure."
     },
-    "hosted": "Original c1cec34 head completes with7 passed/Node24 failed. Fresh corrected-head checks and protected delivery required.",
+    "hosted": {
+      "head": "61e5f864a73ba929e8615344a807390e5769ce81",
+      "checks": 8,
+      "allPass": true,
+      "runtimeAndPackageCounts": {
+        "tests": 3815,
+        "pass": 3778,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 37
+      },
+      "types": {
+        "packed": 54,
+        "existing": 149,
+        "new": 0
+      },
+      "nativePostgreSQLCasesPerRuntime": 24,
+      "logsTruncated": true,
+      "qualification": "Returned terminal summaries from Node22/24/package, native PostgreSQL/types and static/CodeQL checks only; original failed head is retained separately."
+    },
     "interruptedFullGate": {
       "session": 33334,
       "completed": true,
@@ -203,5 +222,19 @@
     "Complete every-role writer exclusion/stop, target activation, ingress/fallback and original interruption acceptance",
     "Original ten other pending feature scopes"
   ],
-  "browser": "Chrome admin policy verification unresolved; pending question retained; no bypass or indirect browser target."
+  "browser": "Chrome admin policy verification unresolved; pending question retained; no bypass or indirect browser target.",
+  "delivery": {
+    "pullRequest": "https://github.com/nearbycoder/clank.run/pull/386",
+    "reviewedHead": "61e5f864a73ba929e8615344a807390e5769ce81",
+    "mergedMain": "adad1cdc74a14d75b168dd35badb24ec18734ce1",
+    "tree": "1bd70ecffb3341a0bd80e30a67fa1232634187c4",
+    "parent": "4fc4397395fba2237fda630b4bdccb77cc4129d6",
+    "protectedSquash": true,
+    "allHostedChecksPass": true,
+    "originalFilesUnchanged": 23,
+    "pairedOutputs": 321,
+    "openPullRequests": [],
+    "activeImplementationWorktreeLocked": true,
+    "nextBranch": "codex/provider-source-entry-386"
+  }
 }

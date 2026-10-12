@@ -1,0 +1,128 @@
+{
+  "base": "adad1cdc74a14d75b168dd35badb24ec18734ce1",
+  "privateTransportOnly": true,
+  "publicExportsChanged": false,
+  "acceptance": {
+    "accepted": 29,
+    "pending": [
+      7,
+      9,
+      10,
+      13,
+      14,
+      17,
+      30,
+      36,
+      37,
+      38,
+      40
+    ]
+  },
+  "behavior": [
+    "Fixed bounded Buffer receives one UTF-8 LF frame and waits for actual stdin EOF before JSON allocation and application import. Later trailing frames refuse.",
+    "Canonical exact two-field environment/bootstrap syntax, bounded depth/tokens/bytes and environment names/types; original constructor remains responsible for native bootstrap authenticity.",
+    "Linux non-root /app entry checks refuse traversal, symlinks, existing slots and loader recursion. Only fixed generic CLI failure text reaches stderr.",
+    "Original immutable private slot is installed before app import. No readiness or write authority is granted by parser exports, slot removal or app logs."
+  ],
+  "focused": {
+    "Node22": {
+      "reported": 218,
+      "passed": 218,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0
+    },
+    "Node24": {
+      "reported": 218,
+      "passed": 218,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0
+    }
+  },
+  "native": {
+    "containerCases": 10,
+    "images": [
+      "Node22 immutable cached image",
+      "Node26 immutable cached image"
+    ],
+    "stdinOnly": true,
+    "originalConstructorCapture": true,
+    "originalWorkerNamespaceChecks": 6,
+    "exactOwnedContainersAbsent": 10,
+    "cliCasesPerVersion": 14,
+    "cliVersions": [
+      "Node22",
+      "Node24"
+    ],
+    "qualification": "Container proof uses a genuine previously committed original owner/grant baseline. Production factory ordering, readiness/control/write admission, every-role writer stop, target ingress and full handoff remain unimplemented by this increment."
+  },
+  "types": {
+    "packedFixtures": 54,
+    "inheritedDiagnostics": 149,
+    "newDiagnostics": 0
+  },
+  "package": {
+    "files": 451,
+    "bytes": 7042257,
+    "ceiling": 8388608,
+    "dependencies": 0,
+    "compiledOutputs": 322,
+    "publicDeclarationsUnchanged": 146
+  },
+  "originalLocalFilesUnchanged": 23,
+  "retainedFailures": [
+    {
+      "log": "/tmp/clank-source-entry-tests26.log",
+      "result": "33 reported /32 passes /1 CRLF frame assertion failure; canonical CLI decoding already refused CRLF, and frame reader now rejects its suffix directly."
+    },
+    {
+      "logs": [
+        "native-cli22-05.log",
+        "native-cli24-05.log"
+      ],
+      "result": "Native harness failed before Node started because a read-only root lacked /app. Corrected fixture creates /app in its own namespace before read-only binding; actual admitted container topology is unchanged."
+    },
+    {
+      "result": "Initial npm package observation raised KeyError entryCount on a package-name-keyed dictionary; exact package record normalization preserves all size/count/path assertions."
+    },
+    {
+      "session": 87913,
+      "terminalExit": 1,
+      "originalLog": "/tmp/clank-review-2026-10-08/source-entry-adad1cd-01/full-check26-08.log",
+      "partial": true,
+      "terminalSummaryAvailable": false,
+      "reportedPassRecords": 2984,
+      "reportedFailureRecords": 3,
+      "truncatedDuringENOSPC": true,
+      "tmpAvailable": 122880,
+      "tmpBytes": 58882314240,
+      "regularAvailable": 1453577936896,
+      "recovery": "Fresh owned native regular-filesystem TMPDIR, preserve failed evidence and original VM/quotas/assertions; no broad cleanup or automatic assertion retry."
+    }
+  ],
+  "evidenceDirectory": "/tmp/clank-review-2026-10-08/source-entry-adad1cd-01",
+  "fullGate": "Original session87913 terminates exit1 on actual host /tmp ENOSPC, with2984 pass records/3 failure records and a truncated log/no terminal test summary. Fresh unchanged-assertion gate is running on owned regular-filesystem TMPDIR after the reproduced hardcoded fixture-path correction.",
+  "next": "Wire private source entry through genuine provider launch ownership while resolving current pre-commit health/post-commit capture ordering; preserve original all40 acceptance scope.",
+  "phase": "Reviewed implementation snapshot before complete local/hosted delivery",
+  "temporaryDirectoryRepair": {
+    "file": "tests/provider-source-channel.test.mjs",
+    "before": {
+      "tests": 15,
+      "pass": 0,
+      "fail": 15,
+      "cancelled": 0,
+      "skipped": 0
+    },
+    "beforeCause": "Native SQLite errcode13 in the hardcoded full /tmp, despite configured TMPDIR",
+    "afterEachNode22And24": {
+      "tests": 15,
+      "pass": 15,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0
+    },
+    "productionAndAssertionsUnchanged": true
+  },
+  "regularEvidenceDirectory": "/var/tmp/clank-source-entry-adad1cd-gate-bl8g6gvi"
+}
