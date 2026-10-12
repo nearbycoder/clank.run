@@ -7,14 +7,19 @@ import {join,dirname} from 'node:path';
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 import {syncBuiltinESMExports} from 'node:module';
+import {spawnSync} from 'node:child_process';
 import * as handoff from '../dist/provider-handoff.js';
 import {providerDockerClient} from '../dist/provider-docker-client.js';
+import {openDeploymentProviderDataStore} from '../dist/provider-data.js';
+import {createDeploymentBundle} from '../dist/deploy.js';
+import {createDeploymentRuntimeCapsule} from '../dist/runtime-placement.js';
+import {SQLITE_INTERNAL} from '../dist/sqlite-internal.js';
 
 // Native ownership/catalog/pin tests with an explicitly scripted Docker info
 // transport. These are not running-container, mount, worker or readiness proof.
 const hash=value=>createHash('sha256').update(typeof value==='string'||value instanceof Uint8Array?value:JSON.stringify(value)).digest('hex');
 const limits={maxProjects:10,maxOperations:32,maxArchiveBytes:33554432,maxBatchEntries:256,maxBatchBytes:4194304,maxCaptureTransactionBytes:4194304,maxCaptureStateBytes:33554432,maxJournalEntries:10000,maxJournalBytes:67108864,maxSpoolBytes:268435456,controlTimeoutMs:30000};
-async function fixture(t,projects=1){
+async function fixture(t,projects=1,overrides={}){
   const directory=await mkdtemp(join(tmpdir(),'clank-grant-lease-')),root=join(directory,'provider'),control=join(directory,'control.json'),log=join(directory,'commands'),executable=join(directory,'docker.mjs');
   await writeFile(control,JSON.stringify({daemon:'scripted_lease_domain'}));
   await writeFile(executable,`#!/usr/bin/env node
@@ -30,7 +35,7 @@ process.stdout.write(JSON.stringify(config.daemon)+'\\n');
   for(let n=0;n<projects;n++)installed.push(await handoff.installProviderHandoffProject(owner,domain,'lease_project_'+n));
   const bridge=await handoff.enableProviderHandoffBridge(owner,domain,limits),sources=[];
   for(const project of installed){
-    const key=randomBytes(32),binding={protocol:'clank-provider-source-grant/1',enablementId:bridge.enablementId,indexId:identity.indexId,catalogId:project.catalogId,domainSha256:identity.domainSha256,projectId:project.projectId,releaseId:'lease_release',generation:1,capsuleSha256:'a'.repeat(64),sourceIncarnation:randomUUID(),grantId:randomUUID(),role:'web',instance:0,imageId:'sha256:'+'b'.repeat(64),uid:1000,gid:1000,capture:{keyId:'lease_key',keySha256:'c'.repeat(64),maxTransactionBytes:limits.maxCaptureTransactionBytes,maxStateBytes:limits.maxCaptureStateBytes,maxJournalEntries:limits.maxJournalEntries,maxJournalBytes:limits.maxJournalBytes}};
+    const key=randomBytes(32),binding={protocol:'clank-provider-source-grant/1',enablementId:bridge.enablementId,indexId:identity.indexId,catalogId:project.catalogId,domainSha256:identity.domainSha256,projectId:project.projectId,releaseId:'lease_release',generation:1,capsuleSha256:overrides.capsuleSha256??'a'.repeat(64),sourceIncarnation:randomUUID(),grantId:randomUUID(),role:'web',instance:0,imageId:'sha256:'+'b'.repeat(64),uid:process.getuid(),gid:process.getgid(),capture:{keyId:'lease_key',keySha256:'c'.repeat(64),maxTransactionBytes:limits.maxCaptureTransactionBytes,maxStateBytes:limits.maxCaptureStateBytes,maxJournalEntries:limits.maxJournalEntries,maxJournalBytes:limits.maxJournalBytes}};
     await handoff.issueProviderHandoffGrant(bridge,{binding,grantSecretSha256:hash(randomBytes(32)),controlSecretSha256:hash(key)});
     const catalog=join(root,'service','handoff','catalogs',project.catalogId,'catalog.sqlite'),input={projectId:project.projectId,grantId:binding.grantId,bindingSha256:hash(binding),containerId:'d'.repeat(64),expectedVersion:4};
     // Explicit component-only row setup, never native container observations.
@@ -42,7 +47,7 @@ process.stdout.write(JSON.stringify(config.daemon)+'\\n');
   return {...source,sources,directory,root,owner,bridge,domain,identity,client,control,log,index,writer,
     retain:(item=source)=>handoff.retainProviderSourceGrant(bridge,item.input,item.key),
     snapshot:()=>Object.fromEntries([writer,index,...sources.map(s=>s.catalog)].map(path=>[path,fs.readFileSync(path)])),
-    pins:()=>fs.readdirSync('/proc/self/fd').flatMap(fd=>{try{const path=fs.readlinkSync('/proc/self/fd/'+fd);return path.startsWith(root+'/service/')?[{fd:Number(fd),path}]:[];}catch{return [];}}),
+    pins:()=>fs.readdirSync('/proc/self/fd').flatMap(fd=>{try{const path=fs.readlinkSync('/proc/self/fd/'+fd);return path.startsWith(root+'/')?[{fd:Number(fd),path}]:[];}catch{return [];}}),
   };
 }
 function mutate(path,action){
@@ -260,4 +265,156 @@ for(const cleanupFault of [false,true])test('partial retention pin failure close
   if(cleanupFault){assert.ok(failure instanceof AggregateError);assert.deepEqual(failure.errors.map(error=>error.message),['owned retention open fault','owned retention cleanup uncertainty']);}
   else assert.equal(failure.message,'owned retention open fault');
   assert.deepEqual(f.pins(),pins);
+});
+
+async function dataFixture(t,nested=false){
+  const source=await mkdtemp(join(tmpdir(),'clank-source-data-capsule-'));t.after(()=>rm(source,{recursive:true,force:true}));
+  fs.mkdirSync(join(source,'dist'));fs.mkdirSync(join(source,'migrations'));
+  fs.writeFileSync(join(source,'dist','server.js'),'export const source = true;\n');
+  fs.writeFileSync(join(source,'migrations','0001_seed.sql'),"CREATE TABLE seed(value TEXT); INSERT INTO seed VALUES('approved source');\n");
+  const path=nested?'nested/source.sqlite':'source.sqlite';
+  const artifact=await createDeploymentBundle(source,{version:1,entry:'dist/server.js',include:['dist','migrations'],database:{path,migrations:'migrations',allowUnsafeMigrations:false},health:{path:'/healthz',timeoutMs:15000},env:{}},{frameworkVersion:'0.9.4-test',nodeVersion:'22.16.0'});
+  const runtime=await createDeploymentRuntimeCapsule({projectId:'lease_project_0',releaseId:'lease_release',generation:1,environment:{},database:{path,mode:'initialize'},ingress:{route:'/v1/clank/apps/lease_project_0',token:'clanki_lease-data-token-12345678901234567890'},artifact},{maxDatabaseBytes:16*1024*1024});
+  const f=await fixture(t,1,{capsuleSha256:runtime.sha256}),store=await openDeploymentProviderDataStore({rootDirectory:f.root,maxDatabaseBytes:16*1024*1024});let prepared;
+  const input={operation:{id:'data_operation',projectId:'lease_project_0',fence:1,attempt:1,maxAttempts:3},desired:{generation:1,releaseId:'lease_release',state:'running',runtimeProtocol:'clank-runtime/1'},runtime,signal:new AbortController().signal};
+  await store.apply(input,value=>{prepared=value;});const project=join(f.root,'projects','lease_project_0');
+  return {...f,store,input,prepared,project,state:join(project,'state.json'),fence:join(project,'fence.json'),journal:join(project,'journal.json')};
+}
+function writeMetadata(path,value){fs.writeFileSync(path,JSON.stringify(value)+'\n',{mode:0o600});}
+
+for(const nested of [false,true])test('native committed source data derives '+(nested?'nested':'direct')+' paths without a caller adapter',async t=>{
+  const f=await dataFixture(t,nested),grant=await f.retain(),pins=f.pins(),before=[f.state,f.fence,f.prepared.databasePath].map(p=>fs.readFileSync(p)),data=await handoff.retainProviderSourceRuntimeData(grant);
+  assert.equal(Object.isFrozen(data),true);assert.equal(data.databasePath,f.prepared.databasePath);assert.equal(data.releaseDirectory,f.prepared.releaseDirectory);assert.equal(data.dataDirectory,join(f.project,'data'));assert.equal(data.fence,1);
+  assert.equal(f.pins().length,pins.length+(nested?9:8));data.assertCurrent();handoff.assertProviderSourceRuntimeDataLease(data);await data.verifyCurrent();
+  const db=new DatabaseSync(data.databasePath,{readOnly:true});try{assert.deepEqual(db.prepare('SELECT value FROM seed').all().map(row=>row.value),['approved source']);}finally{db.close();}
+  assert.deepEqual([f.state,f.fence,f.prepared.databasePath].map(p=>fs.readFileSync(p)),before);data.close();data.close();assert.deepEqual(f.pins(),pins);grant.assertCurrent();grant.close();
+});
+
+test('native source data refuses copied grant/data facades and public prepared values',async t=>{
+  const f=await dataFixture(t),grant=await f.retain();let getters=0;
+  for(const value of [{...grant},f.prepared,JSON.parse(JSON.stringify(grant)),new Proxy({}, {get(){getters++;throw Error('caller adapter');}})])await assert.rejects(handoff.retainProviderSourceRuntimeData(value),/genuine/);
+  const data=await handoff.retainProviderSourceRuntimeData(grant);
+  for(const value of [{...data},JSON.parse(JSON.stringify(data)),{}])assert.throws(()=>handoff.assertProviderSourceRuntimeDataLease(value),/genuine/);
+  assert.equal(getters,0);data.close();grant.close();
+});
+
+for(const [name,change] of [
+  ['unsettled apply',f=>writeMetadata(f.journal,{kind:'apply'})],
+  ['unsettled rollback',f=>writeMetadata(f.journal,{kind:'rollback'})],
+  ['foreign capsule',f=>{const s=JSON.parse(fs.readFileSync(f.state));s.active.capsuleSha256='e'.repeat(64);writeMetadata(f.state,s);} ],
+  ['foreign project',f=>{const s=JSON.parse(fs.readFileSync(f.state));s.active.projectId='other_project';writeMetadata(f.state,s);} ],
+  ['different release',f=>{const s=JSON.parse(fs.readFileSync(f.state));s.active.releaseId='other_release';s.active.releaseDirectory='generations/g1-other_release';writeMetadata(f.state,s);} ],
+  ['different generation',f=>{const s=JSON.parse(fs.readFileSync(f.state));s.active.generation=2;s.active.releaseDirectory='generations/g2-lease_release';writeMetadata(f.state,s);} ],
+  ['traversing database path',f=>{const s=JSON.parse(fs.readFileSync(f.state));s.active.databasePath='data/../foreign.sqlite';writeMetadata(f.state,s);} ],
+  ['foreign storage scope',f=>{const s=JSON.parse(fs.readFileSync(f.state));s.active.databasePath='recovery/foreign.sqlite';writeMetadata(f.state,s);} ],
+  ['foreign fence',f=>writeMetadata(f.fence,{protocol:'clank-provider-data-fence/1',projectId:'other_project',fence:1})],
+  ['advanced fence',f=>writeMetadata(f.fence,{protocol:'clank-provider-data-fence/1',projectId:'lease_project_0',fence:2})],
+  ['extra state field',f=>{const s=JSON.parse(fs.readFileSync(f.state));s.extra=true;writeMetadata(f.state,s);} ],
+  ['duplicate state key',f=>fs.writeFileSync(f.state,fs.readFileSync(f.state,'utf8').replace('{','{"protocol":"clank-provider-data/1",'))],
+  ['noncanonical state whitespace',f=>fs.appendFileSync(f.state,' ')],
+  ['invalid UTF8 state',f=>fs.writeFileSync(f.state,Buffer.from([0xff]))],
+  ['oversized state',f=>fs.writeFileSync(f.state,' '.repeat(65537))],
+  ['world readable state',f=>fs.chmodSync(f.state,0o644)],
+  ['symlink database',f=>{fs.renameSync(f.prepared.databasePath,f.prepared.databasePath+'.old');fs.symlinkSync(f.prepared.databasePath+'.old',f.prepared.databasePath);} ],
+  ['hardlink database',f=>fs.linkSync(f.prepared.databasePath,f.prepared.databasePath+'.alias')],
+  ['symlink generation',f=>{fs.renameSync(f.prepared.releaseDirectory,f.prepared.releaseDirectory+'.old');fs.symlinkSync(f.prepared.releaseDirectory+'.old',f.prepared.releaseDirectory);} ],
+])test('native source data refuses '+name+' before publishing a lease',async t=>{
+  const f=await dataFixture(t),grant=await f.retain(),pins=f.pins();change(f);await assert.rejects(handoff.retainProviderSourceRuntimeData(grant));assert.deepEqual(f.pins(),pins);grant.close();
+});
+
+for(const target of ['state','fence','database','data','release'])test('native '+target+' replacement invalidates retained source data',async t=>{
+  const f=await dataFixture(t),grant=await f.retain(),pins=f.pins(),data=await handoff.retainProviderSourceRuntimeData(grant),path=target==='state'?f.state:target==='fence'?f.fence:target==='database'?f.prepared.databasePath:target==='data'?data.dataDirectory:data.releaseDirectory;
+  fs.renameSync(path,path+'.old');cloneNative(path+'.old',path);assert.throws(()=>data.assertCurrent(),/identity changed/);assert.deepEqual(f.pins(),pins);
+  fs.rmSync(path,{recursive:true});fs.renameSync(path+'.old',path);assert.throws(()=>data.assertCurrent(),/closed/);grant.close();
+});
+
+for(const change of ['state','fence','journal','grant','parent close','owner close'])test('native '+change+' change closes retained source data without acknowledgment',async t=>{
+  const f=await dataFixture(t),grant=await f.retain(),pins=f.pins(),data=await handoff.retainProviderSourceRuntimeData(grant);
+  if(change==='state'){const s=JSON.parse(fs.readFileSync(f.state));s.active.committedAt++;writeMetadata(f.state,s);}
+  if(change==='fence')writeMetadata(f.fence,{protocol:'clank-provider-data-fence/1',projectId:'lease_project_0',fence:2});
+  if(change==='journal')writeMetadata(f.journal,{kind:'rollback'});
+  if(change==='grant')mutate(f.catalog,db=>db.prepare("UPDATE clank_provider_handoff_source_grant SET state='revoked'").run());
+  if(change==='parent close')grant.close();if(change==='owner close')f.owner.close();
+  assert.throws(()=>data.assertCurrent());assert.throws(()=>data.assertCurrent(),/closed/);
+  assert.equal(f.pins().length,change==='owner close'?0:change==='grant'||change==='parent close'?pins.length-5:pins.length);
+  if(change==='journal')assert.equal(fs.existsSync(f.journal),true);grant.close();
+});
+
+test('native source metadata parser is private, immutable and independently bounded',async t=>{
+  const f=await dataFixture(t),descriptor=Object.getOwnPropertyDescriptor(openDeploymentProviderDataStore,SQLITE_INTERNAL),reader=descriptor.value;
+  assert.equal(descriptor.writable,false);assert.equal(descriptor.configurable,false);assert.equal(descriptor.enumerable,false);assert.ok(Object.isFrozen(reader));
+  const encoded=fs.readFileSync(f.state,'utf8');assert.equal(reader.decodeSourceState(encoded,'lease_project_0').active.fence,1);let getters=0;
+  for(const value of [null,{},new Proxy({}, {get(){getters++;throw Error('getter');}}),' '.repeat(65537)])assert.throws(()=>reader.decodeSourceState(value,'lease_project_0'));
+  assert.equal(getters,0);assert.throws(()=>reader.decodeSourceState(encoded,'other_project'),/another project/);
+});
+
+test('native source data has one retained identity per original grant lease',async t=>{
+  const f=await dataFixture(t),grant=await f.retain(),data=await handoff.retainProviderSourceRuntimeData(grant);data.close();await assert.rejects(handoff.retainProviderSourceRuntimeData(grant),/duplicated or recycled/);grant.close();
+});
+
+test('native FIFO reproduction confirms why mutable file opens need nonblocking flags',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'clank-source-fifo-'));t.after(()=>rm(root,{recursive:true,force:true}));const fifo=join(root,'owned-fifo');
+  const created=spawnSync('mkfifo',[fifo],{encoding:'utf8',timeout:5000});assert.equal(created.status,0,created.stderr);
+  // Observe only the vulnerable syscall in a disposable, bounded child. Never
+  // stall the provider/test event loop or claim this as a full old-code launch.
+  const probe=spawnSync(process.execPath,['--input-type=module','--eval',"import fs from 'node:fs'; fs.openSync(process.argv[1],fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW); process.stdout.write('unexpected open');",fifo],{encoding:'utf8',timeout:500});
+  assert.equal(probe.error?.code,'ETIMEDOUT');assert.equal(probe.stdout,'');assert.equal(probe.status,null);assert.equal(probe.signal,'SIGTERM');assert.equal(fs.existsSync('/proc/'+probe.pid),false);
+  const fd=fs.openSync(fifo,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW|fs.constants.O_NONBLOCK);try{assert.equal(fs.fstatSync(fd).isFIFO(),true);}finally{fs.closeSync(fd);}
+});
+
+test('native FIFO replacement between file check and open refuses without blocking or leaked pins',async t=>{
+  const f=await dataFixture(t),grant=await f.retain(),pins=f.pins(),open=fs.openSync;let replaced=false;
+  fs.openSync=function(path,flags,...args){
+    if(path===f.prepared.databasePath&&!replaced){
+      assert.ok(flags&fs.constants.O_NONBLOCK,'mutable file opening must be bounded before the FIFO race');replaced=true;
+      fs.renameSync(path,path+'.original');const created=spawnSync('mkfifo',[path],{encoding:'utf8',timeout:5000});assert.equal(created.status,0,created.stderr);
+    }
+    return open.call(this,path,flags,...args);
+  };syncBuiltinESMExports();
+  try{await assert.rejects(handoff.retainProviderSourceRuntimeData(grant),/private bounded native SQLite files/);}finally{fs.openSync=open;syncBuiltinESMExports();}
+  assert.equal(replaced,true);assert.deepEqual(f.pins(),pins);grant.close();
+});
+
+for(const change of ['state','journal','parent close','owner close'])test('native '+change+' during held source-data verification prevents acknowledgment',async t=>{
+  const f=await dataFixture(t),grant=await f.retain(),pins=f.pins(),data=await handoff.retainProviderSourceRuntimeData(grant),pause=await held(f,()=>data.verifyCurrent());
+  if(change==='state'){const s=JSON.parse(fs.readFileSync(f.state));s.active.committedAt++;writeMetadata(f.state,s);}
+  if(change==='journal')writeMetadata(f.journal,{kind:'apply'});
+  if(change==='parent close')grant.close();if(change==='owner close')f.owner.close();
+  pause.release();await assert.rejects(pause.pending);assert.throws(()=>data.assertCurrent(),/closed/);assert.equal(f.pins().length,change==='owner close'?0:change==='parent close'?pins.length-5:pins.length);grant.close();
+});
+
+test('native source data cleanup failure still releases parent grant and owner storage',async t=>{
+  const f=await dataFixture(t),grant=await f.retain(),pins=f.pins(),data=await handoff.retainProviderSourceRuntimeData(grant),owned=f.pins().filter(p=>!pins.some(old=>old.fd===p.fd)),close=fs.closeSync;let fault=false;const attempted=[];
+  fs.closeSync=function(fd){const result=close.call(this,fd);if(owned.some(p=>p.fd===fd)){attempted.push(fd);if(!fault){fault=true;throw Error('owned data close uncertainty');}}return result;};syncBuiltinESMExports();
+  try{assert.throws(()=>f.owner.close(),/owned data close uncertainty/);}finally{fs.closeSync=close;syncBuiltinESMExports();}
+  assert.equal(fault,true);assert.deepEqual(new Set(attempted),new Set(owned.map(p=>p.fd)));assert.equal(f.pins().length,0);assert.throws(()=>data.assertCurrent(),/closed/);assert.throws(()=>grant.assertCurrent(),/closed/);
+});
+
+test('native nested database parent cannot redirect into a sibling project',async t=>{
+  const f=await dataFixture(t,true),grant=await f.retain(),pins=f.pins(),parent=dirname(f.prepared.databasePath),foreign=join(f.root,'projects','foreign_project','data');
+  fs.mkdirSync(foreign,{recursive:true,mode:0o700});fs.renameSync(parent,parent+'.original');fs.symlinkSync(foreign,parent);
+  await assert.rejects(handoff.retainProviderSourceRuntimeData(grant),/not canonical/);assert.deepEqual(f.pins(),pins);grant.close();
+});
+
+test('native metadata growth between fstat and read stays within the fixed allocation',async t=>{
+  const f=await dataFixture(t),grant=await f.retain(),pins=f.pins(),read=fs.readSync;let grew=false;const allocations=[];
+  fs.readSync=function(fd,buffer,...args){
+    if(fs.readlinkSync('/proc/self/fd/'+fd)===f.state){allocations.push(buffer.byteLength);if(!grew){grew=true;fs.appendFileSync(f.state,' '.repeat(65537));}}
+    return read.call(this,fd,buffer,...args);
+  };syncBuiltinESMExports();
+  try{await assert.rejects(handoff.retainProviderSourceRuntimeData(grant),/private bounded native SQLite files/);}finally{fs.readSync=read;syncBuiltinESMExports();}
+  assert.equal(grew,true);assert.ok(allocations.length>0);assert.ok(allocations.every(n=>n===65537));assert.deepEqual(f.pins(),pins);grant.close();
+});
+
+for(const change of ['state','owner close'])test('native '+change+' during final source-data retention prevents publication',async t=>{
+  const f=await dataFixture(t),grant=await f.retain(),pins=f.pins(),open=fs.openSync,hold=join(f.directory,'data-held'),release=join(f.directory,'data-release');let pending,armed=false;
+  fs.openSync=function(path,...args){const fd=open.call(this,path,...args);if(path===f.prepared.databasePath&&!armed){armed=true;fs.writeFileSync(f.control,JSON.stringify({daemon:'scripted_lease_domain',hold,release}));}return fd;};syncBuiltinESMExports();
+  try{
+    pending=handoff.retainProviderSourceRuntimeData(grant);pending.catch(()=>{});const end=Date.now()+4000;
+    while(!fs.existsSync(hold)){if(Date.now()>end)throw Error('Native final data checkpoint missing');await new Promise(resolve=>setTimeout(resolve,10));}
+    assert.equal(f.pins().length,pins.length+8);
+    if(change==='state'){const s=JSON.parse(fs.readFileSync(f.state));s.active.committedAt++;writeMetadata(f.state,s);}else f.owner.close();
+    fs.writeFileSync(release,'release');await assert.rejects(pending);
+  }finally{fs.openSync=open;syncBuiltinESMExports();fs.writeFileSync(release,'release');await pending?.catch(()=>{});}
+  assert.equal(armed,true);assert.equal(f.pins().length,change==='owner close'?0:pins.length);grant.close();
 });

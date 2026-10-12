@@ -1,5 +1,6 @@
 /** Private provider-root ownership/catalog foundation. No runtime execution or stop proof. */
 import { runProviderDockerClient, type DockerClient } from "./provider-docker-client.ts";
+import { SQLITE_INTERNAL } from "./sqlite-internal.ts";
 const OWNER_SQL="CREATE TABLE clank_provider_service_owner (protocol INTEGER NOT NULL CHECK(protocol=1)) STRICT";
 const MARKER_SQL=`CREATE TABLE clank_provider_handoff_owner (
   id INTEGER PRIMARY KEY CHECK(id=1),
@@ -143,7 +144,8 @@ export interface ProviderSourceGrantLease {
   verifyCurrent(): Promise<void>;
   close(): void;
 }
-const sourceGrantLeases=new WeakMap<ProviderSourceGrantLease,()=>void>();
+type SourceGrantLeaseContext={check:()=>void;context:Context;registered:BridgeContext;bridge:ProviderHandoffBridge;input:ProviderHandoffContainerInput;children:Set<()=>void>;dataRetained:boolean};
+const sourceGrantLeases=new WeakMap<ProviderSourceGrantLease,SourceGrantLeaseContext>();
 const ownerSourceLeases=new WeakMap<ProviderServiceOwnership,Set<ProviderSourceGrantLease>>();
 const retainedSourceGrants=new WeakMap<ProviderHandoffBridge,Set<string>>();
 const MAX_SOURCE_GRANT_LEASES=2;
@@ -275,7 +277,7 @@ function privateStat(c:Context,stat:any,directory:boolean,maximum:number,normali
 function assertPin(c:Context,pin:Pin):void {const retained=c.fs.fstatSync(pin.fd),visible=c.fs.lstatSync(pin.path);privateStat(c,retained,pin.directory,pin.maximum,pin.normalize);privateStat(c,visible,pin.directory,pin.maximum,pin.normalize);if(retained.dev!==pin.dev||retained.ino!==pin.ino||visible.dev!==pin.dev||visible.ino!==pin.ino)fail("Provider handoff file identity changed.");}
 function pin(c:Context,path:string,directory:boolean,maximum=0,normalize=false):Pin {
   const before=c.fs.lstatSync(path);privateStat(c,before,directory,maximum,normalize);
-  const fd=c.fs.openSync(path,c.fs.constants.O_RDONLY|c.fs.constants.O_NOFOLLOW|(directory?c.fs.constants.O_DIRECTORY:0));
+  const fd=c.fs.openSync(path,c.fs.constants.O_RDONLY|c.fs.constants.O_NOFOLLOW|(directory?c.fs.constants.O_DIRECTORY:c.fs.constants.O_NONBLOCK));
   const result={fd,path,anchor:(globalThis as any).process.platform==="linux"?`/proc/self/fd/${fd}`:path,dev:before.dev,ino:before.ino,directory,maximum,normalize};
   try {assertPin(c,result);c.pins.push(result);return result;}catch(error){c.fs.closeSync(fd);throw error;}
 }
@@ -518,7 +520,7 @@ function containerInput(value:ProviderHandoffContainerInput,state:"created"|"sta
 }
 /** Require an original retained lease; copied methods/serialized rows are not authority. */
 export function assertProviderSourceGrantLease(lease:ProviderSourceGrantLease):void {
-  const check=sourceGrantLeases.get(lease);if(!check)fail("A genuine provider source grant lease is required.");check();
+  const retained=sourceGrantLeases.get(lease);if(!retained)fail("A genuine provider source grant lease is required.");retained.check();
 }
 /**
  * Retain the exact started catalog observation and authenticate its control key.
@@ -567,10 +569,11 @@ export async function retainProviderSourceGrant(
         // Lease pins have their own lifetime. Never leave them in the transient
         // owner-operation stack that another operation releases in finally.
         retained.push(...c.pins.splice(from));
-        let closed=false;
+        let closed=false;const children=new Set<()=>void>();
         const close=()=>{
           if(closed)return;closed=true;active.delete(result);
           const failures:unknown[]=[];
+          for(const child of [...children])try{child();}catch(error){failures.push(error);}
           for(const p of retained.splice(0).reverse())try{c.fs.closeSync(p.fd);}catch(error){failures.push(error);}
           if(failures.length===1)throw failures[0];
           if(failures.length)throw new AggregateError(failures,"Provider source grant retained pins failed to close.");
@@ -591,7 +594,7 @@ export async function retainProviderSourceGrant(
           }catch(error){try{close();}catch(cleanup){throw new AggregateError([error,cleanup],"Provider source grant verification and cleanup failed.");}throw error;}
         };
         const result:ProviderSourceGrantLease=Object.freeze({binding,assertCurrent:check,verifyCurrent,close});
-        check();sourceGrantLeases.set(result,check);active.add(result);used.add(input.grantId);
+        check();sourceGrantLeases.set(result,{check,context:c,registered,bridge,input,children,dataRetained:false});active.add(result);used.add(input.grantId);
         ownerSourceLeases.set(registered.owner,active);retainedSourceGrants.set(bridge,used);lease=result;
         return result;
       }catch(error){
@@ -609,6 +612,93 @@ export async function retainProviderSourceGrant(
   }catch(error){
     try{lease?.close();}catch(cleanup){throw new AggregateError([error,cleanup],"Provider source grant publication failed.");}throw error;
   }finally{secret.fill(0);}
+}
+
+export interface ProviderSourceRuntimeDataLease {
+  readonly databasePath:string;
+  readonly dataDirectory:string;
+  readonly releaseDirectory:string;
+  readonly fence:number;
+  assertCurrent():void;
+  verifyCurrent():Promise<void>;
+  close():void;
+}
+const sourceRuntimeDataLeases=new WeakMap<ProviderSourceRuntimeDataLease,()=>void>();
+export function assertProviderSourceRuntimeDataLease(value:ProviderSourceRuntimeDataLease):void {
+  const check=sourceRuntimeDataLeases.get(value);if(!check)fail("A genuine provider source runtime data lease is required.");check();
+}
+function sourceMetadata(c:Context,file:Pin):string {
+  assertPin(c,file);
+  // The fixed read allocation also bounds growth between fstat and read. Do not
+  // use readFileSync's unbounded allocation on a mutable metadata descriptor.
+  const bytes=new Uint8Array(65537);let length=0;
+  while(length<bytes.length){const n=c.fs.readSync(file.fd,bytes,length,bytes.length-length,length);if(n===0)break;length+=n;}
+  assertPin(c,file);if(length>65536)fail("Provider source metadata exceeds its fixed bound.");
+  return new TextDecoder("utf-8",{fatal:true}).decode(bytes.subarray(0,length));
+}
+/**
+ * Derive source data only from an original grant lease and settled committed
+ * provider metadata. Public PreparedDeploymentRuntimeData, caller paths and
+ * callbacks cannot mint this observation. Container/worker admission remains a
+ * separate requirement; no SQLite connection or task is opened here.
+ */
+export async function retainProviderSourceRuntimeData(lease:ProviderSourceGrantLease):Promise<ProviderSourceRuntimeDataLease> {
+  const parent=sourceGrantLeases.get(lease);if(!parent)fail("A genuine provider source grant lease is required.");parent.check();
+  const dataModule=await import("./provider-data.ts");parent.check();
+  const decode=(dataModule.openDeploymentProviderDataStore as any)[SQLITE_INTERNAL].decodeSourceState;
+  let result:ProviderSourceRuntimeDataLease|undefined;
+  try {
+    await withBridge(parent.bridge,true,(c)=>{
+      parent.check();if(parent.dataRetained)fail("Provider source runtime data cannot be duplicated or recycled.");
+      const process=(globalThis as any).process,binding=lease.binding;
+      if(process.platform!=="linux"||binding.uid!==process.getuid?.()||binding.gid!==process.getgid?.())fail("Provider source runtime data requires its native non-root owner identity.");
+      const from=c.pins.length,held:Pin[]=[];
+      try {
+        const projects=directory(c,c.root,"projects"),project=directory(c,projects,binding.projectId);
+        const journalPath=c.path.join(project.path,"journal.json");
+        if(!absent(c,journalPath))fail("Unsettled provider source data refuses admission.");
+        const stateFile=pin(c,c.path.join(project.path,"state.json"),false,65536),fenceFile=pin(c,c.path.join(project.path,"fence.json"),false,65536);
+        const stateJSON=sourceMetadata(c,stateFile),fenceJSON=sourceMetadata(c,fenceFile),state=decode(stateJSON,binding.projectId),active=state.active;
+        if(active.releaseId!==binding.releaseId||active.generation!==binding.generation||active.capsuleSha256!==binding.capsuleSha256)fail("Provider source runtime data binding differs.");
+        let fence:Row;try{fence=JSON.parse(fenceJSON);}catch{fail("Provider source fence is invalid.");}
+        if(!exact(fence,["protocol","projectId","fence"])||fence.protocol!=="clank-provider-data-fence/1"||fence.projectId!==binding.projectId||fence.fence!==active.fence||JSON.stringify(fence)+"\n"!==fenceJSON)fail("Provider source committed fence differs.");
+        const data=directory(c,project,"data"),generations=directory(c,project,"generations");
+        const release=directory(c,generations,active.releaseDirectory.slice("generations/".length));
+        const databasePath=c.path.join(project.path,...active.databasePath.split("/")),databaseParent=c.path.dirname(databasePath);
+        // Retain the leaf plus data/project/root identities, and require a
+        // canonical path on each check. Intermediate symlinks cannot redirect
+        // a descriptor into another project or system directory.
+        if(c.fs.realpathSync(databaseParent)!==databaseParent)fail("Provider source database parent is not canonical.");
+        const leaf=databaseParent===data.path?data:pin(c,databaseParent,true);
+        const database=pin(c,databasePath,false,2*1024*1024*1024);
+        held.push(...c.pins.splice(from));let closed=false;
+        const close=()=>{
+          if(closed)return;closed=true;parent.children.delete(close);
+          const errors:unknown[]=[];for(const p of held.splice(0).reverse())try{c.fs.closeSync(p.fd);}catch(error){errors.push(error);}
+          if(errors.length===1)throw errors[0];if(errors.length)throw new AggregateError(errors,"Provider source data pins failed to close.");
+        };
+        const check=()=>{
+          try {
+            if(closed)fail("Provider source runtime data lease is closed.");parent.check();
+            for(const p of held)assertPin(c,p);
+            if(c.fs.realpathSync(leaf.path)!==leaf.path||c.fs.realpathSync(database.path)!==database.path
+              ||c.fs.realpathSync(release.path)!==release.path||!absent(c,journalPath)
+              ||sourceMetadata(c,stateFile)!==stateJSON||sourceMetadata(c,fenceFile)!==fenceJSON)fail("Provider source runtime data observation changed.");
+          }catch(error){try{close();}catch(cleanup){throw new AggregateError([error,cleanup],"Provider source data observation and cleanup failed.");}throw error;}
+        };
+        const verifyCurrent=async()=>{
+          try{check();await lease.verifyCurrent();check();}catch(error){try{close();}catch(cleanup){throw new AggregateError([error,cleanup],"Provider source data verification and cleanup failed.");}throw error;}
+        };
+        result=Object.freeze({databasePath:database.path,dataDirectory:data.path,releaseDirectory:release.path,fence:active.fence,assertCurrent:check,verifyCurrent,close});
+        check();sourceRuntimeDataLeases.set(result,check);parent.children.add(close);parent.dataRetained=true;
+      }catch(error){
+        const errors:unknown[]=[error];for(const p of held.splice(0).reverse())try{c.fs.closeSync(p.fd);}catch(cleanup){errors.push(cleanup);}
+        try{releasePins(c,from);}catch(cleanup){errors.push(cleanup);}
+        if(errors.length>1)throw new AggregateError(errors,"Provider source data retention failed.");throw error;
+      }
+    });
+    assertProviderSourceRuntimeDataLease(result!);return result!;
+  }catch(error){try{result?.close();}catch(cleanup){throw new AggregateError([error,cleanup],"Provider source data publication failed.");}throw error;}
 }
 function containerTimestamp(value:unknown):boolean {
   if(typeof value!=="string"||value==="0001-01-01T00:00:00Z")return false;

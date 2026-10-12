@@ -1,0 +1,108 @@
+{
+  "base": "1b9b80a4ee2548ce2f7471f7d963f7bd54168a44",
+  "scope": "Provider-owned committed source data observation only. No container/mount/process attestation, worker execution, socket, source readiness, all-provider writer stop or feature07 completion.",
+  "sourceHashes": {
+    "src/provider-data.ts": "be73215a22a19ed425641d08fabdb730878c03a0bea02b28abdf75ac8229de53",
+    "src/provider-handoff.ts": "885dcf278667133b578622efffe7d898786c766120b99e2d2b364ed1b478422c",
+    "tests/provider-source-grant-lease.test.mjs": "cd122fe81a9456d641f95f1a533b29f0a4df8030c476e6eb80b1942e80ab6fd7"
+  },
+  "nativeEvidence": {
+    "22": {
+      "log": "/tmp/clank-review-2026-10-08/source-runtime-data-1b9b80a-01/native22-final-06.log",
+      "sha256": "73ae6345f49fefd9de7887d927cfedeb7c8a7a8fb9d8f5125fc3d8f6f053181c",
+      "counts": {
+        "tests": 345,
+        "pass": 345,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      }
+    },
+    "24": {
+      "log": "/tmp/clank-review-2026-10-08/source-runtime-data-1b9b80a-01/native24-final-06.log",
+      "sha256": "b18b65812c3b47a1bb3119e896c979cbeb74429fa7b241370572e8670063cd0b",
+      "counts": {
+        "tests": 345,
+        "pass": 345,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      }
+    },
+    "26": {
+      "log": "/tmp/clank-review-2026-10-08/source-runtime-data-1b9b80a-01/native26-final-06.log",
+      "sha256": "7682177d92f6d0108ec1b2ae4096f18c9cca26189d843d65f95c275eb91252e6",
+      "counts": {
+        "tests": 345,
+        "pass": 345,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      }
+    }
+  },
+  "newDataCases": 46,
+  "firstDataSelection": {
+    "reported": 100,
+    "passed": 100,
+    "failed": 0,
+    "log": "/tmp/clank-review-2026-10-08/source-runtime-data-1b9b80a-01/native26-04.log"
+  },
+  "dataOrigin": "Paths derive from the genuine grant owner root and complete validated native committed state/fence. No caller root/path, PreparedDeploymentRuntimeData, callback or structural facade can mint a lease. Both direct and nested databases use actual provider data-store apply/migration/commit flows.",
+  "identity": "Exact project/release/generation/capsule/fence; separately retained project/data/generation/release/metadata/database descriptors; canonical intermediate/leaf paths; UID/private mode/regular-file/single-link/size/inode checks; journal must remain absent. Native source SQL is never opened on the controller event loop.",
+  "lifetime": "One data identity per original grant lease; linked parent/owner cleanup; fresh changes or closure cause sticky refusal. Full state/fence bytes rechecked before returning from awaits. Unknown and unsettled files are preserved.",
+  "bounds": {
+    "metadataBytes": 65536,
+    "readAllocationBytes": 65537,
+    "databaseFileBytes": 2147483648,
+    "openGrantLeasesPerOwner": 2,
+    "ownerOperationQueue": 16,
+    "note": "No complete worker-channel queue/close deadline claim."
+  },
+  "sharedParser": "Private immutable SQLITE_INTERNAL anchor reuses the existing data lifecycle state and project/rollback validation; canonical bounded string only. Ordinary readState preserves its prior decoding behavior. No public declarations/exports/schema changes.",
+  "regularFileRace": "Common retained regular-file opens now use O_NONBLOCK as well as O_NOFOLLOW, then verify retained and visible regular-file identity. Direct bounded native child probe confirms the old syscall blocks on a real FIFO; actual between-check/open replacement is refused with no leaked owned pins.",
+  "beforeComparison": {
+    "22": {
+      "exit": 1,
+      "log": "/tmp/clank-review-2026-10-08/source-runtime-data-1b9b80a-01/pre-nonblock-native22-07.log",
+      "sha256": "3471bc51773ad0514cc80601123200a1ffd08d983a3ab7a29849e3dbc6d6a1d5",
+      "qualification": "Reconstructed unpublished candidate with only the new regular-file O_NONBLOCK flag removed. Regression refuses to attempt a blocking open when that flag is absent; the separate native disposable FIFO child proves the syscall blocks. No full old-main source launch or production exploit is claimed."
+    },
+    "24": {
+      "exit": 1,
+      "log": "/tmp/clank-review-2026-10-08/source-runtime-data-1b9b80a-01/pre-nonblock-native24-07.log",
+      "sha256": "93da68a4f2cba04da7ac19c3c773907e1190666426dc4f7517568b91e0b9713f",
+      "qualification": "Reconstructed unpublished candidate with only the new regular-file O_NONBLOCK flag removed. Regression refuses to attempt a blocking open when that flag is absent; the separate native disposable FIFO child proves the syscall blocks. No full old-main source launch or production exploit is claimed."
+    },
+    "26": {
+      "exit": 1,
+      "log": "/tmp/clank-review-2026-10-08/source-runtime-data-1b9b80a-01/pre-nonblock-native26-07.log",
+      "sha256": "bb16fb4a837e474d2fa0a004f1d821e7ad0675414cbfb73505b47f81e2b933d5",
+      "qualification": "Reconstructed unpublished candidate with only the new regular-file O_NONBLOCK flag removed. Regression refuses to attempt a blocking open when that flag is absent; the separate native disposable FIFO child proves the syscall blocks. No full old-main source launch or production exploit is claimed."
+    }
+  },
+  "faultQualification": "Domain/start rows are scripted component setup, not Docker launch proof. Native SQLite/data-store namespaces, metadata, FIFOs and descriptor observations are real. Cleanup exceptions are injected after actual close, and descriptor counts verify those fixtures; unknown native close completion is not assumed.",
+  "pairedBuild": {
+    "outputs": 321,
+    "node22EqualsNode26": true,
+    "changedExistingOutputs": [
+      "provider-data.js",
+      "provider-handoff.js"
+    ],
+    "newOutputs": [],
+    "record": "/tmp/clank-review-2026-10-08/source-runtime-data-1b9b80a-01/paired-build-05.json"
+  },
+  "typeContracts": {
+    "packedFixtures": 54,
+    "inheritedDiagnostics": 149,
+    "baseline": 154,
+    "newDiagnostics": 0,
+    "log": "/tmp/clank-review-2026-10-08/source-runtime-data-1b9b80a-01/types-04.log"
+  },
+  "fullLocalGate": "Running; complete full release and hosted checks required before protected merge.",
+  "acceptance": {
+    "accepted": 29,
+    "pending": 11,
+    "feature07": "in progress"
+  }
+}
