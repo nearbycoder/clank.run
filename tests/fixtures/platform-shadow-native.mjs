@@ -51,14 +51,17 @@ class NativePlatformTransportClosed extends Error {
   constructor(cause){super('Owned native HTTP connection closed: '+cause.code,{cause});this.code='NATIVE_PLATFORM_TRANSPORT_CLOSED';this.nativeCode=cause.code;}
 }
 export const isNativePlatformTransportClosure=error=>error instanceof NativePlatformTransportClosed;
-function nativeRequest(url,input,{dropResponse=false,timeoutMs=20000,maxResponseBytes=1024*1024}={}){
+export function nativeRequest(url,input,{dropResponse=false,timeoutMs=20000,maxResponseBytes=1024*1024}={}){
   const target=new URL(input.url),destination=new URL(target.pathname+target.search,url);
   assert.ok(Number.isSafeInteger(timeoutMs)&&timeoutMs>0);assert.ok(Number.isSafeInteger(maxResponseBytes)&&maxResponseBytes>0);
   return new Promise((resolve,reject)=>{
     let settled=false,timer;
     const finish=(error,value)=>{if(settled)return;settled=true;clearTimeout(timer);error?reject(error):resolve(value)};
     const transportError=error=>finish(['ECONNRESET','ECONNREFUSED','EPIPE'].includes(error.code)?new NativePlatformTransportClosed(error):error);
-    const outgoing=httpRequest(destination,{path:target.pathname+(target.search || (input.url.includes('?')?'?':'')),method:input.method,headers:{...Object.fromEntries(input.headers),host:input.headers.get('host')??target.host},signal:input.signal},incoming=>{
+    // Each fixture operation owns one fresh native connection. A free socket
+    // from a closing/restarted server cannot carry a later logical operation.
+    // Transport loss still refuses; this never retries or replays a request.
+    const outgoing=httpRequest(destination,{agent:false,path:target.pathname+(target.search || (input.url.includes('?')?'?':'')),method:input.method,headers:{...Object.fromEntries(input.headers),host:input.headers.get('host')??target.host},signal:input.signal},incoming=>{
       const headers=new Headers();for(let i=0;i<incoming.rawHeaders.length;i+=2)headers.append(incoming.rawHeaders[i],incoming.rawHeaders[i+1]);
       const metadata={status:incoming.statusCode,statusText:incoming.statusMessage,headers};
       incoming.on('error',transportError);

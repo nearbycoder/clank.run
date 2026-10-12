@@ -6,10 +6,16 @@ import {join} from 'node:path';
 import {defineDatabase,openSQLite,openDeploymentOrchestrator} from '../dist/index.js';
 import {shadowCursorToken} from '../dist/managed-shadow.js';
 import {linuxProcessBirth} from '../dist/platform-supervisor.js';
+import {spawnSync} from 'node:child_process';
 import {shadowPlatformFixture,request,appendShadowHistory,until,isNativePlatformTransportClosure} from './fixtures/platform-shadow-native.mjs';
 const endpoint=f=>`/api/projects/${f.project.id}/shadow`;
 const observed=f=>({journal:f.raw(),controls:{...f.controlCounts},replays:f.control.prepare('SELECT * FROM clank_platform_shadow_reports').all(),project:f.control.prepare('SELECT provider_canary_epoch,shadow_replay_receipt FROM clank_platform_projects WHERE id=?').get(f.project.id)});
 async function status(f,suffix='',auth=f.owner){const response=await f.platform.nativeRequest(request(endpoint(f)+suffix,{cookie:auth.cookie}));return{status:response.status,body:await response.json()};}
+test('native fixture operations own fresh connections after the actual prior endpoint closes',()=>{
+ const result=spawnSync(process.execPath,['--no-warnings','tests/fixtures/native-platform-connection-reuse.mjs','after'],{encoding:'utf8',timeout:30000});
+ assert.equal(result.status,0,result.stderr);assert.equal(result.signal,null);
+ const proof=JSON.parse(result.stdout);assert.equal(proof.passed,true);assert.equal(proof.connections,2);assert.equal(proof.requests,2);assert.equal(proof.nativeCode,undefined);
+});
 test('native HTTP empty shadow history is readable without mutation freshness or candidate effects',{timeout:45000},async t=>{
  const f=await shadowPlatformFixture(t),before=observed(f),result=await status(f);assert.equal(result.status,200,JSON.stringify(result));
  assert.deepEqual(result.body,{ok:true,enabled:true,epoch:0,policy:f.options.shadowTraffic,sessions:[],nextBefore:null});assert.deepEqual(observed(f),before);

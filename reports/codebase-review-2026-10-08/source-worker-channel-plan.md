@@ -78,3 +78,11 @@ The complete local release/type/docs/security/package gates and all required hos
 ## Private source entry continuation
 
 The stdin-only private entry and genuine original constructor are now proven together in ten paired immutable native container cases. [Entry review](source-entry-review.json). The current production factory still waits for HTTP health inside data validation before publishing COMMITTED; the source worker requires that committed metadata. The next increment must resolve that ordering with genuine owner/candidate authority and full failure rollback, preserve ordinary deployments, and gate every writer role and ingress on current native completion. Removing the slot, application logs, synthetic health or adopting a caller-prepared DTO cannot establish readiness.29/40 acceptance remains unchanged.
+
+## Protected source entry delivery
+
+PR387 is protected main153d7e83b68db43ea11d9ee4af6140f9d667484a, exact reviewed tree4507454e2ed9db8f4ba129b1952de544be603067; all8 hosted checks and the complete local gate pass. Both original checkouts/23 original files and all322 compiled outputs are verified; no PR remains open. The next branch is codex/provider-source-ownership-387. [Entry review](source-entry-review.json). Production source ownership must be independently admitted before cleanup and cannot reinterpret createRoot=true as source-mode authority. The entry and original constructor are ready for the next integration; full readiness/control/writer/target/ingress acceptance remains pending,29/40 unchanged.
+
+## Original source ownership admission
+
+The private admission now reserves the genuine original bridge owner before startup awaits, retains its exact namespace inodes and rechecks initial catalog state after the final await. [Ownership review](source-service-ownership-review.json). Production factory consumption remains the next boundary. Existing source bootstrap can use a settled committed generation only with exact original fence/release/capsule/data identity; the current data store updates a higher fence after validation, so a source launch cannot treat an older observed fence as later admission. Both original grant/runtime capabilities and full readiness/write/control/every-role writer stop remain required; admission itself is not a cleanup, runtime or stop receipt.29/40 acceptance remains unchanged.

@@ -102,9 +102,29 @@
     }
   ],
   "evidenceDirectory": "/tmp/clank-review-2026-10-08/source-entry-adad1cd-01",
-  "fullGate": "Original session87913 terminates exit1 on actual host /tmp ENOSPC, with2984 pass records/3 failure records and a truncated log/no terminal test summary. Fresh unchanged-assertion gate is running on owned regular-filesystem TMPDIR after the reproduced hardcoded fixture-path correction.",
+  "fullGate": {
+    "head": "dc1ff4b6caf85107b1717172d3240dc5485b1e6c",
+    "tree": "4507454e2ed9db8f4ba129b1952de544be603067",
+    "session": 11604,
+    "exit": 0,
+    "counts": {
+      "tests": 3848,
+      "pass": 3811,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 37
+    },
+    "coverage": {
+      "lines": 91.97,
+      "branches": 82.28,
+      "functions": 90.1
+    },
+    "conformanceDocsDependenciesRepositoryHistorySecurity": "passed",
+    "ownedGeneratedOutputsPreservedAndRestored": 19,
+    "reviewedFilesUnchanged": 11
+  },
   "next": "Wire private source entry through genuine provider launch ownership while resolving current pre-commit health/post-commit capture ordering; preserve original all40 acceptance scope.",
-  "phase": "Reviewed implementation snapshot before complete local/hosted delivery",
+  "phase": "Protected delivery verified",
   "temporaryDirectoryRepair": {
     "file": "tests/provider-source-channel.test.mjs",
     "before": {
@@ -124,5 +144,52 @@
     },
     "productionAndAssertionsUnchanged": true
   },
-  "regularEvidenceDirectory": "/var/tmp/clank-source-entry-adad1cd-gate-bl8g6gvi"
+  "regularEvidenceDirectory": "/var/tmp/clank-source-entry-adad1cd-gate-bl8g6gvi",
+  "delivery": {
+    "pullRequest": "https://github.com/nearbycoder/clank.run/pull/387",
+    "reviewedHead": "dc1ff4b6caf85107b1717172d3240dc5485b1e6c",
+    "mergedMain": "153d7e83b68db43ea11d9ee4af6140f9d667484a",
+    "tree": "4507454e2ed9db8f4ba129b1952de544be603067",
+    "parent": "adad1cdc74a14d75b168dd35badb24ec18734ce1",
+    "protectedSquash": true,
+    "hostedChecks": 8,
+    "allHostedChecksPass": true,
+    "originalFilesUnchanged": 23,
+    "compiledOutputsMatch": 322,
+    "publicDeclarationsUnchanged": 146,
+    "nextBranch": "codex/provider-source-ownership-387",
+    "openPullRequests": [],
+    "all40ScopePreserved": true,
+    "accepted": 29,
+    "pending": [
+      7,
+      9,
+      10,
+      13,
+      14,
+      17,
+      30,
+      36,
+      37,
+      38,
+      40
+    ]
+  },
+  "hosted": {
+    "head": "dc1ff4b6caf85107b1717172d3240dc5485b1e6c",
+    "all8Pass": true,
+    "runtimeAndPackageCounts": {
+      "tests": 3848,
+      "pass": 3811,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 37
+    },
+    "nativePostgreSQLCasesPerRuntime": 24,
+    "packedTypes": 54,
+    "inheritedTypeDiagnostics": 149,
+    "newTypeDiagnostics": 0,
+    "logsTruncated": true,
+    "qualification": "Exact backend terminal statuses and returned Node22/24/package summaries only; live Node24 log HTTP502 observation is retained and was not a terminal CI failure."
+  }
 }

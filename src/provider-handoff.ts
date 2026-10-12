@@ -136,6 +136,19 @@ export interface ProviderHandoffBridgeLimits {readonly maxProjects:number;readon
 export interface ProviderHandoffBridge {readonly enablementId:string;readonly mode:ProviderHandoffOwnerMode}
 type BridgeContext={owner:ProviderServiceOwnership;domain:ProviderHandoffDomain;enablementId:string};
 const bridges=new WeakMap<ProviderHandoffBridge,BridgeContext>();
+/** Private startup admission only; no runtime, writer, readiness or stop proof. */
+export interface ProviderSourceServiceOwnership {
+  readonly root:string;
+  readonly serviceDirectory:string;
+  readonly ownerLabel:string;
+  readonly nodeId:string;
+  assertCurrent():void;
+  verifyCurrent():Promise<void>;
+  close():void;
+}
+type SourceServiceContext={owner:ProviderServiceOwnership;bridge:ProviderHandoffBridge;check:()=>void};
+const sourceServiceOwners=new WeakMap<ProviderSourceServiceOwnership,SourceServiceContext>();
+const sourceServiceReservations=new WeakSet<ProviderServiceOwnership>();
 // Retained grant observations are deliberately distinct from worker authority.
 // No task, path, socket, process or ordinary write is authorized by this lease.
 export interface ProviderSourceGrantLease {
@@ -487,6 +500,89 @@ export async function enableProviderHandoffBridge(owner:ProviderServiceOwnership
     c.mode=state.grants||state.barriers?"cleanup-only":"bridge-live";
     const bridge:ProviderHandoffBridge=Object.freeze({enablementId:root.bridge.enablement_id,get mode(){return c.mode;}});bridges.set(bridge,{owner,domain,enablementId:root.bridge.enablement_id});return bridge;
   });
+}
+/**
+ * Reserve the original live bridge owner before any source service startup
+ * cleanup. A reopened root with retained grants is cleanup-only, never adopted.
+ * Startup admission remains distinct from grant/container/runtime authority.
+ */
+export async function admitProviderSourceService(bridge:ProviderHandoffBridge):Promise<ProviderSourceServiceOwnership>{
+  const registered=bridgeCurrent(bridge,true),owner=registered.owner;
+  if(sourceServiceReservations.has(owner))fail("Provider source service ownership is already reserved.");
+  sourceServiceReservations.add(owner);
+  let closed=false,result:ProviderSourceServiceOwnership|undefined,publicationCheck:(()=>void)|undefined,retainedFrom:number|undefined;
+  try{
+    await exclusive(owner,async()=>{
+      bridgeCurrent(bridge,true);
+      await verifyDomain(owner,registered.domain,true);
+      const c=bridgeCurrent(bridge,true).context,root=marker(c);
+      const process=(globalThis as any).process;
+      if(process.platform!=="linux"||!process.getuid?.()||!process.getgid?.())fail("Provider source service requires its native non-root Linux owner.");
+      if(c.admitted||!root?.bridge||root.bridge.enablement_id!==registered.enablementId||root.domain_json!==boundedJSON(registered.domain,4096))fail("Provider source service requires its original bridge owner.");
+      const initial=inspect(c,root);
+      if(initial.barriers||initial.grants||initial.reservations.length||initial.states.some(state=>state.version!==1||state.grant||state.transfer||state.operations.length||state.spools.length))fail("Retained source state refuses fresh source service startup.");
+      // Keep the exact index/catalog inodes through every startup await and
+      // through the original owner lifetime, rather than adopting equal copies.
+      retainedFrom=c.pins.length;
+      const handoff=directory(c,c.service,"handoff"),catalogs=directory(c,handoff,"catalogs");
+      pin(c,c.path.join(handoff.path,"index.sqlite"),false,INDEX_MAX);
+      for(const project of initial.projects){
+        const directoryPin=directory(c,catalogs,project.catalog_id);
+        pin(c,c.path.join(directoryPin.path,"catalog.sqlite"),false,BRIDGE_CATALOG_MAX);
+      }
+      const rootJSON=JSON.stringify(root),stateJSON=JSON.stringify(initial);
+      publicationCheck=()=>{
+        const current=bridgeCurrent(bridge,true).context;
+        if(closed||current!==c||JSON.stringify(marker(current))!==rootJSON||JSON.stringify(inspect(current,marker(current)))!==stateJSON)fail("Provider source service startup observation changed.");
+      };
+      await verifyDomain(owner,registered.domain,true);
+      const fresh=bridgeCurrent(bridge,true).context;
+      if(fresh!==c||JSON.stringify(marker(fresh))!==rootJSON||JSON.stringify(inspect(fresh,marker(fresh)))!==stateJSON)fail("Provider source service startup observation changed.");
+      const check=()=>{
+        if(closed)fail("Provider source service ownership is closed.");
+        try{
+          const current=bridgeCurrent(bridge,true).context;
+          if(current!==c||current.admitted||JSON.stringify(marker(current))!==rootJSON)fail("Provider source service ownership changed.");
+          // Future grants still need their original owning leases. This scan
+          // validates storage semantics; it does not adopt rows as authority.
+          const state=inspect(current,marker(current));
+          for(const catalog of state.states){
+            if(catalog.grant){
+              const version=({issued:2,created:3,started:4} as Row)[catalog.grant.state];
+              if(version===undefined||catalog.version!==version)fail("Provider source service grant observation changed.");
+            }else if(catalog.version!==1)fail("Provider source service empty catalog observation changed.");
+          }
+        }catch(error){closed=true;throw error;}
+      };
+      const verifyCurrent=async()=>{
+        check();
+        try{await exclusive(owner,async()=>{check();await verifyDomain(owner,registered.domain,true);check();},bridge);check();}
+        catch(error){closed=true;throw error;}
+      };
+      result=Object.freeze({root:owner.root,serviceDirectory:owner.serviceDirectory,ownerLabel:registered.domain.owner,nodeId:registered.domain.nodeId,assertCurrent:check,verifyCurrent,
+        close(){closed=true;owner.close();}});
+      check();
+    },bridge);
+    publicationCheck!();
+    sourceServiceOwners.set(result!,{owner,bridge,check:result!.assertCurrent});
+    assertProviderSourceServiceOwnership(result!);
+    return result!;
+  }catch(error){
+    closed=true;if(registered.context.mode==="bridge-live")registered.context.mode="cleanup-only";registered.context.failed=true;
+    try{if(retainedFrom!==undefined)releasePins(registered.context,retainedFrom);}
+    catch(cleanup){throw new AggregateError([error,cleanup],"Provider source service admission and pin cleanup failed.");}
+    throw error;
+  }
+}
+export function assertProviderSourceServiceOwnership(value:ProviderSourceServiceOwnership):void {
+  const registered=sourceServiceOwners.get(value);
+  if(!registered)fail("A genuine provider source service ownership is required.");
+  registered.check();
+}
+/** Resolve only the original native owner, before reading any caller options. */
+export function providerSourceServiceOwner(value:ProviderSourceServiceOwnership):ProviderServiceOwnership {
+  assertProviderSourceServiceOwnership(value);
+  return sourceServiceOwners.get(value)!.owner;
 }
 async function withBridge<Value>(bridge:ProviderHandoffBridge,live:boolean,action:(c:Context,root:Row,state:ReturnType<typeof inspect>,registered:BridgeContext)=>Value):Promise<Value>{
   const registered=bridgeCurrent(bridge,live);
