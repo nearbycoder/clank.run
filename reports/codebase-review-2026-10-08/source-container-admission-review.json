@@ -1,0 +1,201 @@
+{
+  "basis": {
+    "main": "21dec48f5d251bd191ca90c6ec25053960ab7bd5",
+    "tree": "07e3439ad66a710be189451c335d9a0456881e46"
+  },
+  "scope": "Private genuine native source container observation prerequisite. No provider worker token, socket transport, application source capture/readiness/write admission or provider-wide writer-stop certificate. Feature acceptance remains29/40.",
+  "implementation": [
+    "Only an original committed-data lease can retain a container. Separate data-lease child lifetime links closure through grant and owner; copied descriptors cannot mint observation.",
+    "Exact C1 immutable container/image/UID/grant labels and started phase, supported local default Docker settings, exact three app/data/catalog bind mounts, root/default AppArmor and native seccomp/capability/no-new-privileges checks.",
+    "Retained process root plus six actual namespace descriptors; PID birth, native mount inode/dev identities, isolated namespaces, actual memory/swap/CPU/PID limits and unfrozen cgroup rechecked before publication and around native awaits.",
+    "Canonical bounded Docker/proc reads, owner-exclusive domain verification, sticky invalidation and aggregate descriptor cleanup; unknown/cgroupv1/remapped/custom profiles refuse."
+  ],
+  "nativeEvidence": {
+    "pairedLifecycle": "8 genuine Node22/26 cases: stop, pause, data close, durable catalog revocation; each verifies12 native inspections and independently observes7 added descriptors released after refusal.",
+    "finalSourcePair": "2 additional genuine22/26 stop cases against final production hash after supplementary-group tightening.",
+    "genuineSetup": "Actual data-store apply/commit, native grant issue and created/started C1 acknowledgments. No directly edited catalog rows in native probes. Provider process1000:1000 with existing Docker socket group104; container groups remain1000. No Docker/AppArmor/seccomp or worker policy relaxation.",
+    "limitations": "Container entry holds a timer and does not open the application DB, C0 capture handle, socket or SQLite worker. No full host certificate, native BPF policy measurement, application liveness or all-provider writer stop is proved. Kernel observations are the current checked default topology. Network proof here covers bridge HostConfig mode and retained isolated network namespace; full endpoint topology and daemon policy certification remain required before worker admission. Docker configuration/domain are rechecked during verifyCurrent; synchronous checks read native process/catalog/data state and do not continuously poll the daemon.",
+    "cleanup": {
+      "daemonPid": 1626,
+      "birth": "4650",
+      "socket": [
+        25,
+        1997
+      ],
+      "exactOwnedContainerCount": 15,
+      "allAbsent": true,
+      "availableBytes": 2873225216
+    },
+    "records": [
+      {
+        "file": "native22-08.json",
+        "sha256": "febc0f84e37aafb98aa675e2ec6c88b9426ad4dddc41485741274fd12d09276d",
+        "exit": 1,
+        "version": "v22.16.0",
+        "failure": {
+          "stage": "container admission",
+          "name": "Error",
+          "message": "Provider source container differs from the supported default security/resource profile.",
+          "stack": "Error: Provider source container differs from the supported default security/resource profile.\n    at fail (file:///opt/clank-container-admission-21dec48-native-07/dist/provider-handoff.js:263:71)\n    at sourceContainerObservation (file:///opt/clank-container-admission-21dec48-native-07/dist/provider-handoff.js:737:70)\n    at file:///opt/clank-container-admission-21dec48-native-07/dist/provider-handoff.js:795:16\n    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)\n    at async exclusive (file:///opt/clank-container-admission-21dec48-native-07/dist/provider-handoff.js:404:366)\n    at async Module.retainProviderSourceContainer (file:///opt/clank-container-admission-21dec48-native-07/dist/provider-handoff.js:790:1)\n    at async file:///opt/clank-container-admission-21dec48-native-07/native-container.mjs:39:40"
+        },
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        }
+      },
+      {
+        "file": "native22-profile-10.json",
+        "sha256": "48bb1394aebb7ac83653286e4ed6f080cf45d890ac9397c0721eae2f7da5ff83",
+        "exit": 1,
+        "version": "v22.16.0",
+        "failure": {
+          "stage": "container admission",
+          "name": "Error",
+          "message": "Provider source container differs from the supported default security/resource profile.",
+          "stack": "Error: Provider source container differs from the supported default security/resource profile.\n    at fail (file:///opt/clank-container-admission-21dec48-native-07/dist/provider-handoff.js:263:71)\n    at sourceContainerObservation (file:///opt/clank-container-admission-21dec48-native-07/dist/provider-handoff.js:737:70)\n    at file:///opt/clank-container-admission-21dec48-native-07/dist/provider-handoff.js:795:16\n    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)\n    at async exclusive (file:///opt/clank-container-admission-21dec48-native-07/dist/provider-handoff.js:404:366)\n    at async Module.retainProviderSourceContainer (file:///opt/clank-container-admission-21dec48-native-07/dist/provider-handoff.js:790:1)\n    at async file:///opt/clank-container-admission-21dec48-native-07/native-container.mjs:39:241"
+        },
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        }
+      },
+      {
+        "file": "native22-corrected-12.json",
+        "sha256": "cb0411ac35dc8b610121cda200b660edc07922c488803ef44c2befdb54127bd4",
+        "exit": 1,
+        "version": "v22.16.0",
+        "failure": {
+          "stage": "container admission",
+          "name": "Error",
+          "message": "Provider source container configuration changed.",
+          "stack": "Error: Provider source container configuration changed.\n    at fail (file:///opt/clank-container-admission-21dec48-native-07/dist/provider-handoff.js:263:71)\n    at file:///opt/clank-container-admission-21dec48-native-07/dist/provider-handoff.js:812:183\n    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)\n    at async exclusive (file:///opt/clank-container-admission-21dec48-native-07/dist/provider-handoff.js:404:366)\n    at async Object.verifyCurrent (file:///opt/clank-container-admission-21dec48-native-07/dist/provider-handoff.js:811:13)\n    at async file:///opt/clank-container-admission-21dec48-native-07/native-container.mjs:39:359"
+        },
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        }
+      },
+      {
+        "file": "native22-drift-14.json",
+        "sha256": "ff49f12a71226656ffa0cd00c656009fe686cf764d1e82c9094c6151b03f79ad",
+        "exit": 0,
+        "version": "v22.16.0",
+        "failure": null,
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        }
+      },
+      {
+        "file": "native26-15.json",
+        "sha256": "df31eb337491beeb080571d286fff3ca064f87027ec30bbefdd2f9980bb1ee2d",
+        "exit": 1,
+        "version": "v26.10.0",
+        "failure": {
+          "stage": "container admission",
+          "name": "Error",
+          "message": "Provider source container configuration changed (mounts).",
+          "stack": "Error: Provider source container configuration changed (mounts).\n    at fail (file:///opt/clank-container-admission-21dec48-native-07/dist/provider-handoff.js:263:71)\n    at file:///opt/clank-container-admission-21dec48-native-07/dist/provider-handoff.js:812:427\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at async exclusive (file:///opt/clank-container-admission-21dec48-native-07/dist/provider-handoff.js:404:366)\n    at async Object.verifyCurrent (file:///opt/clank-container-admission-21dec48-native-07/dist/provider-handoff.js:811:13)\n    at async file:///opt/clank-container-admission-21dec48-native-07/native-container.mjs:39:359"
+        },
+        "cleanup": {
+          "removed": true,
+          "absence": true
+        }
+      },
+      {
+        "file": "native-paired-18.json",
+        "sha256": "1337e1f22209ae9c1fffa3329ee3e3e4695f8b52788731cd37916d89c49f2daf",
+        "runs": 8,
+        "productionSha256": "43d302e5c0184ec57f8f08b8ae557d1c75b4b9d0ed8631d619cc5d4c7caa9028"
+      },
+      {
+        "file": "native-final-20.json",
+        "sha256": "273d27bc62ccb9dfea8782dbb7a747dde89cc50437dec7d22360661ebe84477a",
+        "runs": 2,
+        "productionSha256": "dcd4a0c3937ed4f6482004137bcdf20e18e2a4117c1e2e0920827ad7480b5501"
+      }
+    ]
+  },
+  "componentEvidence": {
+    "newRefusals": 56,
+    "leaseCases": 149,
+    "qualifications": "Scripted Docker output/started-row setup with real provider data-store commits, Linux SQLite and descriptor observations. Mutation tests require rejection at the intended profile/identity/phase boundary; matching fake fields cannot admit the unrelated real host process. Native container fixture is manual, opt-in and not counted as a default privileged test."
+  },
+  "types": "54 packed fixtures;149 inherited/0 new diagnostics vs154 baseline.",
+  "pairedBuild": {
+    "outputs": 321,
+    "changedSinceMain": [
+      "provider-handoff.js"
+    ],
+    "publicDeclarationsChanged": false,
+    "deps": 0
+  },
+  "package": {
+    "files": 450,
+    "bytes": 6993316,
+    "ceilingBytes": 8388608
+  },
+  "retainedFailures": [
+    "First component fixture used deployment-operation input rather than source-grant input; corrected required rejection reasons expose intended checks.",
+    "Native Docker default OomKillDisable was null rather than the older fixture false. Original failure retained; nullable default accepted, true/missing refused and actual cgroup memory limits verified.",
+    "Unpublished raw Mounts-array comparison refused reordering of an otherwise approved mount set. Later diagnostics identify mounts, before/after external observations match by destination and Moby GetMountPoints constructs this array from its map. Sort only already-validated unique mounts for snapshot equality. The first undiagnosed configuration-drift failure is not claimed to have recovered exact original frame bytes.",
+    "First isolated paired build copy omitted canonical getting-started prompt source; ENOENT retained and corrected isolated copy includes that source.",
+    "Initial original-file comparison used --untracked-files=all against a manifest with default collapsed git status. Corrected check uses exact original status plus complete untracked roster and all23 original byte/hash identities; no original file changed.",
+    "First all-green runtime suite produced known malformed experimental coverage JSON; existing single isolated retry passed full measured coverage and every unchanged runtime case. No extra retry or weakened threshold."
+  ],
+  "primaryReferences": [
+    "https://raw.githubusercontent.com/moby/moby/v26.1.5/daemon/daemon_unix.go",
+    "https://raw.githubusercontent.com/moby/moby/v26.1.5/container/container_unix.go"
+  ],
+  "sourceSha256": {
+    "src/provider-handoff.ts": "1aef36efa0574cf5310001b27c88b0957aea9e0573e5995d4969a4e49993f6d4",
+    "tests/provider-source-grant-lease.test.mjs": "0bfb007452fda736ec098ff5246ebf7f09b34f037d073c6dc1bc3aa06146478b",
+    "tests/fixtures/provider-source-default-hostconfig.json": "945a5f3daa4f78d9af7f149e7b8dd6ac90a8128f2a5d4ac71f1254b8c3c6a39e",
+    "tests/fixtures/provider-source-container-native.mjs": "1e3cdf9363c854963e57ebdc94e7a2d7abccc8baa4a0d76c61352378b50141c4"
+  },
+  "fullLocalGate": {
+    "exit": 0,
+    "counts": {
+      "tests": 3729,
+      "pass": 3692,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 37
+    },
+    "logSha256": "f138027403a7995e06650037989b87cc7633fbc7c5053c9ee8aa0a666b306153",
+    "coverageQualification": "First all-green runtime suite produced known malformed experimental coverage JSON; existing single isolated retry passed full measured coverage and every unchanged runtime case. No extra retry or weakened threshold.",
+    "compiledOutputs": 321,
+    "sourceSha256": {
+      "src/provider-handoff.ts": "1aef36efa0574cf5310001b27c88b0957aea9e0573e5995d4969a4e49993f6d4",
+      "tests/provider-source-grant-lease.test.mjs": "0bfb007452fda736ec098ff5246ebf7f09b34f037d073c6dc1bc3aa06146478b",
+      "tests/fixtures/provider-source-default-hostconfig.json": "945a5f3daa4f78d9af7f149e7b8dd6ac90a8128f2a5d4ac71f1254b8c3c6a39e",
+      "tests/fixtures/provider-source-container-native.mjs": "1e3cdf9363c854963e57ebdc94e7a2d7abccc8baa4a0d76c61352378b50141c4"
+    }
+  },
+  "hostedChecks": "Not yet published; all required exact-head checks and protected merge remain required.",
+  "focusedCases": {
+    "22.16.0": {
+      "tests": 413,
+      "pass": 413,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0
+    },
+    "24.21.0": {
+      "tests": 413,
+      "pass": 413,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0
+    },
+    "26.10.0": {
+      "tests": 413,
+      "pass": 413,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0
+    }
+  },
+  "review": "Single-agent source/diff/native-boundary review, not independent human approval. Caller copy/getter refusal, owner/data/grant child lifetimes, pre-publication checks, seven-descriptor acquisition/cleanup, PID reuse, validated mount ordering, native resource enforcement and exact cleanup examined.",
+  "supervisorFollowup": "Original container-observation379 head passes7 hosted checks but packaged release discovers existing stopped-owner enrollment lock race. See supervisor-frozen-lock-review.json for deterministic old failure, corrected native proof and full3730/3693/0/0/37 gate. Container-observation code and its native proof remain unchanged; corrected-head hosted checks still required."
+}

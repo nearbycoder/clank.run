@@ -24,11 +24,12 @@ async function fixture(t,projects=1,overrides={}){
   await writeFile(control,JSON.stringify({daemon:'scripted_lease_domain'}));
   await writeFile(executable,`#!/usr/bin/env node
 import fs from 'node:fs';import {setTimeout as delay} from 'node:timers/promises';
-const args=process.argv.slice(2);if(JSON.stringify(args)!==JSON.stringify(['info','--format','{{json .ID}}']))throw Error('Unexpected component command');
+const args=process.argv.slice(2),info=JSON.stringify(args)===JSON.stringify(['info','--format','{{json .ID}}']);
+if(!info&&(args.length!==5||args[0]!=='container'||args[1]!=='inspect'||args[2]!=='--format'||!args[3].startsWith('{"identity":[')||!/^[a-f0-9]{64}$/.test(args[4])))throw Error('Unexpected component command');
 fs.appendFileSync(process.env.LOG,JSON.stringify(args)+'\\n');
 const config=JSON.parse(fs.readFileSync(process.env.CONTROL,'utf8'));
 if(config.hold){fs.writeFileSync(config.hold,'held');const end=Date.now()+5000;while(!fs.existsSync(config.release)){if(Date.now()>end)process.exit(75);await delay(10);}}
-process.stdout.write(JSON.stringify(config.daemon)+'\\n');
+process.stdout.write(JSON.stringify(info?config.daemon:config.observation)+'\\n');
 `,{mode:0o700});
   const owner=await handoff.acquireProviderServiceOwnership(root,true),client=providerDockerClient({executable,dockerEnvironment:{CONTROL:control,LOG:log}});
   const domain=await handoff.createProviderHandoffDomain(owner,client,'lease_node','lease_owner'),identity=await handoff.initializeProviderHandoff(owner,domain),installed=[];
@@ -417,4 +418,42 @@ for(const change of ['state','owner close'])test('native '+change+' during final
     fs.writeFileSync(release,'release');await assert.rejects(pending);
   }finally{fs.openSync=open;syncBuiltinESMExports();fs.writeFileSync(release,'release');await pending?.catch(()=>{});}
   assert.equal(armed,true);assert.equal(f.pins().length,change==='owner close'?0:pins.length);grant.close();
+});
+
+function containerProfile(f){
+  const host=JSON.parse(fs.readFileSync(new URL('./fixtures/provider-source-default-hostconfig.json',import.meta.url),'utf8')).hostConfig,b=f.binding;
+  const labels={'run.clank.managed':'provider-runtime','run.clank.owner':'lease_owner','run.clank.project':b.projectId,'run.clank.release':b.releaseId,'run.clank.generation':String(b.generation),'run.clank.role':'web','run.clank.instance':'0',
+    'run.clank.handoff.protocol':b.protocol,'run.clank.handoff.node':'lease_node','run.clank.handoff.daemon':'scripted_lease_domain','run.clank.handoff.domain':b.domainSha256,'run.clank.handoff.enablement':b.enablementId,'run.clank.handoff.index':b.indexId,'run.clank.handoff.catalog':b.catalogId,'run.clank.handoff.grant':b.grantId,'run.clank.handoff.binding':f.sources[0].input.bindingSha256,'run.clank.handoff.capsule':b.capsuleSha256,'run.clank.handoff.incarnation':b.sourceIncarnation};
+  const identity=[f.sources[0].input.containerId,b.imageId,b.imageId,`${b.uid}:${b.gid}`,labels,'no',0,'running',true,false,false,false,process.pid,'2026-10-11T12:00:00Z','0001-01-01T00:00:00Z',0,'2026-10-11T11:59:59Z'];
+  const mount=(Source,Destination,RW)=>({Type:'bind',Source,Destination,Mode:'',RW,Propagation:'rprivate'});
+  return {identity,host,mounts:[mount(f.prepared.releaseDirectory,'/app',false),mount(join(f.project,'data'),'/data',true),mount(dirname(f.catalog),'/run/clank-source',false)],apparmor:'docker-default',workingDirectory:'/app'};
+}
+for(const [name,change] of [
+ ['readonly root',v=>v.host.ReadonlyRootfs=false],['privileged',v=>v.host.Privileged=true],['cap add',v=>v.host.CapAdd=['SYS_ADMIN']],['cap drop',v=>v.host.CapDrop=[]],
+ ['custom seccomp',v=>v.host.SecurityOpt.push('seccomp=unconfined')],['no new privileges',v=>v.host.SecurityOpt=[]],['init',v=>v.host.Init=false],['pid namespace',v=>v.host.PidMode='host'],
+ ['ipc namespace',v=>v.host.IpcMode='host'],['user namespace',v=>v.host.UsernsMode='host'],['cgroup namespace',v=>v.host.CgroupnsMode='host'],['network',v=>v.host.NetworkMode='host'],
+ ['memory',v=>v.host.Memory=1073741824],['swap',v=>v.host.MemorySwap=-1],['cpu',v=>v.host.NanoCpus=2000000000],['pids',v=>v.host.PidsLimit=-1],
+ ['OOM killer disabled',v=>v.host.OomKillDisable=true],['missing OOM field',v=>delete v.host.OomKillDisable],
+ ['runtime',v=>v.host.Runtime='other'],['cgroup parent',v=>v.host.CgroupParent='other'],['devices',v=>v.host.Devices=[{}]],['volumes from',v=>v.host.VolumesFrom=['other']],
+ ['bind override',v=>v.host.Binds=['/etc:/etc']],['ulimit override',v=>v.host.Ulimits=[{Name:'nofile',Hard:100000}]],['sysctls',v=>v.host.Sysctls={'net.ipv4.ip_forward':'1'}],
+ ['supplementary groups',v=>v.host.GroupAdd=['0']],['device rules',v=>v.host.DeviceCgroupRules=['c *:* rwm']],['UTS namespace',v=>v.host.UTSMode='host'],['memory reservation',v=>v.host.MemoryReservation=1],['swappiness',v=>v.host.MemorySwappiness=100],['publish all ports',v=>v.host.PublishAllPorts=true],['shared memory',v=>v.host.ShmSize=1073741824],['block IO overrides',v=>v.host.BlkioDeviceReadBps=[{}]],
+ ['extra hosts',v=>v.host.ExtraHosts=['host.docker.internal:host-gateway']],['dns',v=>v.host.Dns=['1.1.1.1']],['tmpfs size',v=>v.host.Tmpfs['/tmp']='size=1g'],
+ ['tmpfs mount',v=>v.host.Tmpfs['/extra']='rw'],['log bound',v=>v.host.LogConfig.Config['max-size']='1g'],['masked paths',v=>v.host.MaskedPaths=[]],['readonly paths',v=>v.host.ReadonlyPaths=[]],
+ ['apparmor',v=>v.apparmor='unconfined'],['working directory',v=>v.workingDirectory='/'],['additional host mount',v=>v.mounts.push({Type:'bind',Source:'/var/run/docker.sock',Destination:'/var/run/docker.sock',Mode:'',RW:true,Propagation:'rprivate'})],
+ ['foreign data source',v=>v.mounts[1].Source='/etc'],['writable app',v=>v.mounts[0].RW=true],['readonly data',v=>v.mounts[1].RW=false],['catalog writable',v=>v.mounts[2].RW=true],
+ ['shared propagation',v=>v.mounts[1].Propagation='rshared'],['mount type',v=>v.mounts[1].Type='volume'],['public port',v=>v.host.PortBindings={'3000/tcp':[{HostIp:'0.0.0.0',HostPort:'3000'}]}],
+ ['foreign container',v=>v.identity[0]='e'.repeat(64)],['foreign uid',v=>v.identity[3]='1:1'],['paused process',v=>v.identity[9]=true],['restart',v=>v.identity[15]=1],
+])test('source container admission refuses '+name+' before consulting kernel paths',async t=>{
+ const f=await dataFixture(t),grant=await f.retain(),data=await handoff.retainProviderSourceRuntimeData(grant),pins=f.pins(),profile=containerProfile(f);change(profile);
+ fs.writeFileSync(f.control,JSON.stringify({daemon:'scripted_lease_domain',observation:profile}));await assert.rejects(handoff.retainProviderSourceContainer(data), /foreign container|foreign uid|restart/.test(name)?/container identity/:name==='paused process'?/container phase/:/security\/resource profile|port topology|mount topology/);assert.deepEqual(f.pins(),pins);data.close();grant.close();
+});
+test('scripted matching Docker fields cannot mint proof for the unrelated real host process',async t=>{
+ const f=await dataFixture(t),grant=await f.retain(),data=await handoff.retainProviderSourceRuntimeData(grant),pins=f.pins();fs.writeFileSync(f.control,JSON.stringify({daemon:'scripted_lease_domain',observation:containerProfile(f)}));
+ await assert.rejects(handoff.retainProviderSourceContainer(data),/process security profile|container cgroup|namespaces|kernel/);assert.deepEqual(f.pins(),pins);data.close();grant.close();
+});
+test('source container admission rejects copied data and container descriptors without getters',async t=>{
+ const f=await dataFixture(t),grant=await f.retain(),data=await handoff.retainProviderSourceRuntimeData(grant);let getters=0;
+ for(const value of [{...data},JSON.parse(JSON.stringify(data)),{},new Proxy({}, {get(){getters++;throw Error('getter');}})])await assert.rejects(handoff.retainProviderSourceContainer(value),/genuine/);
+ for(const value of [{containerId:f.sources[0].input.containerId,pid:process.pid,birth:'1'},{}])assert.throws(()=>handoff.assertProviderSourceContainerLease(value),/genuine/);
+ assert.equal(getters,0);data.close();grant.close();
 });

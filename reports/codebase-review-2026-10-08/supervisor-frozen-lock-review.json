@@ -1,0 +1,143 @@
+{
+  "scope": "Corrected unpublished stopped-supervisor startup contention repair within PR379. Container-observation code and its native proof remain unchanged; feature acceptance remains29/40.",
+  "originalHead": "489a2190b5d87fc3624eb194c39ed53d48bbe360",
+  "hostedFailure": {
+    "jobId": 114649261717,
+    "summary": "Native actual SIGSTOP after source reservation failed successor startup at openSupervisorLease BEGIN IMMEDIATE, SQLite busy error5. Other7 required checks pass. Coverage thresholds themselves pass91.98/82.33/90.27. Returned logs truncated; no unrecovered original lock-owner/signal timing claim."
+  },
+  "reproduction": "Existing owned source fixture now holds an actual SQLite BEGIN IMMEDIATE connection in its genuine controller PID before SIGSTOP. Its unchanged supervisor implementation reproduces the same locked startup failure. Existing guardian, PID/birth ownership checks and native cleanup remain intact; no alternate guardian experiment or security/profile change.",
+  "fixtureCorrection": "Initial attempt used managed SQLiteInternal.prepare(BEGIN), which is unsupported and emitted a fixture error; no intended lock acknowledgment occurred. Corrected fixture uses a separately owned native connection in the same real controller process and diagnoses IPC failure promptly. This reproduces the process-held SQLite lock, not the unrecovered original CI connection.",
+  "repair": "During pre-ownership enrollment SQLite busy only, read committed matching native supervisor configuration/lease in a readonly snapshot. Validate retained row and exact actual Linux T-state PID/birth; allow one monotonic extension bounded by configured lease plus5 seconds and observed remaining lease plus5. No lease/body/COMMIT replay, duties, epoch reset or process signal. Unknown, running or mismatched owners retain the original5-second deadline. Normal acquire, guardian cleanup, write fencing and ownership checks remain unchanged.",
+  "proof": {
+    "old-supervisor-held-stop22-33.log": {
+      "sha256": "152f99b6da75e20d10508306ef3b508341171b2593c83b337ec0bd418377504b",
+      "counts": {
+        "tests": 1,
+        "pass": 0,
+        "fail": 1,
+        "cancelled": 0,
+        "skipped": 0
+      }
+    },
+    "old-supervisor-held-stop22-corrected-34.log": {
+      "sha256": "1f9359a900bbf0a848823256cc6a003c0ec6e0fa20bcafa8e9dc8a494d21a086",
+      "counts": {
+        "tests": 1,
+        "pass": 0,
+        "fail": 1,
+        "cancelled": 0,
+        "skipped": 0
+      }
+    },
+    "fixed-supervisor-held-stop22-35.log": {
+      "sha256": "1d0c5e834a299b8e3cf185d8aeb0e87798cf34ecf9e6206fd5938d91560d3e38",
+      "counts": {
+        "tests": 1,
+        "pass": 1,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      }
+    },
+    "supervisor-regression22-37.log": {
+      "sha256": "3f5f3b689d08bde058403112b66ddd6b909bc4814704b71dd89e02dcdd36908a",
+      "counts": {
+        "tests": 8,
+        "pass": 8,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      }
+    },
+    "supervisor-regression24-37.log": {
+      "sha256": "030d3768a6f39b8114d4d02b90a89a70860651fe72fefbbd462f71f394a76c6d",
+      "counts": {
+        "tests": 8,
+        "pass": 8,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      }
+    },
+    "supervisor-regression26-37.log": {
+      "sha256": "1640698815ee929758a2ae7341915db3da4e2a076304422e0c239d59d7ee3ce8",
+      "counts": {
+        "tests": 8,
+        "pass": 8,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      }
+    }
+  },
+  "newDefaultTests": 1,
+  "types": "54 packed fixtures;149 inherited/0 new diagnostics.",
+  "productionPaths": [
+    "src/platform-supervisor.ts"
+  ],
+  "sourceSha256": {
+    "src/platform-supervisor.ts": "1f9154705d72b3286d976d2acf55d37b930697ef06d69e7829a7a61244ce7c33",
+    "tests/supervisor-leases.test.mjs": "b6b03a16213572ee6a23d98697b4c9cfab4d89b5dd8f88e89f1e0a7294b4eb62",
+    "tests/platform-shadow-process.test.mjs": "6b76be460e84392f0bb36ce7fd3b836799036e07a13d3abf61b3cd655e46b229",
+    "tests/fixtures/platform-shadow-controller.mjs": "55bbfc3bc56e0b75b2b7c7b3601d054d7dba714d597ef3c8a2111fad9ad4ddda"
+  },
+  "package": {
+    "files": 450,
+    "bytes": 6995134,
+    "ceilingBytes": 8388608,
+    "dependencies": 0
+  },
+  "correctedFullGate": {
+    "exit": 0,
+    "counts": {
+      "tests": 3730,
+      "pass": 3693,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 37
+    },
+    "logSha256": "21ed3808ed91544bb10853e7fb82b2a02949a28751a385c606cc19b32325257b",
+    "sourceSha256": {
+      "src/platform-supervisor.ts": "1f9154705d72b3286d976d2acf55d37b930697ef06d69e7829a7a61244ce7c33",
+      "tests/supervisor-leases.test.mjs": "b6b03a16213572ee6a23d98697b4c9cfab4d89b5dd8f88e89f1e0a7294b4eb62",
+      "tests/platform-shadow-process.test.mjs": "6b76be460e84392f0bb36ce7fd3b836799036e07a13d3abf61b3cd655e46b229",
+      "tests/fixtures/platform-shadow-controller.mjs": "55bbfc3bc56e0b75b2b7c7b3601d054d7dba714d597ef3c8a2111fad9ad4ddda"
+    },
+    "coverage": "Measured full coverage passes on the first corrected run; no retry."
+  },
+  "correctedHostedGate": "New reviewed head not yet published. All8 corrected-head gates and protected delivery remain required.",
+  "broaderSupervisorEvidence": {
+    "22": {
+      "counts": {
+        "tests": 42,
+        "pass": 42,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "logSha256": "b70345d190d270ea82629bb0e2b2ad503a93f50ce065aebc704d70dc7af83797"
+    },
+    "24": {
+      "counts": {
+        "tests": 42,
+        "pass": 42,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "logSha256": "3b6f289acb1ee78a68cfcdee331170694f6681f5f0cf645108251ca9e8723198"
+    }
+  },
+  "pairedBuild": {
+    "outputs": 321,
+    "pair": "Node22.16.0 and Node26.10.0",
+    "changedSinceOriginal379": [
+      "platform-supervisor.js"
+    ],
+    "changedSinceMain": [
+      "provider-handoff.js",
+      "platform-supervisor.js"
+    ],
+    "publicDeclarationsChanged": false
+  }
+}

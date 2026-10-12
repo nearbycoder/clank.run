@@ -623,9 +623,10 @@ export interface ProviderSourceRuntimeDataLease {
   verifyCurrent():Promise<void>;
   close():void;
 }
-const sourceRuntimeDataLeases=new WeakMap<ProviderSourceRuntimeDataLease,()=>void>();
+type SourceRuntimeDataContext={check:()=>void;parent:SourceGrantLeaseContext;grant:ProviderSourceGrantLease;children:Set<()=>void>;containerRetained:boolean};
+const sourceRuntimeDataLeases=new WeakMap<ProviderSourceRuntimeDataLease,SourceRuntimeDataContext>();
 export function assertProviderSourceRuntimeDataLease(value:ProviderSourceRuntimeDataLease):void {
-  const check=sourceRuntimeDataLeases.get(value);if(!check)fail("A genuine provider source runtime data lease is required.");check();
+  const retained=sourceRuntimeDataLeases.get(value);if(!retained)fail("A genuine provider source runtime data lease is required.");retained.check();
 }
 function sourceMetadata(c:Context,file:Pin):string {
   assertPin(c,file);
@@ -671,10 +672,11 @@ export async function retainProviderSourceRuntimeData(lease:ProviderSourceGrantL
         if(c.fs.realpathSync(databaseParent)!==databaseParent)fail("Provider source database parent is not canonical.");
         const leaf=databaseParent===data.path?data:pin(c,databaseParent,true);
         const database=pin(c,databasePath,false,2*1024*1024*1024);
-        held.push(...c.pins.splice(from));let closed=false;
+        held.push(...c.pins.splice(from));let closed=false;const children=new Set<()=>void>();
         const close=()=>{
           if(closed)return;closed=true;parent.children.delete(close);
-          const errors:unknown[]=[];for(const p of held.splice(0).reverse())try{c.fs.closeSync(p.fd);}catch(error){errors.push(error);}
+          const errors:unknown[]=[];for(const child of [...children])try{child();}catch(error){errors.push(error);}
+          for(const p of held.splice(0).reverse())try{c.fs.closeSync(p.fd);}catch(error){errors.push(error);}
           if(errors.length===1)throw errors[0];if(errors.length)throw new AggregateError(errors,"Provider source data pins failed to close.");
         };
         const check=()=>{
@@ -690,7 +692,7 @@ export async function retainProviderSourceRuntimeData(lease:ProviderSourceGrantL
           try{check();await lease.verifyCurrent();check();}catch(error){try{close();}catch(cleanup){throw new AggregateError([error,cleanup],"Provider source data verification and cleanup failed.");}throw error;}
         };
         result=Object.freeze({databasePath:database.path,dataDirectory:data.path,releaseDirectory:release.path,fence:active.fence,assertCurrent:check,verifyCurrent,close});
-        check();sourceRuntimeDataLeases.set(result,check);parent.children.add(close);parent.dataRetained=true;
+        check();sourceRuntimeDataLeases.set(result,{check,parent,grant:lease,children,containerRetained:false});parent.children.add(close);parent.dataRetained=true;
       }catch(error){
         const errors:unknown[]=[error];for(const p of held.splice(0).reverse())try{c.fs.closeSync(p.fd);}catch(cleanup){errors.push(cleanup);}
         try{releasePins(c,from);}catch(cleanup){errors.push(cleanup);}
@@ -699,6 +701,138 @@ export async function retainProviderSourceRuntimeData(lease:ProviderSourceGrantL
     });
     assertProviderSourceRuntimeDataLease(result!);return result!;
   }catch(error){try{result?.close();}catch(cleanup){throw new AggregateError([error,cleanup],"Provider source data publication failed.");}throw error;}
+}
+
+export interface ProviderSourceContainerLease {
+  readonly containerId:string;
+  readonly pid:number;
+  readonly birth:string;
+  assertCurrent():void;
+  verifyCurrent():Promise<void>;
+  close():void;
+}
+const sourceContainerLeases=new WeakMap<ProviderSourceContainerLease,()=>void>();
+const SOURCE_CONTAINER_PROJECTION=`{"identity":${CONTAINER_PROJECTION},"host":{{json .HostConfig}},"mounts":{{json .Mounts}},"apparmor":{{json .AppArmorProfile}},"workingDirectory":{{json .Config.WorkingDir}}}`;
+const SOURCE_MASKED_PATHS=["/proc/asound","/proc/acpi","/proc/kcore","/proc/keys","/proc/latency_stats","/proc/timer_list","/proc/timer_stats","/proc/sched_debug","/proc/scsi","/sys/firmware","/sys/devices/virtual/powercap"];
+const SOURCE_READONLY_PATHS=["/proc/bus","/proc/fs","/proc/irq","/proc/sys","/proc/sysrq-trigger"];
+function sourceContainerObservation(encoded:string,data:ProviderSourceRuntimeDataLease,context:SourceRuntimeDataContext):{pid:number;encoded:string} {
+  const {parent,grant}=context,c=parent.context,binding=grant.binding;
+  const text=encoded.endsWith("\n")?encoded.slice(0,-1):encoded;let value:Row;
+  try{value=JSON.parse(text);}catch{fail("Provider source container profile is invalid.");}
+  if(text.includes("\uFFFD")||JSON.stringify(value)!==text||!exact(value,["identity","host","mounts","apparmor","workingDirectory"]))fail("Provider source container profile is invalid.");
+  containerObservation(JSON.stringify(value.identity),parent.input,binding,parent.registered.domain,"started");
+  const h=value.host,empty=(v:unknown)=>v===null||Array.isArray(v)&&v.length===0;
+  if(!h||typeof h!=="object"||Array.isArray(h)||h.ReadonlyRootfs!==true||h.Privileged!==false||h.Init!==true||h.AutoRemove!==false||h.OomKillDisable!==false&&h.OomKillDisable!==null
+    ||JSON.stringify(h.CapDrop)!=='["ALL"]'||!empty(h.CapAdd)
+    ||![ '["no-new-privileges=true"]','["no-new-privileges"]' ].includes(JSON.stringify(h.SecurityOpt))
+    ||h.PidMode!==""||h.IpcMode!=="private"||h.UsernsMode!==""||h.CgroupnsMode!=="private"||h.NetworkMode!=="bridge"||h.Runtime!=="runc"||h.CgroupParent!==""
+    ||h.Memory!==536870912||h.MemorySwap!==536870912||h.NanoCpus!==1000000000||h.PidsLimit!==128
+    ||["Binds","VolumesFrom","Devices","DeviceRequests","Ulimits","Dns","DnsOptions","DnsSearch","ExtraHosts","Links","GroupAdd","DeviceCgroupRules","BlkioWeightDevice","BlkioDeviceReadBps","BlkioDeviceWriteBps","BlkioDeviceReadIOps","BlkioDeviceWriteIOps"].some(key=>!empty(h[key]))
+    ||["CpuShares","CpuPeriod","CpuQuota","CpuRealtimePeriod","CpuRealtimeRuntime","BlkioWeight","CpuCount","CpuPercent"].some(key=>h[key]!==undefined&&h[key]!==0)
+    ||h.CpusetCpus!==""||h.CpusetMems!==""||h.Sysctls!==undefined&&h.Sysctls!==null&&JSON.stringify(h.Sysctls)!=="{}"
+    ||h.UTSMode!==""||h.Isolation!==""||h.VolumeDriver!==""||h.ContainerIDFile!==""||h.Cgroup!==""||h.ShmSize!==67108864||h.MemoryReservation!==0||h.MemorySwappiness!==null||h.OomScoreAdj!==0||h.PublishAllPorts!==false||h.IOMaximumIOps!==0||h.IOMaximumBandwidth!==0
+    ||JSON.stringify(h.MaskedPaths)!==JSON.stringify(SOURCE_MASKED_PATHS)||JSON.stringify(h.ReadonlyPaths)!==JSON.stringify(SOURCE_READONLY_PATHS)
+    ||!exact(h.Tmpfs,["/tmp","/run"])||h.Tmpfs["/tmp"]!=="rw,noexec,nosuid,nodev,size=64m,mode=1777"||h.Tmpfs["/run"]!=="rw,noexec,nosuid,nodev,size=8m,mode=755"
+    ||!exact(h.LogConfig,["Type","Config"])||h.LogConfig.Type!=="local"||!exact(h.LogConfig.Config,["max-size","max-file"])||h.LogConfig.Config["max-size"]!=="10m"||h.LogConfig.Config["max-file"]!=="3"
+    ||value.apparmor!=="docker-default"||value.workingDirectory!=="/app")fail("Provider source container differs from the supported default security/resource profile.");
+  const ports=h.PortBindings;
+  if(!ports||typeof ports!=="object"||Array.isArray(ports)||Object.keys(ports).length>1)fail("Provider source container port topology differs.");
+  for(const [port,bindings] of Object.entries(ports))if(!/^[1-9][0-9]{0,4}\/tcp$/u.test(port)||Number(port.slice(0,-4))>65535||!Array.isArray(bindings)||bindings.length!==1
+    ||!exact(bindings[0],["HostIp","HostPort"])||bindings[0].HostIp!=="127.0.0.1"||!match(bindings[0].HostPort,/^[1-9][0-9]{0,4}$/u)||Number(bindings[0].HostPort)>65535)fail("Provider source container port topology differs.");
+  const expected=[{target:"/app",source:data.releaseDirectory,rw:false},{target:"/data",source:data.dataDirectory,rw:true},{target:"/run/clank-source",source:c.path.join(c.service.path,"handoff","catalogs",binding.catalogId),rw:false}];
+  if(!Array.isArray(value.mounts)||value.mounts.length!==expected.length)fail("Provider source container mount topology differs.");
+  for(const wanted of expected){const mounts=value.mounts.filter((m:Row)=>m.Destination===wanted.target);
+    if(mounts.length!==1||!exact(mounts[0],["Type","Source","Destination","Mode","RW","Propagation"])||mounts[0].Type!=="bind"||mounts[0].Source!==wanted.source||mounts[0].Mode!==""||mounts[0].RW!==wanted.rw||mounts[0].Propagation!=="rprivate")fail("Provider source container mount topology differs.");}
+  // Docker builds the observed Mounts array from a map, so its order can
+  // vary across identical inspections. Validate the exact unique topology
+  // first, then compare that already-approved set in destination order.
+  return {pid:value.identity[12],encoded:JSON.stringify({...value,mounts:expected.map(w=>value.mounts.find((m:Row)=>m.Destination===w.target))})};
+}
+function sourceProcText(c:Context,path:string,maximum=65536):string {
+  const before=c.fs.lstatSync(path);if(!before.isFile()||before.isSymbolicLink())fail("Provider source process metadata is unavailable.");
+  const fd=c.fs.openSync(path,c.fs.constants.O_RDONLY|c.fs.constants.O_NOFOLLOW|c.fs.constants.O_NONBLOCK);
+  try{const held=c.fs.fstatSync(fd);if(!held.isFile()||held.dev!==before.dev||held.ino!==before.ino)fail("Provider source process metadata changed.");
+    const bytes=new Uint8Array(maximum+1);let length=0;while(length<bytes.length){const n=c.fs.readSync(fd,bytes,length,bytes.length-length,length);if(!n)break;length+=n;}
+    const visible=c.fs.lstatSync(path);if(visible.dev!==held.dev||visible.ino!==held.ino||length>maximum)fail("Provider source process metadata changed.");return new TextDecoder("utf-8",{fatal:true}).decode(bytes.subarray(0,length));
+  }finally{c.fs.closeSync(fd);}
+}
+function sourceProcess(c:Context,pid:number,containerId:string,binding:Row):{birth:string;namespaces:Record<string,string>} {
+  const root=`/proc/${pid}`,stat=sourceProcText(c,root+"/stat"),end=stat.lastIndexOf(") "),fields=stat.slice(end+2).trim().split(/\s+/u);
+  if(end<1||stat.slice(0,stat.indexOf(" "))!==String(pid)||fields.length<20||!["R","S","D","I"].includes(fields[0])||!match(fields[19],/^[1-9][0-9]{0,19}$/u))fail("Provider source process identity is unavailable.");
+  const rows=new Map<string,string>();for(const line of sourceProcText(c,root+"/status").split("\n")){const colon=line.indexOf(":");if(colon!==-1){const key=line.slice(0,colon);if(rows.has(key))fail();rows.set(key,line.slice(colon+1).trim());}}
+  if(rows.get("Uid")?.split(/\s+/u).some(v=>v!==String(binding.uid))||rows.get("Uid")?.split(/\s+/u).length!==4
+    ||rows.get("Gid")?.split(/\s+/u).some(v=>v!==String(binding.gid))||rows.get("Gid")?.split(/\s+/u).length!==4
+    ||rows.get("Groups")!==String(binding.gid)
+    ||["CapInh","CapPrm","CapEff","CapBnd","CapAmb"].some(key=>rows.get(key)!=="0000000000000000")||rows.get("NoNewPrivs")!=="1"||rows.get("Seccomp")!=="2"
+    ||sourceProcText(c,root+"/attr/current").trim()!=="docker-default (enforce)")fail("Provider source process security profile differs.");
+  const cgroup=sourceProcText(c,root+"/cgroup"),groups=cgroup.trim().split("\n");
+  if(groups.length!==1||!groups[0].startsWith("0::/")||!(groups[0].endsWith("/docker/"+containerId)||groups[0].endsWith("/docker-"+containerId+".scope")))fail("Provider source process is outside its supported container cgroup.");
+  const groupPath=groups[0].slice(3);if(groupPath.includes("\\")||groupPath.split("/").slice(1).some(v=>!v||v==="."||v===".."))fail("Provider source process cgroup is invalid.");
+  const base="/sys/fs/cgroup"+groupPath;
+  for(const [file,expected] of [["memory.max","536870912"],["memory.swap.max","0"],["memory.high","max"],["memory.oom.group","0"],["pids.max","128"],["cpu.max","100000 100000"],["cpu.weight","100"],["cgroup.freeze","0"]]){
+    if(sourceProcText(c,base+"/"+file,4096).trim()!==expected)fail("Provider source process kernel resource limits differ.");
+  }
+  const mounts=sourceProcText(c,root+"/mountinfo").trim().split("\n").map(line=>line.split(" "));
+  for(const [target,option] of [["/","ro"],["/app","ro"],["/data","rw"],["/run/clank-source","ro"]]){
+    const entries=mounts.filter(row=>row[4]===target);if(entries.length!==1||entries[0].length<10||!entries[0][5].split(",").includes(option))fail("Provider source process kernel mount permissions differ.");
+  }
+  const namespaces:Record<string,string>={};for(const name of ["mnt","pid","net","ipc","cgroup","user"]){const link=c.fs.readlinkSync(root+"/ns/"+name),local=c.fs.readlinkSync("/proc/self/ns/"+name);
+    if(!match(link,new RegExp("^"+name+":\\[[0-9]+\\]$","u"))||(name==="user"?link!==local:link===local))fail("Provider source process namespaces differ.");namespaces[name]=link;}
+  return {birth:fields[19],namespaces};
+}
+/** Original native proof only; serialized observations cannot mint this lease. */
+export function assertProviderSourceContainerLease(value:ProviderSourceContainerLease):void {
+  const check=sourceContainerLeases.get(value);if(!check)fail("A genuine provider source container lease is required.");check();
+}
+/** Retain a running local default-profile source. This does not establish readiness or writer stop. */
+export async function retainProviderSourceContainer(data:ProviderSourceRuntimeDataLease):Promise<ProviderSourceContainerLease> {
+  const scope=sourceRuntimeDataLeases.get(data);if(!scope)fail("A genuine provider source runtime data lease is required.");scope.check();
+  const {parent,grant}=scope,c=parent.context,client=domains.get(parent.registered.domain)?.client;if(!client)fail();let lease:ProviderSourceContainerLease|undefined,pendingClose:(()=>void)|undefined;
+  try {
+    // This dedicated lane retains data/catalog proof around native process and
+    // Docker awaits without releasing any other operation's descriptor stack.
+    await exclusive(parent.registered.owner,async()=>{
+      scope.check();if(scope.containerRetained)fail("Provider source container cannot be duplicated or recycled.");
+      await verifyDomain(parent.registered.owner,parent.registered.domain,true);scope.check();
+      const args=["container","inspect","--format",SOURCE_CONTAINER_PROJECTION,parent.input.containerId];
+      const response=await runProviderDockerClient(client,args,{timeoutMs:15000,maxOutputBytes:65536});scope.check();
+      const observed=sourceContainerObservation(response.stdout,data,scope),process=sourceProcess(c,observed.pid,parent.input.containerId,grant.binding);
+      const root=`/proc/${observed.pid}/root`,held:number[]=[];let closed=false;
+      const close=()=>{if(closed)return;closed=true;scope.children.delete(close);const errors:unknown[]=[];
+        for(const fd of held.splice(0).reverse())try{c.fs.closeSync(fd);}catch(error){errors.push(error);}
+        if(errors.length===1)throw errors[0];if(errors.length)throw new AggregateError(errors,"Provider source process pins failed to close.");};
+      pendingClose=close;
+      // Numeric /proc magic links intentionally follow the already-observed
+      // process. Retain namespaces as well as its root so inode numbers cannot
+      // be recycled while this capability lives; recheck birth after opening.
+      const fd=c.fs.openSync(root,c.fs.constants.O_RDONLY|c.fs.constants.O_DIRECTORY);held.push(fd);
+      const namespacePins=Object.entries(process.namespaces).map(([name,link])=>{
+        const descriptor=c.fs.openSync(`/proc/${observed.pid}/ns/${name}`,c.fs.constants.O_RDONLY);held.push(descriptor);
+        const stat=c.fs.fstatSync(descriptor);if(String(stat.ino)!==link.slice(name.length+2,-1))fail("Provider source namespace pin identity differs.");return {descriptor,dev:stat.dev,ino:stat.ino};
+      });
+      const mounted=[{target:"/app",source:data.releaseDirectory},{target:"/data",source:data.dataDirectory},{target:"/run/clank-source",source:c.path.join(c.service.path,"handoff","catalogs",grant.binding.catalogId)}];
+      const identity=mounted.map(m=>{const s=c.fs.lstatSync(m.source);return {...m,dev:s.dev,ino:s.ino};});
+      const check=()=>{
+        try{if(closed)fail("Provider source container lease is closed.");scope.check();const fresh=sourceProcess(c,observed.pid,parent.input.containerId,grant.binding);
+          if(fresh.birth!==process.birth||JSON.stringify(fresh.namespaces)!==JSON.stringify(process.namespaces))fail("Provider source process identity changed.");
+          for(const p of namespacePins){const retained=c.fs.fstatSync(p.descriptor);if(retained.dev!==p.dev||retained.ino!==p.ino)fail("Provider source namespace pin changed.");}
+          const retained=c.fs.fstatSync(fd),visible=c.fs.statSync(root);if(retained.dev!==visible.dev||retained.ino!==visible.ino)fail("Provider source process root changed.");
+          for(const m of identity){const from=c.fs.lstatSync(m.source),actual=c.fs.statSync(`/proc/self/fd/${fd}`+m.target);
+            if(!from.isDirectory()||!actual.isDirectory()||from.dev!==m.dev||from.ino!==m.ino||actual.dev!==m.dev||actual.ino!==m.ino)fail("Provider source native mount identity differs.");}
+        }catch(error){try{close();}catch(cleanup){throw new AggregateError([error,cleanup],"Provider source process observation and cleanup failed.");}throw error;}
+      };
+      const verifyCurrent=async()=>{
+        try{check();await exclusive(parent.registered.owner,async()=>{check();await verifyDomain(parent.registered.owner,parent.registered.domain,true);check();
+          const next=await runProviderDockerClient(client,args,{timeoutMs:15000,maxOutputBytes:65536});check();const confirmed=sourceContainerObservation(next.stdout,data,scope);if(confirmed.encoded!==observed.encoded){const before=JSON.parse(observed.encoded),after=JSON.parse(confirmed.encoded);const field=["identity","host","mounts","apparmor","workingDirectory"].find(key=>JSON.stringify(before[key])!==JSON.stringify(after[key]));fail("Provider source container configuration changed ("+field+").");}
+          await verifyDomain(parent.registered.owner,parent.registered.domain,true);check();},parent.bridge);check();
+        }catch(error){try{close();}catch(cleanup){throw new AggregateError([error,cleanup],"Provider source container verification and cleanup failed.");}throw error;}
+      };
+      lease=Object.freeze({containerId:parent.input.containerId,pid:observed.pid,birth:process.birth,assertCurrent:check,verifyCurrent,close});
+      check();sourceContainerLeases.set(lease,check);scope.children.add(close);scope.containerRetained=true;
+      await verifyDomain(parent.registered.owner,parent.registered.domain,true);check();
+    },parent.bridge);
+    assertProviderSourceContainerLease(lease!);return lease!;
+  }catch(error){try{pendingClose?.();}catch(cleanup){throw new AggregateError([error,cleanup],"Provider source container publication failed.");}throw error;}
 }
 function containerTimestamp(value:unknown):boolean {
   if(typeof value!=="string"||value==="0001-01-01T00:00:00Z")return false;

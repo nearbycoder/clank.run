@@ -100,12 +100,36 @@ export async function openSupervisorLease(databasePath:string,input:PlatformSupe
     };
     // Startup has no ownership or external duties yet. Wait only for enrollment's
     // initial write lock; never replay its body, COMMIT or an active owner's work.
-    const enrollmentDeadline=performance.now()+5000;
+    const enrollmentStarted=performance.now();let enrollmentDeadline=enrollmentStarted+5000,frozenWait=false;
+    const frozenOwnerRemaining=async():Promise<number|undefined>=>{
+      // A stopped owner can retain SQLite's native write lock until its armed
+      // guardian expires the lease. Observe committed identity only; this wait
+      // grants no duties, changes no lease and never signals another process.
+      let observed:{pid:number;birth:string;remaining:number}|undefined;
+      native.exec("BEGIN");
+      try{
+        if(!native.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_platform_supervisor_state'").get()
+          ||!native.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_platform_supervisor_lease'").get())return;
+        const state=native.prepare("SELECT * FROM clank_platform_supervisor_state WHERE singleton=1").get();
+        if(!state||state.configuration_id!==options.configurationId||state.configuration_revision!==options.configurationRevision
+          ||state.lease_ms!==options.leaseMs||state.poll_ms!==options.pollIntervalMs)return;
+        assertConfiguration();const row=readLease(),at=Date.now();
+        if(row.owner===null||row.epoch===0||Number(row.updated_at)>at||Number(row.expires_at)>Number(row.updated_at)+options.leaseMs)return;
+        observed={pid:integer(row.controller_pid,"process PID",1,2147483647),birth:String(row.controller_birth),remaining:Math.max(0,Number(row.expires_at)-at)};
+      }finally{native.exec("ROLLBACK");}
+      let stat:string;try{stat=await fs.readFile(`/proc/${observed!.pid}/stat`,"utf8");}
+      catch(error){if(["ENOENT","ESRCH"].includes((error as {code?:string}).code??""))return;throw error;}
+      const fields=stat.slice(stat.lastIndexOf(")")+2).split(" ");
+      if(stat.slice(0,stat.indexOf(" "))===String(observed!.pid)&&fields[0]==="T"&&fields[19]===observed!.birth)return observed!.remaining;
+    };
     while(true){
       native.exec(`PRAGMA busy_timeout=${Math.max(1,Math.min(250,Math.ceil(enrollmentDeadline-performance.now())))}`);
       try{native.exec("BEGIN IMMEDIATE");break;}
       catch(error){
         if((error as {code?:string}).code!=="ERR_SQLITE_ERROR"||(error as {errcode?:number}).errcode!==5||performance.now()>=enrollmentDeadline)throw error;
+        if(!frozenWait){const remaining=await frozenOwnerRemaining();if(remaining!==undefined){
+          frozenWait=true;enrollmentDeadline=Math.min(enrollmentStarted+options.leaseMs+5000,performance.now()+remaining+5000);
+        }}
         await new Promise(resolve=>setTimeout(resolve,Math.min(25,Math.max(0,enrollmentDeadline-performance.now()))));
         if(performance.now()>=enrollmentDeadline)throw error;
       }
