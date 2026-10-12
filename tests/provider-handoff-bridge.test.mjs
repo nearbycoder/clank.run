@@ -32,6 +32,85 @@ function native(file,action){const db=new DatabaseSync(file);try{return action(d
 function mirroredGrant(db){return {grant:db.prepare('SELECT * FROM clank_provider_handoff_source_grant').get()??null,transfer:null,operations:[],spools:[]};}
 async function enabled(t,overrides={}){const f=await fixture(t),bridge=await handoff.enableProviderHandoffBridge(f.owner,f.nativeDomain,{...limits,...overrides});return {...f,bridge};}
 async function issued(t,overrides={}){const f=await enabled(t,overrides),binding=grant(f,f.bridge.enablementId);for(const [key,name] of [['maxTransactionBytes','maxCaptureTransactionBytes'],['maxStateBytes','maxCaptureStateBytes'],['maxJournalEntries','maxJournalEntries'],['maxJournalBytes','maxJournalBytes']])binding.capture[key]=overrides[name]??limits[name];const input={binding,grantSecretSha256:'d'.repeat(64),controlSecretSha256:'e'.repeat(64)};await handoff.issueProviderHandoffGrant(f.bridge,input);return {...f,binding,input};}
+test('source service admission returns only the original native owner and never ordinary admission',async t=>{
+ const f=await enabled(t),before=snapshot(f),service=await handoff.admitProviderSourceService(f.bridge);
+ assert.ok(Object.isFrozen(service));assert.equal(service.root,f.root);assert.equal(service.ownerLabel,'owner-source');assert.equal(service.nodeId,'node_source');
+ assert.equal(handoff.providerSourceServiceOwner(service),f.owner);handoff.assertProviderSourceServiceOwnership(service);
+ await service.verifyCurrent();assert.deepEqual(snapshot(f),before);assert.equal(f.bridge.mode,'bridge-live');
+ assert.equal('launch'in service,false);assert.equal('ready'in service,false);assert.equal('write'in service,false);
+ await assert.rejects(handoff.admitProviderService(f.owner,providerDockerClient(f.options),'owner-source'),/pre-admission/);
+ handoff.assertProviderSourceServiceOwnership(service);
+ const binding=grant(f,f.bridge.enablementId);await handoff.issueProviderHandoffGrant(f.bridge,{binding,grantSecretSha256:'d'.repeat(64),controlSecretSha256:'e'.repeat(64)});
+ await service.verifyCurrent();assert.equal(rows(f.catalog,'clank_provider_handoff_source_grant')[0].state,'issued');
+ service.close();assert.throws(()=>handoff.providerSourceServiceOwner(service),/closed/);
+});
+test('source service copies and accessor claims refuse without reading caller fields',async t=>{
+ const f=await enabled(t),service=await handoff.admitProviderSourceService(f.bridge);let reads=0;
+ const fake={get root(){reads++;throw Error('must not read copied authority');},assertCurrent(){throw Error('must not delegate authority');}};
+ for(const value of [{...service},new Proxy(service,{}),fake,{},null]){
+  assert.throws(()=>handoff.assertProviderSourceServiceOwnership(value),/genuine/);
+  assert.throws(()=>handoff.providerSourceServiceOwner(value),/genuine/);
+ }
+ assert.equal(reads,0);handoff.assertProviderSourceServiceOwnership(service);
+ const before=fs.readFileSync(f.log);await assert.rejects(handoff.admitProviderSourceService({...f.bridge}),/genuine/);assert.deepEqual(fs.readFileSync(f.log),before);
+});
+test('source service admission reserves once before its first await and never reopens after close',async t=>{
+ const f=await enabled(t),first=handoff.admitProviderSourceService(f.bridge);
+ await assert.rejects(handoff.admitProviderSourceService(f.bridge),/already reserved/);
+ const service=await first;await assert.rejects(handoff.admitProviderSourceService(f.bridge),/already reserved/);service.close();
+ await assert.rejects(handoff.admitProviderSourceService(f.bridge),/native provider owner/);
+});
+test('source service ownership retains the actual exclusive native writer lease',async t=>{
+ const f=await enabled(t),service=await handoff.admitProviderSourceService(f.bridge);
+ await assert.rejects(handoff.acquireProviderServiceOwnership(f.root,true),/active writer/);
+ handoff.assertProviderSourceServiceOwnership(service);f.owner.close();assert.throws(()=>service.assertCurrent(),/native provider owner/);
+});
+test('source service admission refuses already-issued state and retained cleanup-only restart',async t=>{
+ const f=await issued(t),before=snapshot(f);
+ await assert.rejects(handoff.admitProviderSourceService(f.bridge),/Retained source state/);assert.deepEqual(snapshot(f),before);assert.equal(f.bridge.mode,'cleanup-only');
+ f.owner.close();const owner=await f.open(),domain=await f.domain(owner),bridge=await handoff.enableProviderHandoffBridge(owner,domain,limits);
+ assert.equal(bridge.mode,'cleanup-only');const log=fs.readFileSync(f.log);await assert.rejects(handoff.admitProviderSourceService(bridge),/live provider bridge/);assert.deepEqual(fs.readFileSync(f.log),log);
+});
+test('source service admission revalidates the initial native catalog after its last startup await',async t=>{
+ const f=await enabled(t),freeze=Object.freeze,binding=grant(f,f.bridge.enablementId);let injected=false;
+ Object.freeze=function(value){const result=freeze(value);if(value?.root===f.root&&typeof value.verifyCurrent==='function'){
+  Object.freeze=freeze;queueMicrotask(()=>{native(f.catalog,db=>{db.exec('BEGIN IMMEDIATE');db.prepare("INSERT INTO clank_provider_handoff_source_grant VALUES(1,2,?,?,?,?,?,'issued',NULL,NULL,NULL)").run(binding.grantId,JSON.stringify(binding),hash(binding),'d'.repeat(64),'e'.repeat(64));db.prepare('UPDATE clank_provider_handoff_bridge_state SET version=2,records_sha256=?').run(hash(mirroredGrant(db)));db.exec('COMMIT');});injected=true;});
+ }return result;};
+ try{await assert.rejects(handoff.admitProviderSourceService(f.bridge),/startup observation changed/);}finally{Object.freeze=freeze;}
+ assert.equal(injected,true);assert.equal(f.bridge.mode,'cleanup-only');assert.equal(rows(f.catalog,'clank_provider_handoff_source_grant')[0].grant_id,binding.grantId);
+ await assert.rejects(handoff.admitProviderSourceService(f.bridge),/native provider owner/);
+});
+test('source service refuses owner close across its original native daemon await',async t=>{
+ const f=await enabled(t),pending=handoff.admitProviderSourceService(f.bridge);f.owner.close();
+ await assert.rejects(pending,/native provider owner/);
+});
+for(const when of ['startup','verification'])test('source service '+when+' rejects original Docker daemon drift before cleanup commands',async t=>{
+ const f=await enabled(t),service=when==='verification'?await handoff.admitProviderSourceService(f.bridge):null,before=snapshot(f);
+ fs.writeFileSync(f.options.executable,"#!/usr/bin/env node\nimport fs from 'node:fs';fs.appendFileSync(process.env.LOG,JSON.stringify(process.argv.slice(2))+'\\n');process.stdout.write(JSON.stringify('foreign_daemon')+'\\n');",{mode:0o700});
+ if(service){await assert.rejects(service.verifyCurrent(),/domain changed/);assert.throws(()=>service.assertCurrent(),/closed/);}
+ else await assert.rejects(handoff.admitProviderSourceService(f.bridge),/domain changed/);
+ assert.deepEqual(snapshot(f),before);assert.equal(f.bridge.mode,'cleanup-only');
+ assert.ok(fs.readFileSync(f.log,'utf8').trim().split('\n').map(JSON.parse).every(args=>args[0]==='info'));
+});
+test('source service retains its original namespace descriptors until actual owner close',async t=>{
+ const f=await enabled(t),pins=()=>fs.readdirSync('/proc/self/fd').filter(fd=>{try{const target=fs.readlinkSync('/proc/self/fd/'+fd);return target===f.root||target.startsWith(f.root+'/');}catch{return false;}});
+ const before=pins().length,service=await handoff.admitProviderSourceService(f.bridge);assert.equal(pins().length,before+5);
+ await service.verifyCurrent();assert.equal(pins().length,before+5);service.close();assert.equal(pins().length,0);
+});
+for(const kind of ['inode','schema','mirror','unsupported'])test('source service native '+kind+' drift permanently invalidates its admission',async t=>{
+ const f=await enabled(t),service=await handoff.admitProviderSourceService(f.bridge);
+ const originalMirror=rows(f.catalog,'clank_provider_handoff_bridge_state')[0].records_sha256;
+ if(kind==='inode'){const file=join(f.dir,'original-catalog.sqlite');fs.renameSync(f.catalog,file);fs.copyFileSync(file,f.catalog);fs.chmodSync(f.catalog,0o600);}
+ if(kind==='schema')native(f.catalog,db=>db.exec('CREATE TABLE unreviewed(x)'));
+ if(kind==='mirror')native(f.catalog,db=>db.prepare('UPDATE clank_provider_handoff_bridge_state SET records_sha256=?').run('a'.repeat(64)));
+ if(kind==='unsupported')native(f.catalog,db=>db.prepare('UPDATE clank_provider_handoff_bridge_state SET version=2').run());
+ assert.throws(()=>service.assertCurrent());assert.throws(()=>handoff.providerSourceServiceOwner(service),/closed/);
+ if(kind==='inode'){fs.unlinkSync(f.catalog);fs.renameSync(join(f.dir,'original-catalog.sqlite'),f.catalog);}
+ if(kind==='schema')native(f.catalog,db=>db.exec('DROP TABLE unreviewed'));
+ if(kind==='mirror')native(f.catalog,db=>db.prepare('UPDATE clank_provider_handoff_bridge_state SET records_sha256=?').run(originalMirror));
+ if(kind==='unsupported')native(f.catalog,db=>db.prepare('UPDATE clank_provider_handoff_bridge_state SET version=1').run());
+ assert.throws(()=>service.assertCurrent(),/closed/);await assert.rejects(service.verifyCurrent(),/closed/);
+});
 function grant(f,enablementId){return {protocol:'clank-provider-source-grant/1',enablementId,indexId:f.identity.indexId,catalogId:f.project.catalogId,domainSha256:f.identity.domainSha256,projectId,releaseId:'release_source',generation:1,capsuleSha256:'a'.repeat(64),sourceIncarnation:randomUUID(),grantId:randomUUID(),role:'web',instance:0,imageId:'sha256:'+'b'.repeat(64),uid:1000,gid:1000,capture:{keyId:'source_key',keySha256:'c'.repeat(64),maxTransactionBytes:limits.maxCaptureTransactionBytes,maxStateBytes:limits.maxCaptureStateBytes,maxJournalEntries:limits.maxJournalEntries,maxJournalBytes:limits.maxJournalBytes}};}
 const containerId='f'.repeat(64),zeroTime='0001-01-01T00:00:00Z';
 function containerProjection(f,state='created'){

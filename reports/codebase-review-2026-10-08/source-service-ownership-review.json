@@ -1,0 +1,79 @@
+{
+  "phase": "Reviewed private ownership implementation; complete local and hosted delivery pending",
+  "base": "153d7e83b68db43ea11d9ee4af6140f9d667484a",
+  "behavior": [
+    "Reserve exactly one original source-service admission per genuine native bridge owner before the first await.",
+    "Require original non-root Linux owner, original Docker domain and fresh zero-barrier/zero-grant/zero-reservation catalog state. Reopened retained grants remain cleanup-only.",
+    "Retain index/catalog directory and file inodes in the original owner lifetime. Independent final publication check rejects native state changes after startup awaits.",
+    "Opaque frozen source facade resolves only its original native owner through private registry; copies/proxies/accessors cannot enroll or resolve it.",
+    "Future grant observations are storage validation only and use exact supported issued2/created3/started4 phases. They never provide container/runtime/readiness/write/stop authority.",
+    "Closure or native identity/schema/mirror/version/domain drift permanently invalidates the facade; restored metadata cannot revive it. Original owner close releases all retained descriptors."
+  ],
+  "focusedEachNode22And24": {
+    "tests": 290,
+    "pass": 290,
+    "fail": 0,
+    "cancelled": 0,
+    "skipped": 0
+  },
+  "newSelectedCasesEachNode22And24": 14,
+  "nativeFinal": {
+    "cases": 14,
+    "versions": [
+      "22.16.0",
+      "26.10.0"
+    ],
+    "actualOriginalDaemon": "0a2ad0ab-df92-4c7b-a346-3ea757783f52",
+    "containersCreated": 0,
+    "allOriginalPinsReleased": true,
+    "qualification": "Native daemon/SQLite/file/ownership admission proof only. Actual production factory consumption, source application bootstrap, ready/control/write admission, all-role stop and full transfer/ingress remain required."
+  },
+  "pairedOutputs": {
+    "count": 322,
+    "onlyChanged": "provider-handoff.js",
+    "publicDeclarationsUnchanged": 146
+  },
+  "types": {
+    "packedFixtures": 54,
+    "inherited": 149,
+    "new": 0
+  },
+  "package": {
+    "files": 451,
+    "bytes": 7047198,
+    "ceiling": 8388608,
+    "dependencies": 0
+  },
+  "originalLocalFilesUnchanged": 23,
+  "retainedFailures": [
+    {
+      "log": "native-last-startup-await-before-01.log",
+      "result": "Native independent SQLite writer inserts a valid issued grant after the inner startup check. Prototype incorrectly admits and the test fails with missing expected rejection; final publication recheck now refuses."
+    },
+    {
+      "log": "native-catalog-inode-before-03.log",
+      "result": "Corrected fixture moves the original outside the catalog namespace and substitutes an equal-byte file. Prototype adopts it; retained original namespace pins now refuse. Initial fixture had an extra unknown filename and did not prove inode refusal."
+    }
+  ],
+  "storageRecovery": {
+    "receipt": "owned-upload-archive-relocation-06.json",
+    "qualification": "Only a verified completed task-owned upload archive was relocated to its identical regular-filesystem copy, preserving the original path as a symlink. VM inode/profile, guest reserve, cached images, user files and failed evidence unchanged."
+  },
+  "fullGate": "running session32058 on owned regular-filesystem TMPDIR; no completed gate claimed yet",
+  "evidenceRoot": "/var/tmp/clank-source-service-153d7e8-d0w31cr3",
+  "accepted": 29,
+  "pending": [
+    7,
+    9,
+    10,
+    13,
+    14,
+    17,
+    30,
+    36,
+    37,
+    38,
+    40
+  ],
+  "next": "Consume the genuine source admission before production startup cleanup and couple source launch to settled committed baseline/entry/grant/native completion without adopting prepared DTOs or synthetic health; finish original readiness/control/every-role stop/target/ingress/fallback/interruption acceptance."
+}
