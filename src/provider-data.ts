@@ -19,6 +19,7 @@ import {
   type DeploymentRuntimeCapsule,
   type DeploymentRuntimeIngressManifest,
 } from "./runtime-placement.ts";
+import { SQLITE_INTERNAL } from "./sqlite-internal.ts";
 
 export const DEPLOYMENT_PROVIDER_DATA_PROTOCOL = "clank-provider-data/1";
 const MAX_PROVIDER_DATABASE_BYTES =
@@ -970,6 +971,10 @@ function publicState(
 async function readState(fs: NodeFs, filename: string): Promise<StoredState | null> {
   const value = await readPrivateJson(fs, filename);
   if (value === null) return null;
+  return decodeStoredState(value);
+}
+
+function decodeStoredState(value: unknown): StoredState {
   const input = exactObject(value, ["protocol", "active", "previous", "rollback"], "provider data state");
   if (input.protocol !== DEPLOYMENT_PROVIDER_DATA_PROTOCOL) {
     throw new Error("Provider data state protocol is unsupported.");
@@ -981,6 +986,24 @@ async function readState(fs: NodeFs, filename: string): Promise<StoredState | nu
     rollback: input.rollback === null ? null : rollbackRecord(input.rollback),
   };
 }
+
+// A private format reader only, never filesystem or worker authority. Reuse the
+// ordinary lifecycle's complete validation for provider source observations.
+Object.defineProperty(openDeploymentProviderDataStore, SQLITE_INTERNAL, {
+  value: Object.freeze({
+    decodeSourceState(encoded: string, projectId: string): StoredState {
+      if (typeof encoded !== "string" || encoded.length > 65536 || new TextEncoder().encode(encoded).length > 65536) {
+        throw new Error("Provider source state requires bounded native JSON.");
+      }
+      identifier(projectId, "projectId");
+      const value = JSON.parse(encoded);
+      if (JSON.stringify(value) + "\n" !== encoded) {
+        throw new Error("Provider source state must use its canonical native encoding.");
+      }
+      return projectState(decodeStoredState(value), projectId)!;
+    },
+  }),
+});
 
 async function readFence(
   fs: NodeFs,
