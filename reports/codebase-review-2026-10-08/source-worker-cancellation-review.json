@@ -68,11 +68,11 @@
   "sourceSha256": {
     "src/sqlite-task.ts": "265ba448aba8eda9975a0d2eaaf3619b47803c97e879aae92179586b0fc864b1",
     "tests/fixtures/provider-handoff-runtime.mjs": "c63712c1a63b66e8c90705d6409e8e7fe09bcccde692e1b650c842c9ea0077ea",
-    "tests/provider-handoff-runtime.test.mjs": "4792f8b138863b541bf5857685475d604c6182f2c525befb984695c6d540e56c",
+    "tests/provider-handoff-runtime.test.mjs": "9320975960daf3ec776818cf51f44018f73b000a51abc49539d2294b51fd062c",
     "tests/sqlite-sandbox.test.mjs": "45146319bf0188c484707c6f77fb2dd92e458b91b00da1f32535ac53f270659b"
   },
-  "fullLocalGate": "Corrected fixture gate running; original production-source gate passed3737/3700/0/0/37.",
-  "hostedChecks": "Original553c4fe head:7 pass; Node24 fails new fixture COMMIT with SQLiteerr5. Corrected head requires all8 fresh checks before protected merge.",
+  "fullLocalGate": "Final all-fixture-write candidate gate pending. Prior9a25277 full local gate passed3738/3701/0/0/37; its hosted packaged gate fails one older fixture COMMIT.",
+  "hostedChecks": "Original553c4fe: Node24 failed new fixture COMMIT. Narrow9a25277: packaged gate failed older worker-admission fixture COMMIT. Final all-fixture bounded-wait head requires eight fresh checks and protected merge.",
   "finalSourceCancellationSelection": {
     "22": {
       "counts": {
@@ -163,7 +163,81 @@
     },
     "failure": "New active-revocation fixture COMMIT collides with a reader lock. Stack points to fixture mutate COMMIT; source watcher reader ownership is inferred from code, not an independently recovered original lock observation.",
     "reproduction": "An independently owned native SQLite reader retains a shared lock until an explicit command. Original zero-wait fixture COMMIT fails with the same SQLiteerr5 and rolls back. Bounded one-second wait then commits after reader release with one callback invocation, independent revoked-state readback and exactly one catalog version increment.",
-    "change": "Only active/queued cancellation revocation fixtures select a bounded1,000ms native SQLite busy wait. Default zero-wait fixture behavior and all production code remain unchanged; no mutation body or test retry. Owned native probe termination is bounded20seconds and awaits actual close.",
-    "qualification": "Native component evidence. Exact original CI reader connection/timing was not sampled. Native read contention refuses source publication; this does not establish provider-wide stop."
+    "change": "All catalog mutation calls in the component fixture now default to one bounded1,000ms native SQLite busy wait. The deterministic old-condition probe explicitly selects zero wait. No production SQLite policy, transaction body replay or test retry is introduced.",
+    "qualification": "Native component evidence. Exact original CI reader connection/timing was not sampled. Native read contention refuses source publication; this does not establish provider-wide stop.",
+    "secondFailure": {
+      "head": "9a2527771da11a8db008d831301e6e8146e86a25",
+      "jobId": 114676859315,
+      "case": "native revocation during worker-admission prevents subsequent initialization acknowledgment",
+      "site": "fixture mutate COMMIT at28:510",
+      "counts": {
+        "tests": 3738,
+        "pass": 3700,
+        "fail": 1,
+        "cancelled": 0,
+        "skipped": 37
+      },
+      "qualification": "Same native fixture commit contention in an older boundary story. Full local gate and narrower selections passed; unchanged-head rerun was not performed."
+    }
+  },
+  "allCatalogMutationFocused": {
+    "22": {
+      "counts": {
+        "tests": 153,
+        "pass": 153,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "sha256": "f5fbdfba619e27fa75ad3e899b7503a82044a8d1ba8cf21dc523bc18442dd099",
+      "scope": "Final runtime/sandbox/wire selection including all-fixture bounded catalog writes."
+    },
+    "24": {
+      "counts": {
+        "tests": 153,
+        "pass": 153,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "sha256": "2cd0f279ed97d98f9ce5897d5bdfd4ead0e138ed053d77193f54b8052f35e74f",
+      "scope": "Final runtime/sandbox/wire selection including all-fixture bounded catalog writes."
+    },
+    "26": {
+      "counts": {
+        "tests": 153,
+        "pass": 153,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "sha256": "4982887ffa7f3a42727b13de534751d635aaec78b82f4ffff0c368a782e5b1ef",
+      "scope": "Final runtime/sandbox/wire selection including all-fixture bounded catalog writes."
+    }
+  },
+  "narrowCorrectionFullLocalGate": {
+    "head": "9a2527771da11a8db008d831301e6e8146e86a25",
+    "counts": {
+      "tests": 3738,
+      "pass": 3701,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 37
+    },
+    "complete": true,
+    "exitCode": 0,
+    "logSha256": "a73f7000b71ae68a93cba8721b81bc0538295ec5e8f97f3bd39345c43108ef34",
+    "coverage": {
+      "lines": 92.01,
+      "branches": 82.33,
+      "functions": 90.23
+    },
+    "package": {
+      "files": 450,
+      "bytes": 6996714,
+      "ceilingBytes": 8388608,
+      "dependencies": 0
+    },
+    "scope": "Final framework/docs/examples build, dependency contract, coverage, documentation audit, packed-release conformance and package/tree/history security passed."
   }
 }
