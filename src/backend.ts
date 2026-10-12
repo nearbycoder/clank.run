@@ -501,6 +501,15 @@ const sourceBackendRuntimes = new WeakMap<object, {identity():void;database:obje
 const sourceInitializations = new WeakMap<object, SourceInitialization>();
 const sourceContexts = new WeakMap<object, any>();
 let sourceBootstrapConsumed=false;
+let sourceConstructorReserved=false;
+const SOURCE_STARTUP_SLOT=Symbol.for("clank.provider.source.startup.v1");
+function consumeSourceBootstrap(slot:symbol,descriptor=Reflect.getOwnPropertyDescriptor(globalThis,slot)):string {
+  if(!descriptor||sourceBootstrapConsumed)throw new Error("Source bootstrap is absent or consumed.");
+  sourceBootstrapConsumed=true;
+  if(!Reflect.deleteProperty(globalThis,slot)||Reflect.getOwnPropertyDescriptor(globalThis,slot))throw new Error("Source bootstrap could not be consumed.");
+  if(!Object.hasOwn(descriptor,"value")||descriptor.writable!==false||descriptor.enumerable!==false||descriptor.configurable!==true||typeof descriptor.value!=="string"||descriptor.value.length>16384||new TextEncoder().encode(descriptor.value).length>16384)throw new Error("Source bootstrap must be bounded own data.");
+  return descriptor.value;
+}
 
 /** Capture identities without invoking application getters or exposing registration. */
 function unchangedSourceObjects(roots: readonly unknown[], deep = true): () => void {
@@ -2351,6 +2360,14 @@ export async function openBackend<
   definition: BackendDefinition<Schema, Functions, Auth, Jobs>,
   options: OpenBackendOptions<Schema, Storage> = {},
 ): Promise<BackendRuntime<Schema, Functions, Auth, Jobs, Storage>> {
+  // An explicit startup slot reserves the first original constructor before
+  // any await. Neither a failed claim nor a later constructor can reopen it.
+  if(sourceConstructorReserved)throw new Error("The original source constructor is already reserved; restart the source process.");
+  const startupDescriptor=Reflect.getOwnPropertyDescriptor(globalThis,SOURCE_STARTUP_SLOT);
+  let sourceStartup:string|undefined;
+  if(startupDescriptor){sourceConstructorReserved=true;sourceStartup=consumeSourceBootstrap(SOURCE_STARTUP_SLOT,startupDescriptor);}
+  let sourceCleanup:(()=>void)|undefined;
+  try {
   // Captured before the first await; removing declared jobs later cannot enroll
   // an already opened runtime as a source without background workers.
   const sourceDefinition = definition;
@@ -2359,6 +2376,10 @@ export async function openBackend<
   const sourceJobs = definition.jobs;
   const unchangedDefinition = unchangedSourceObjects([definition], false);
   const unchangedContract = unchangedSourceObjects([sourceSchema, sourceFunctions]);
+  if(sourceStartup!==undefined){
+    unchangedDefinition();unchangedContract();
+    if(sourceJobs!==undefined||"database" in options)throw new Error("Source startup requires its original native database without background jobs.");
+  }
   const heartbeatMs = positiveIntegerOption(options.heartbeat ?? 20_000, "heartbeat");
   const maxRequestBytes = positiveIntegerOption(options.maxRequestBytes ?? 64 * 1024, "maxRequestBytes");
   const maxResponseBytes = positiveIntegerOption(options.maxResponseBytes ?? 4 * 1024 * 1024, "maxResponseBytes");
@@ -2398,6 +2419,7 @@ export async function openBackend<
   }
   const database: ApplicationDatabase<Schema> = options.database
     ?? await openSQLite(definition.schema, options);
+  if(sourceStartup!==undefined){const close=database.close;sourceCleanup=()=>close.call(database);}
   const portable = !(SQLITE_INTERNAL in database);
   // A portable application store must never be mistaken for the native store
   // used by authentication, queues, receipts and review services.
@@ -3238,7 +3260,20 @@ export async function openBackend<
     if (!assertDatabase) throw new Error("Source ownership requires a genuine openSQLite backend database.");
     assertDatabase.identity();
   }});
+  if(sourceStartup!==undefined){
+    sourceCleanup=runtime.close;
+    const encoded=sourceStartup;sourceStartup=undefined;
+    const completed=await initializeSourceRuntime(runtime,encoded);
+    // Revalidate after this constructor's own final await; lower-layer
+    // completion cannot authorize returning a stale original runtime.
+    (openBackend as any)[SQLITE_INTERNAL].assertSourceRuntimeCompletion(runtime,completed);
+  }
   return runtime;
+  }catch(error){
+    sourceStartup=undefined;
+    try{sourceCleanup?.();}catch(cleanup){throw new AggregateError([error,cleanup],"Original source startup failed and cleanup did not settle.");}
+    throw error;
+  }
 }
 
 // The imported constructor is the immutable anchor for this private lookup.
@@ -3259,7 +3294,10 @@ Object.defineProperty(openBackend, SQLITE_INTERNAL, { value: Object.freeze({
     registered.identity();const database=sourceSQLiteDatabases.get(registered.database)!;
     database.idle();state.current();state.recovery.assertComplete();state.current();database.idle();
   },
-  initializeSourceRuntime(runtime:object):Promise<SourceInitializationResult>{
+  initializeSourceRuntime(runtime:object):Promise<SourceInitializationResult>{return initializeSourceRuntime(runtime);},
+}) });
+
+function initializeSourceRuntime(runtime:object,startup?:string):Promise<SourceInitializationResult>{
     const registered=sourceBackendRuntimes.get(runtime);
     if(!registered)throw new Error("Source initialization requires a genuine live backend runtime.");
     registered.identity();const database=sourceSQLiteDatabases.get(registered.database)!;database.idle();
@@ -3275,12 +3313,8 @@ Object.defineProperty(openBackend, SQLITE_INTERNAL, { value: Object.freeze({
     sourceContexts.set(token,context);
     let encoded:string;
     try{
-      const slot=Symbol.for("clank.provider.source.bootstrap.v1"),descriptor=Reflect.getOwnPropertyDescriptor(globalThis,slot);
-      if(!descriptor||sourceBootstrapConsumed)throw new Error("Source bootstrap is absent or consumed.");
-      sourceBootstrapConsumed=true;
-      if(!Reflect.deleteProperty(globalThis,slot)||Reflect.getOwnPropertyDescriptor(globalThis,slot))throw new Error("Source bootstrap could not be consumed.");
-      if(!("value" in descriptor)||descriptor.writable!==false||descriptor.enumerable!==false||descriptor.configurable!==true||typeof descriptor.value!=="string"||new TextEncoder().encode(descriptor.value).length>16384)throw new Error("Source bootstrap must be bounded own data.");
-      encoded=descriptor.value;
+      encoded=startup===undefined?consumeSourceBootstrap(Symbol.for("clank.provider.source.bootstrap.v1")):startup;
+      startup=undefined;
     }catch(error){state.phase="failed";sourceContexts.delete(token);throw error;}
     state.flight=(async()=>{
       const {openProviderSourceReader}=await import("./provider-handoff.ts");registered.identity();
@@ -3300,8 +3334,7 @@ Object.defineProperty(openBackend, SQLITE_INTERNAL, { value: Object.freeze({
       throw failed?failure:error;
     });
     return state.flight;
-  },
-}) });
+}
 
 function trimBoundarySlashes(value: string): string {
   let start = 0;

@@ -17,8 +17,27 @@ const lines=createInterface({input:process.stdin,crlfDelay:Infinity})[Symbol.asy
 const config=JSON.parse((await lines.next()).value);
 const report=value=>process.stdout.write(JSON.stringify(value)+'\n');
 const schema=defineDatabase({records:defineTable({value:s.string()})});
+let startupCompletion;
+if(['startup','startup-final-native'].includes(config.mode)){
+ const freeze=Object.freeze;Object.freeze=function(value){const result=freeze(value);if(value&&Object.keys(value).length===5&&['captureEpoch','keyId','schemaHash','baseBackupId','observedCursor'].every(key=>Object.hasOwn(value,key))){startupCompletion=result;Object.freeze=freeze;if(config.mode==='startup-final-native')queueMicrotask(()=>{const db=new DatabaseSync(config.database);try{db.prepare('UPDATE clank_pitr_state SET schema_hash=? WHERE id=1').run('f'.repeat(64));}finally{db.close();}});}return result;};
+ Object.defineProperty(globalThis,Symbol.for('clank.provider.source.startup.v1'),{value:JSON.stringify(config.bootstrap),writable:false,enumerable:false,configurable:true});
+}
 const runtimePending=openBackend(defineBackend({schema}).functions(()=>({})),{path:config.database,agent:false,changePollIntervalMs:0});
-if(config.mode==='restart-refuse'){
+if(['startup','startup-final-native'].includes(config.mode)){
+ assert.equal(Object.hasOwn(globalThis,Symbol.for('clank.provider.source.startup.v1')),false);
+ await assert.rejects(openBackend(defineBackend({schema}).functions(()=>({})),{path:config.database+'.second',agent:false}),/constructor is already reserved/);
+ assert.equal(fs.existsSync(config.database+'.second'),false);
+ if(config.mode==='startup-final-native'){
+  await assert.rejects(runtimePending,/another SQLite writer|changed/);assert.ok(startupCompletion);await new Promise(resolve=>setTimeout(resolve,0));
+  const retained=fs.readdirSync('/proc/self/fd').flatMap(fd=>{try{const path=fs.readlinkSync('/proc/self/fd/'+fd);return path===config.database||path.startsWith(config.app+'/.clank-source-recovery-')||path==='/run/clank-source'||path==='/run/clank-source/catalog.sqlite'?[path]:[];}catch{return [];}});assert.deepEqual(retained,[]);report({ok:true,constructorRejected:true,pinsReleased:true});
+ }else{const runtime=await runtimePending;try{
+  assert.ok(startupCompletion);openBackend[SQLITE_INTERNAL].assertSourceRuntimeCompletion(runtime,startupCompletion);
+  assert.throws(()=>runtime.database.transaction(()=>{}),/no ordinary write permission/);
+  assert.throws(()=>openBackend[SQLITE_INTERNAL].initializeSourceRuntime(runtime),/already been attempted/);
+  report({phase:'initialized',completion:startupCompletion,constructorReserved:true});
+  await lines.next();openBackend[SQLITE_INTERNAL].assertSourceRuntimeCompletion(runtime,startupCompletion);report({ok:true,records:runtime.database.read(tx=>tx.table('records').collect()).length});
+ }finally{runtime.close();}}
+}else if(config.mode==='restart-refuse'){
  let runtime;
  try{runtime=await runtimePending;}catch(error){
   assert.ok(error instanceof Error);

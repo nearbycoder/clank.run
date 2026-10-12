@@ -9,10 +9,16 @@ import {defineAuth} from '../dist/auth.js';
 import {defineJobs} from '../dist/jobs.js';
 import {s} from '../dist/ai.js';
 import {SQLITE_INTERNAL} from '../dist/sqlite-internal.js';
+import {spawnSync} from 'node:child_process';
 
 const schema=defineDatabase({records:defineTable({value:s.string()})});
 const definition=()=>defineBackend({schema}).functions(()=>({}));
 const check=runtime=>openBackend[SQLITE_INTERNAL].assertSourceRuntime(runtime);
+for(const mode of ['ordinary','accessor','polluted-accessor','writable','enumerable','fixed','non-string','oversized','utf8','jobs','database','inherited-database','bad-protocol','cleanup'])test('explicit constructor source startup '+mode+' preserves its one-shot boundary',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'clank-source-constructor-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ const result=spawnSync(process.execPath,['--no-warnings','tests/fixtures/backend-source-startup.mjs',mode,root],{encoding:'utf8',timeout:20000});
+ assert.equal(result.status,0,result.stderr);assert.equal(result.signal,null);assert.equal(JSON.parse(result.stdout).passed,true);
+});
 async function fixture(t,backend=definition(),options={}){
   const root=await mkdtemp(join(tmpdir(),'clank-runtime-brand-'));
   const runtime=await openBackend(backend,{path:join(root,'data.sqlite'),changePollIntervalMs:0,agent:false,...options});
@@ -41,6 +47,11 @@ test('uninitialized and copied completion claims refuse before getters without r
   assert.equal(reads,0);check(runtime);
   runtime.database.transaction(db=>db.table('records').insert({value:'ordinary support remains'}));
   assert.equal(runtime.database.read(db=>db.table('records').collect()).length,1);
+});
+test('manual initialization cannot receive a constructor bootstrap through an extra public argument',async t=>{
+ const runtime=await fixture(t);
+ assert.throws(()=>openBackend[SQLITE_INTERNAL].initializeSourceRuntime(runtime,'{}'),/absent or consumed/);
+ assert.throws(()=>runtime.database.transaction(()=>{}),/unavailable/);
 });
 test('runtime database and definition replacements refuse even when structurally identical',async t=>{
   const runtime=await fixture(t),database=runtime.database,backend=runtime.definition;
