@@ -12,7 +12,7 @@
   "scope": "Private raw UNIX framing and native socket/ChildProcess ownership. Filesystem capabilities do not authenticate a source or authorize provider SQLite work.",
   "implementation": {
     "module": "src/provider-source-worker-wire.ts",
-    "sha256": "f84575cf2dd31128520a4388e24e25eff4c1f7b6f6a502431e788362ff267aef",
+    "sha256": "dcdea2fcf786e59b93a9809b8b89dc11be9d48916182747030667d562365bf72",
     "directories": "Three original retained, distinct private native Linux directory capabilities: listener, empty disposal and public mount directory; caller retains them through actual close. No caller paths or adopted endpoints.",
     "socket": "Relative private bind, mode0600, original O_PATH socket FD, one known hardlink in public directory. Both links and directory identities checked before receive/reply/delivery.",
     "broker": "Fixed script in exact owned ChildProcess, cleared inherited/ambient capabilities, no-new-privileges, existing SQLite resource bounds, 64MiB Node heap and fixed minimal environment; no source/control key in child.",
@@ -65,6 +65,16 @@
       "finding": "Reused caller directory FD numbers must not become cleanup authority.",
       "kind": "Code inspection.",
       "fix": "Require genuine still-open directory capabilities and original retained directory dev/ino during cleanup."
+    },
+    {
+      "finding": "A streaming UTF-8 decoder hides an incomplete suffix after a newline, allowing an invalid wire frame to be delivered.",
+      "evidence": "trailing-utf8-original-19.log: expected rejection fails against original96c6ffb native broker.",
+      "fix": "Require the received chunk final native byte to be the newline; retain strict decoded line, UTF-8 and native byte checks. Two corrected suffix regressions pass."
+    },
+    {
+      "finding": "Embedded bootstrap static imports match the release browser-import deferral scan.",
+      "evidence": "full-check26-14.log:3757 reported/3719 passes/one browser-import gate failure/zero cancellations/37 existing skips; all18 original broker cases pass.",
+      "fix": "The fixed child loads native net/fs modules dynamically. browser-import-corrected-21.log passes without modifying the test or its gate."
     }
   ],
   "nativeEvidence": {
@@ -75,11 +85,12 @@
       "socket-owned-close-probe-04.json"
     ],
     "retainedFailure": "socket-owned-close-probe-03.mjs failed because fixture quoting produced invalid child syntax; empty output does not prove socket behavior.",
-    "focusedNode22": "focused22-final-15.log:169 tests/169 passes/zero failures, cancellations or skips",
-    "focusedNode24": "focused24-final-15.log:169 tests/169 passes/zero failures, cancellations or skips",
-    "transportCases": 18,
-    "earlierNode26": "native-transport26-13.log:17 tests passed before the final cleanup-capability check and socket-mode regression. Final18 cases are included in the complete release gate.",
-    "typeContracts": "54 packed positive/negative fixtures;149 inherited/zero new diagnostics relative to154 baseline."
+    "focusedNode22": "Original head:focused22-final-15.log169/169 passed; corrected focused22-corrected-21.log still running.",
+    "focusedNode24": "Original head:focused24-final-15.log169/169 passed; corrected focused24-corrected-21.log still running.",
+    "transportCases": 20,
+    "earlierNode26": "Original head96c6ffb: full-check26-14.log passes all18 native broker cases but fails the browser import gate. This is not a completed release gate.",
+    "typeContracts": "types-corrected-21.log:54 packed fixtures;149 inherited/zero new diagnostics relative to154 baseline.",
+    "correctedNode26": "native-transport26-corrected-20.log:20 tests/20 passes/zero failures, cancellations or skips."
   },
   "release": {
     "pairedOutputs": 321,
@@ -88,10 +99,10 @@
       "provider-source-worker-wire.js"
     ],
     "files": 450,
-    "unpackedBytes": 7013546,
+    "unpackedBytes": 7013658,
     "ceilingBytes": 8388608,
     "dependencies": 0,
-    "localGate": "In progress; terminal outcome required before delivery.",
+    "localGate": "Corrected full-check26-corrected-21.log in progress; terminal outcome required before delivery.",
     "hostedGate": "Not yet published; all eight exact-head hosted checks and protected merge required."
   },
   "notClaimed": [

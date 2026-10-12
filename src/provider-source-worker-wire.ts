@@ -235,7 +235,7 @@ export function createSourceWorkerServerProtocol(controlSecret: Uint8Array, iden
 // formatting mint provider/source authority. Its caller must retain the genuine
 // grant/container/worker and use the authenticated protocol before execution.
 const SOCKET_BROKER_BOOTSTRAP = `
-import net from 'node:net';import fs from 'node:fs';
+const net=await import('node:net'),fs=await import('node:fs');
 const send=value=>process.stdout.write(JSON.stringify(value)+'\\n');
 let client,used=false,pending=false,closed=false,input='',command='',requests=0,frameBytes=0,frameTimer;
 const incoming=new TextDecoder('utf-8',{fatal:true}),commands=new TextDecoder('utf-8',{fatal:true});
@@ -247,7 +247,8 @@ const server=net.createServer(socket=>{
  socket.on('data',chunk=>{
   if(closed||pending||(frameBytes+=chunk.length)>2049){dispose();return;}
   try{input+=incoming.decode(chunk,{stream:true});}catch{dispose();return;}const end=input.indexOf('\\n');if(end<0)return;
-  if(end!==input.length-1||Buffer.byteLength(input.slice(0,end))>2048||input.includes('\\r')||input.includes('\\uFFFD')){dispose();return;}
+  // A streaming decoder can hide an incomplete suffix after the newline.
+  if(chunk[chunk.length-1]!==10||end!==input.length-1||Buffer.byteLength(input.slice(0,end))>2048||input.includes('\\r')||input.includes('\\uFFFD')){dispose();return;}
   if(++requests>3){dispose();return;}clearTimeout(frameTimer);frameTimer=setTimeout(dispose,30000);pending=true;send({kind:'request',body:input.slice(0,end)});input='';
  });
 });

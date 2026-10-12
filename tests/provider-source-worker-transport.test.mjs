@@ -69,3 +69,7 @@ test('broker refuses directory replacement before delivering a waiting frame',li
 test('broker checks the pinned socket mode before delivering a waiting frame',linux,async t=>{
  const f=await fixture(t),b=await f.open(),s=f.connect();await connected(s);const incoming=b.receive(),rejected=assert.rejects(incoming,/socket identity/);fs.chmodSync(b.socketPath,0o666);s.write('one\n');await rejected;await b.close();assert.equal(fs.existsSync(b.socketPath),false);
 });
+
+for(const suffix of [[195],[226,130]])test('broker refuses incomplete UTF-8 after the newline: '+suffix.join(','),linux,async t=>{
+ const f=await fixture(t),b=await f.open(),s=f.connect();await connected(s);const pending=b.receive(),rejected=assert.rejects(pending,/closed/);s.write(Buffer.concat([Buffer.from('one\n'),Buffer.from(suffix)]));await rejected;await b.close();
+});
