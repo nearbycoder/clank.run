@@ -46,6 +46,32 @@ const measuredCoverage = {
   ].join("\n"),
 };
 
+test("exact empty native coverage artifact permits only one all-pass retry", async () => {
+  const warning = "Error [ERR_OPERATION_FAILED]: Operation failed: coverage file is empty: /home/nearby/.ct987adb7/node-coverage-s8rjLI/coverage-1000475-1791808766422-0.json";
+  const artifact = { ...truncatedCoverage, outputTail: truncatedCoverage.outputTail.replace("SyntaxError: Unexpected end of JSON input", warning) };
+  assert.equal(isRetryableCoverageArtifactFailure(artifact), true);
+  for (const outputTail of [
+    artifact.outputTail + "not ok 12 - actual failure\n",
+    artifact.outputTail + "ERROR: Coverage for lines (79%) does not meet global threshold (80%)\n",
+    artifact.outputTail.replace("# fail 0", "# fail 1"),
+    artifact.outputTail.replace("# cancelled 0", "# cancelled 1"),
+    artifact.outputTail.replace("# tests 372", "# tests 373"),
+    artifact.outputTail.replace("# pass 372", "# pass 0"),
+    artifact.outputTail.replace("# skipped 0\n", ""),
+    artifact.outputTail.replace("coverage-1000475-1791808766422-0.json", "unknown.json"),
+    artifact.outputTail.replace("node-coverage-s8rjLI", "other-directory"),
+    artifact.outputTail.replace("coverage file is empty", "permission denied"),
+    artifact.outputTail.replace(".json\n", ".json additional error\n"),
+  ]) assert.equal(isRetryableCoverageArtifactFailure({ ...artifact, outputTail }), false);
+  for (const code of [0, 2]) assert.equal(isRetryableCoverageArtifactFailure({ ...artifact, code }), false);
+  let calls = 0;
+  await runCoverageGate({ execute: async () => ++calls === 1 ? artifact : measuredCoverage, writeDiagnostic: () => {} });
+  assert.equal(calls, 2);
+  calls = 0;
+  await assert.rejects(runCoverageGate({ execute: async () => { calls++; return artifact; }, writeDiagnostic: () => {} }), /single coverage-artifact retry/u);
+  assert.equal(calls, 2);
+});
+
 test("malformed property-name coverage artifacts get one retry only after every test passes", async () => {
   const diagnostic = "Expected property name or '}' in JSON at position 483328 (line 1 column 483329)";
   for (const prefix of ["SyntaxError: ", "Error [ERR_OPERATION_FAILED]: Operation failed: failed to parse coverage file /tmp/node-coverage-fixture/coverage-2-0.json: "]) {

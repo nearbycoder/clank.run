@@ -175,7 +175,7 @@ async function projectSourceTask(
   const [fs, path] = await Promise.all([import(fsName), import(pathName)]);
   current();
   const process = (globalThis as any).process;
-  if (process.platform !== "linux" || context?.getStore() === "trusted-process") {
+  if (process.platform !== "linux" || context?.getStore() === "trusted-process" && !authority.remoteWorker) {
     throw new Error("Private source workers require default Linux namespace isolation.");
   }
   const binding = authority.binding;
@@ -285,6 +285,12 @@ async function runSQLiteTaskOwned<T>(module: SQLiteTaskModule, operation: string
   current();
   if (authority) {
     const projection = await projectSourceTask(authority, module, operation, args, directories);
+    if (authority.remoteWorker) {
+      // Only the genuine captured backend context carries this fixed client.
+      // Project/validate original local capabilities first; no path, descriptor,
+      // SQL, callback or application execution policy crosses the wire.
+      current();const result = await authority.remoteWorker.execute(projection.request);current();return result as T;
+    }
     // Retain approved own data across admission/import waits. Caller arrays may
     // change after validation; they must never rebind the eventual worker.
     args = projection.arguments;

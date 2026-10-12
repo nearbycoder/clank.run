@@ -3262,7 +3262,7 @@ Object.defineProperty(openBackend, SQLITE_INTERNAL, { value: Object.freeze({
     const token=Object.freeze({});state.token=token;
     const context=Object.freeze({token,database:registered.database,path:database.path,current:()=>state.current(),write:()=>state.write(),control:database.control,capture:database.capture,
       assertInitialized(){state.current();if(state.phase!=="initialized")throw new Error("Source initialization has not completed.");database.idle();},
-      get binding(){state.current();return state.reader!.binding;},get key(){state.current();return state.reader!.key;}});
+      get binding(){state.current();return state.reader!.binding;},get key(){state.current();return state.reader!.key;},get remoteWorker(){state.current();return state.reader!.worker;}});
     sourceContexts.set(token,context);
     let encoded:string;
     try{
@@ -3283,7 +3283,7 @@ Object.defineProperty(openBackend, SQLITE_INTERNAL, { value: Object.freeze({
       // Own cleanup before any post-await validation can reject or observe close.
       const initialized=await (openPointInTimeRecovery as any)[SQLITE_INTERNAL].initializeSource(token);state.recovery=initialized;
       state.current();if(state.phase!=="initializing")throw new Error("Source initialization was closed.");
-      database.idle();state.phase="initialized";const result=initialized.complete();context.assertInitialized();return result;
+      database.idle();state.phase="initialized";const result=initialized.complete();context.assertInitialized();state.reader.worker?.complete();return result;
     })().catch(async error=>{
       if(state.phase!=="closed")state.phase="failed";sourceContexts.delete(token);let failed=false,failure:unknown;
       try{state.reader?.close();}catch(cleanup){failed=true;failure=cleanup;}

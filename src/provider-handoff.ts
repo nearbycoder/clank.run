@@ -209,14 +209,15 @@ function bridgeCatalog(c:Context,db:any,root:Row,project:Row,reservations:Row[])
 export async function openProviderSourceReader(encoded:string){
   if(typeof encoded!=="string"||new TextEncoder().encode(encoded).length>16384)fail("Invalid source bootstrap.");
   const input=JSON.parse(encoded);if(JSON.stringify(input)!==encoded)fail("Source bootstrap must use canonical JSON.");encoded="";
-  if(!exact(input,["protocol","binding","bindingSha256","containerId","catalogPath","grantSecret","controlSecret","recoveryKey"])||input.protocol!=="clank-provider-source-bootstrap/1"||input.catalogPath!=="/run/clank-source/catalog.sqlite"||!match(input.bindingSha256,DIGEST)||!match(input.containerId,DIGEST))fail("Invalid source bootstrap.");
+  const fields=["protocol","binding","bindingSha256","containerId","catalogPath","grantSecret","controlSecret","recoveryKey"],remote=input.protocol==="clank-provider-source-bootstrap/2";
+  if(!exact(input,remote?[...fields,"workerChannel"]:fields)||!remote&&input.protocol!=="clank-provider-source-bootstrap/1"||input.catalogPath!=="/run/clank-source/catalog.sqlite"||!match(input.bindingSha256,DIGEST)||!match(input.containerId,DIGEST))fail("Invalid source bootstrap.");
   const fsName="node:fs",pathName="node:path",sqliteName="node:sqlite",cryptoName="node:crypto";
   const [fs,path,{DatabaseSync},crypto]=await Promise.all([import(fsName),import(pathName),import(sqliteName),import(cryptoName)]);
   const process=(globalThis as any).process,Buffer=(globalThis as any).Buffer,secrets:Uint8Array[]=[];
   const hash=(value:string|Uint8Array)=>crypto.createHash("sha256").update(value).digest("hex");
   const c={fs,path,Database:DatabaseSync,hash,pins:[],marked:true} as unknown as Context;
-  let closed=false,version=0,recorded="";
-  const close=()=>{if(closed)return;closed=true;for(const key of secrets)key.fill(0);releasePins(c,0);};
+  let closed=false,version=0,recorded="",worker:Awaited<ReturnType<typeof import("./provider-source-worker-wire.ts").openSourceWorkerSocketClient>>|undefined;
+  const close=()=>{if(closed)return;closed=true;try{worker?.close();}finally{for(const key of secrets)key.fill(0);releasePins(c,0);}};
   try{
     if(process.platform!=="linux"||!process.getuid?.()||!process.getgid?.())fail("Source bootstrap requires its fixed native non-root user.");
     for(const name of ["grantSecret","controlSecret","recoveryKey"]){const text=input[name];if(!match(text,/^[A-Za-z0-9_-]{43}$/u))fail("Invalid source bootstrap key.");const key=Buffer.from(text,"base64url");secrets.push(key);delete input[name];if(key.length!==32||key.toString("base64url")!==text)fail("Invalid source bootstrap key.");}
@@ -250,9 +251,16 @@ export async function openProviderSourceReader(encoded:string){
         if(records.transfer||records.operations.length||records.spools.length||!grant||grant.id!==1||grant.protocol!==2||grant.grant_id!==binding.grantId||grant.binding_json!==json||grant.binding_sha256!==input.bindingSha256||grant.grant_secret_sha256!==hash(secrets[0])||grant.control_secret_sha256!==hash(secrets[1])||!["created","started"].includes(grant.state)||grant.container_id!==input.containerId||grant.readiness_json!==null||grant.readiness_sha256!==null)fail("Source grant does not permit bootstrap initialization.");
         db.exec("COMMIT");current();version=state.version;recorded=mirror;
       }finally{db?.close();}
-      current();
+      current();worker?.assertCurrent();
     };
-    assertCurrent();return Object.freeze({binding,key:secrets[2],assertCurrent,close});
+    assertCurrent();
+    if(remote){
+      const channel=input.workerChannel;
+      if(!exact(channel,["bindingSha256","containerId","sourceIncarnation","channelId"])||channel.bindingSha256!==input.bindingSha256||channel.containerId!==input.containerId||channel.sourceIncarnation!==binding.sourceIncarnation)fail("Source worker channel differs from its original bootstrap.");
+      const wire=await import("./provider-source-worker-wire.ts");assertCurrent();
+      worker=await wire.openSourceWorkerSocketClient(secrets[1],channel as import("./provider-source-worker-wire.ts").SourceWorkerChannelBinding,binding.uid,binding.gid);assertCurrent();
+    }
+    return Object.freeze({binding,key:secrets[2],assertCurrent,close,worker});
   }catch(error){close();throw error;}
 }
 function bridgeCurrent(bridge:ProviderHandoffBridge,live=false):BridgeContext&{context:Context}{

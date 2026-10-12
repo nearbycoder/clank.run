@@ -1,0 +1,127 @@
+{
+  "feature": 7,
+  "base": "987adb7e8254b2db0cca0c8bf37883eab1741855",
+  "acceptance": {
+    "accepted": 29,
+    "pending": 11,
+    "complete": false
+  },
+  "scope": "Explicit v2 bootstrap connects only the original captured backend source context to a fixed bounded native socket client; the source owns capture, encrypted repository publication and independent original-connection completion, and the genuine provider worker owns only three SQLite operations. Existing v1 bootstrap remains opt-in local workers and ordinary writes remain fenced.",
+  "files": {
+    "src/provider-source-worker-wire.ts": "1b2926c0b814e862df7afb2ea829eecc200e0f367410f10c62b2f1e0a25ecf12",
+    "src/provider-handoff.ts": "fec386bada4c185501a48405636b47bedfdf6a151178403b057d6ca6c9db6521",
+    "src/backend.ts": "7bd4420b99aab573fd10f0fc7308520229ef91ffc06aad41028cbd1785658f4a",
+    "src/sqlite-task.ts": "0b8ebd19620c7ce02153d7c06afae096fb5c6e4e28c5d31868b87a0c922e5185",
+    "tests/provider-source-worker-client.test.mjs": "a12053eef83600d87582fc52bbd7751210c4e898a066ebd797a5b3ebc743a2b7",
+    "tests/fixtures/provider-source-bootstrap-native.mjs": "933beb76d2085b81c42f09f1c824c33f81b025ebbab4e8868c55b47336ee043f",
+    "scripts/coverage-gate.mjs": "b80dfd5af1a6e6f5e68b0260a794302715bc432c5ced23b3985ffe3b64989f49",
+    "tests/test-coverage.test.mjs": "c6e12bda39a33be29edb7c1709ea574f776714ab0af946143f32ecae6ffca003",
+    "src/data-plane.ts": "b3c95e739f949d470698eec3a1690a8434a0efa614eb13f9d46a500957e36b27",
+    "tests/managed-canary-drain.test.mjs": "55f397f36c9d44aa7e44f94635b43962f8457173bc96c8376acfb8c496367a2c"
+  },
+  "boundaries": [
+    "Existing process-global one-shot bootstrap and original backend/database weak registries remain the sole source-token authority. No serialized client/token/policy confers that identity.",
+    "Version2 requires exact original grant/container/source identities and its channel epoch. Current native DELETE-mode catalog is rechecked after acquisition and throughout work; HMAC proves channel correlation, never completion or readiness.",
+    "Fixed /run/clank-source-worker read-only private native mount, native non-root UID/GID, directory/socket original dev/ino and O_PATH pins. One peer, one pending request, three ordered correlated replies; no reconnect or ambiguous replay.",
+    "Native requests/replies retain 2048/8192 byte bounds, fatal streaming UTF-8 and final-native-byte newline, 10-second connect/30-second response deadlines. Errors/close reject the current pending request and zero derived keys.",
+    "Local original four directory capabilities/path projection are validated before remote dispatch. No caller paths, descriptors, SQL, callback, executable or application scope cross the wire. Legacy source tasks and host provider workers retain namespace isolation.",
+    "Three authenticated worker replies grant no native source completion. Keep original peer alive while the source publishes its encrypted repository and completes independent original-connection readback; close only from the genuine backend after that synchronous completion. Peer loss after three replies still invalidates initialization. Afterwards retain original directory/socket pins and allow only original unlink, never replacement.",
+    "Source closure/revocation disconnects original channel and cancels exact owned host work; original host worker retains its native slot/pins until actual close/cleanup. Ordinary writes stay fenced even on failed initialization."
+  ],
+  "verification": {
+    "focused": {
+      "node22": 280,
+      "node24": 280
+    },
+    "rawClientCases": 16,
+    "rawClientQualification": "Real native AF_UNIX sockets/hard links/inode pins/byte streams; only fixed mount pathname and read-only mountinfo modeled. Native container cases independently prove those kernel properties.",
+    "types": {
+      "packed": 54,
+      "inherited": 149,
+      "new": 0
+    },
+    "native": "native-bootstrap-final-matrix-24.json:12 fresh paired final-code cases on original immutable Node22/26 images; original C0 completion, stale channel epoch, mismatched identity, extra bootstrap field, durable revocation and runtime close.",
+    "nativeCancellation": "Four final revocation/close cases terminate their exact owned worker with SIGKILL and actual absence in66-92ms. Original Node descendant samples differ in six namespaces from both live provider/source.",
+    "nativeCleanup": "native-ownership-and-absence-26.json:all31 exact owned containers absent on original daemon; unchanged reserve preserved.",
+    "pairedBuild": "paired-build-38.json:321 identical outputs;5 JS outputs change from protected main,146 public declarations unchanged. Native source proof remains pinned to its unchanged4 core JS outputs.",
+    "package": {
+      "files": 450,
+      "bytes": 7034035,
+      "ceiling": 8388608,
+      "dependencies": 0
+    },
+    "fullGate": {
+      "file": "full-check26-canary-retry-37.log",
+      "completed": true,
+      "exitCode": 0,
+      "counts": {
+        "tests": 3793,
+        "pass": 3756,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 37
+      },
+      "coverage": {
+        "lines": 91.97,
+        "branches": 82.25,
+        "functions": 90.12
+      },
+      "temporaryDirectory": "/home/nearby/.ct987adb7",
+      "qualification": "Fresh final-code full run after native-completion peer lifetime, exact empty coverage-artifact detector and withdrawn-canary retry admission repairs; original owned regular-filesystem temporary directory. No automatic assertion retry or pass claim for prior failure."
+    },
+    "peerLifetimeReview": "old-client-eager-close-22.log:controlled original compiled prototype fails the native socket regression because its peer is already destroyed after three replies. The correction keeps it live; actual subsequent peer loss before complete refuses. Final complete runtime/type/native proofs are pinned to this corrected code.",
+    "coveragePolicy": {
+      "evidence": "empty-coverage-artifact-review-31.json",
+      "focused": {
+        "node22": 9,
+        "node24": 9,
+        "node26": 9
+      },
+      "scope": "Exact Node ERR_OPERATION_FAILED empty native V8 file warning, after complete consistent all-pass counts. At most one isolated retry total; no skip, threshold relaxation, assertion/cancellation retry or successful empty measurement."
+    },
+    "withdrawnCanary": {
+      "gate": "full-check26-empty-artifact-policy-30.log",
+      "counts": {
+        "tests": 3791,
+        "pass": 3753,
+        "fail": 1,
+        "cancelled": 0,
+        "skipped": 37
+      },
+      "complete": false,
+      "exitCode": 1,
+      "coverage": [
+        91.97,
+        82.25,
+        90.12
+      ],
+      "failure": "Existing stalled-canary drain assertion gets502 UPSTREAM_FAILED instead of503 CANARY_UNAVAILABLE. No assertion retry.",
+      "reproduction": "canary-withdrawn-retry-original22-35.log:real native HTTP/SQLite lease remains current after canary withdrawal. Retries0 reproduce502; retries2 send4 candidate requests instead of2.",
+      "fix": "A rejected fetch and every retry must revalidate a fresh frozen admission key. Existing admitted body/drain keeps its original key; no drain receipt can authorize another fetch.",
+      "focused": {
+        "node22": 48,
+        "node24": 48,
+        "nativePlatformDrainNode22": 2,
+        "nativePlatformDrainNode26": 2
+      },
+      "qualification": "Real native HTTP and SQLite lease, no Docker/provider isolation claim for the local canary fixture. Previous source-container proof remains separate."
+    },
+    "hosted": "Fresh exact-head hosted gates and protected merge remain required."
+  },
+  "retainedFailures": [
+    "native-bootstrap22-03.log: original fixture seed table has no primary key; capture correctly rejects before first-base work. Fixture corrected to declared primary key.",
+    "native-bootstrap-matrix-08.json/ interrupted-fixture-identity-09.json:pre-connect negative fixture awaits a request that can never arrive. Original waiting broker released once with a malformed frame to its exact retained inode (interrupted-fixture-cleanup-11.json); no process kill or filesystem bypass. Corrected fixture closes original channel before awaiting rejected dispatch.",
+    "native-bootstrap-matrix-12.json:revocation fixture omits required exact containerId and correctly refuses. Fixture uses original containerId; both runtimes now prove actual durable revocation.",
+    "local-gate-enospc-15.json:full suite reports3789/3751/1/0/37, failing actual coordinator readiness due native coverage ENOSPC. Fresh private TMPDIR on regular filesystem; no cleanup of other files, quota/VM/profile changes or test/gate weakening.",
+    "full-check-old-prototype-20.json:filesystem16 full gate passes the prior prototype, coverage and full release checks. It is retained and superseded by the native peer-lifetime correction, requiring fresh full gate21.",
+    "empty-coverage-artifact-review-31.json:final native-completion code passes all3790/3753/0/0/37 tests but Node cannot measure one empty native artifact. Original detector refuses and gate exits1. The new exact signature preserves all-pass guards, one retry and measured coverage. Raw Node temporary artifact and exact owning-test PID map were not retained by native runner cleanup; neither is claimed.",
+    "withdrawn-canary-retry-review-39.json:full30 reports3791/3753/1/0/37 with measured coverage91.97/82.25/90.12 but fails the stalled-drain assertion. Controlled native reproduction proves two extra candidate requests can reuse original drain permission while the lease remains held. Corrected48-case ingress suites and two real platform drain cases pass on both supported runtimes."
+  ],
+  "remaining": [
+    "Production source launch/health/data-commit ordering and explicit operator enablement",
+    "Source readiness/write admission with complete original native validators",
+    "Barrier/quiescence/seal/tail retention and all provider writer roles stopped",
+    "Stopped target stage/activation, ingress/fallback and original bounded interruption acceptance",
+    "All other10 pending feature scopes"
+  ]
+}
