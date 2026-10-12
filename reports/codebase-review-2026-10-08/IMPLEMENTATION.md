@@ -6,6 +6,10 @@ Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Twe
 
 A feature is complete only when its documented acceptance evidence exists. Proposed contracts do not count as implemented features. The review baseline remains historical evidence; this ledger records subsequent work.
 
+## Source cancellation fixture contention correction
+
+PR380's original head passes seven hosted gates, including the complete packaged gate and Node22 suite, but Node24 reports one failure at the new revocation fixture's COMMIT: native SQLiteerr5. A real retained reader reproduces the same commit refusal; the failed transaction rolls back. The corrected cancellation fixtures wait at most one second for that reader lock, execute the mutation body once, and independently prove revoked state and one catalog version increment. The original CI reader connection/timing was not sampled; watcher contention is an inference from the code and reproduced native condition. Production code and all321 compiled outputs remain unchanged. The corrected153-case runtime/sandbox/wire selection passes on Node22/24/26. The final probe owns a20-second failure cleanup deadline. Corrected full local and all eight hosted gates remain required; no unchanged-head rerun or green delivery is claimed. [Cancellation review](source-worker-cancellation-review.json).
+
 ## Source worker cancellation review
 
 Original constructor-minted source tasks now cancel queued admission and terminate their exact owned native worker when retained source authority is lost. Rejection waits for the actual child close; sandbox cleanup and scheduler release follow it. Queued cancellation removes only its own entry, and aborting an already admitted task cannot release its slot early. Existing fixed source projection, default namespaces, resource bounds and ordinary workers retain their contracts. [Cancellation review](source-worker-cancellation-review.json).

@@ -25,7 +25,7 @@ async function fixture(t){
  const binding={protocol:'clank-provider-source-grant/1',enablementId:bridge.enablementId,indexId:identity.indexId,catalogId:project.catalogId,domainSha256:identity.domainSha256,projectId:'source_project',releaseId:'source_release',generation:1,capsuleSha256:'a'.repeat(64),sourceIncarnation:randomUUID(),grantId:randomUUID(),role:'web',instance:0,imageId:'sha256:'+'b'.repeat(64),uid:process.getuid(),gid:process.getgid(),capture:{keyId:'source_key',keySha256:hash(keys[2]),maxTransactionBytes:limits.maxCaptureTransactionBytes,maxStateBytes:limits.maxCaptureStateBytes,maxJournalEntries:limits.maxJournalEntries,maxJournalBytes:limits.maxJournalBytes}};
  await handoff.issueProviderHandoffGrant(bridge,{binding,grantSecretSha256:hash(keys[0]),controlSecretSha256:hash(keys[1])});
  const directory=join(root,'provider','service','handoff','catalogs',project.catalogId),catalog=join(directory,'catalog.sqlite'),containerId='c'.repeat(64);
- const mutate=action=>{const db=new DatabaseSync(catalog);try{db.exec('BEGIN IMMEDIATE');action(db);const records={grant:db.prepare('SELECT * FROM clank_provider_handoff_source_grant').get()??null,transfer:null,operations:[],spools:[]};db.prepare('UPDATE clank_provider_handoff_bridge_state SET version=version+1,records_sha256=? WHERE id=1').run(hash(records));db.exec('COMMIT');}finally{db.close();}};
+ const mutate=(action,{busyTimeoutMs=0}={})=>{assert.ok(Number.isInteger(busyTimeoutMs)&&busyTimeoutMs>=0&&busyTimeoutMs<=1000);const db=new DatabaseSync(catalog);try{db.exec('PRAGMA busy_timeout='+busyTimeoutMs+'; BEGIN IMMEDIATE');action(db);const records={grant:db.prepare('SELECT * FROM clank_provider_handoff_source_grant').get()??null,transfer:null,operations:[],spools:[]};db.prepare('UPDATE clank_provider_handoff_bridge_state SET version=version+1,records_sha256=? WHERE id=1').run(hash(records));db.exec('COMMIT');}finally{db.close();}};
  // Component-only native row setup. This is not the deferred Docker host transition.
  mutate(db=>db.prepare("UPDATE clank_provider_handoff_source_grant SET state='created',container_id=?").run(containerId));
  const bootstrap={protocol:'clank-provider-source-bootstrap/1',binding,bindingSha256:hash(binding),containerId,catalogPath:'/run/clank-source/catalog.sqlite',grantSecret:keys[0].toString('base64url'),controlSecret:keys[1].toString('base64url'),recoveryKey:keys[2].toString('base64url')};
@@ -257,7 +257,7 @@ for(const initialized of [false,true])test('R1 durable API revocation denies act
 for(const loss of ['revocation','backend closure','catalog replacement'])test('native source '+loss+' promptly stops an active owned worker before rejecting initialization',async t=>{
  const f=await fixture(t),p=await child(t,f,'fault',{fault:'worker-active'}),held=await p.next();assert.equal(held.phase,'held');assert.equal(held.label,'worker-active');assert.equal(held.spawns,1);assert.ok(held.pid>0);assert.match(held.birth,/^[0-9]+$/);
  const before=performance.now();
- if(loss==='revocation')f.mutate(db=>db.exec("UPDATE clank_provider_handoff_source_grant SET state='revoked'"));
+ if(loss==='revocation')f.mutate(db=>db.exec("UPDATE clank_provider_handoff_source_grant SET state='revoked'"),{busyTimeoutMs:1000});
  else if(loss==='backend closure')fs.writeFileSync(join(f.app,'cancel-source.json'),'close',{mode:0o600});
  else {fs.copyFileSync(f.catalog,f.catalog+'.replacement');fs.chmodSync(f.catalog+'.replacement',0o600);fs.renameSync(f.catalog+'.replacement',f.catalog);}
  let timer;const result=await Promise.race([p.next(),new Promise((_,reject)=>timer=setTimeout(()=>reject(Error('Revoked source worker is still active after the cancellation bound.')),2000))]).finally(()=>clearTimeout(timer));
@@ -267,7 +267,23 @@ for(const loss of ['revocation','backend closure','catalog replacement'])test('n
 
 test('native queued source revocation cancels promptly without terminating independent ordinary workers',async t=>{
  const f=await fixture(t),p=await child(t,f,'fault',{fault:'worker-queued-cancel'}),held=await p.next();assert.equal(held.phase,'held');assert.equal(held.label,'worker-queued-cancel');assert.equal(held.spawns,2);
- f.mutate(db=>db.exec("UPDATE clank_provider_handoff_source_grant SET state='revoked'"));let timer;
+ f.mutate(db=>db.exec("UPDATE clank_provider_handoff_source_grant SET state='revoked'"),{busyTimeoutMs:1000});let timer;
  const result=await Promise.race([p.next(),new Promise((_,reject)=>timer=setTimeout(()=>reject(Error('Revoked source is still queued after the cancellation bound.')),2000))]).finally(()=>clearTimeout(timer));
  assert.equal(result.ok,true);assert.equal(result.spawns,3,'only a later independent ordinary inspection was added');await p.done();
+});
+
+
+test('native revocation fixture waits for one reader lock without replaying its mutation',async t=>{
+ const f=await fixture(t),before=new DatabaseSync(f.catalog,{readOnly:true});let version;
+ try{version=before.prepare('SELECT version FROM clank_provider_handoff_bridge_state').get().version;}finally{before.close();}
+ const p=spawn(process.execPath,['--input-type=module','--eval',`const {DatabaseSync}=await import('node:sqlite');const db=new DatabaseSync(process.argv[1],{readOnly:true});db.exec('BEGIN');db.prepare('SELECT version FROM clank_provider_handoff_bridge_state').get();process.stdout.write('held\\n');process.stdin.once('data',()=>{process.stdin.pause();setTimeout(()=>{db.exec('ROLLBACK');db.close();},100);});`,f.catalog],{stdio:['pipe','pipe','pipe'],env:{...process.env,NODE_NO_WARNINGS:'1'}});
+ let ended=false,stderr='';p.stderr.on('data',chunk=>stderr+=chunk);
+ const exit=new Promise((resolve,reject)=>{p.once('error',reject);p.once('close',(code,signal)=>{ended=true;resolve({code,signal});});});
+ const timer=setTimeout(()=>p.kill('SIGKILL'),20000);t.after(async()=>{if(!ended)p.kill('SIGKILL');await exit;clearTimeout(timer);});
+ await new Promise((resolve,reject)=>{p.stdout.once('data',chunk=>{try{assert.equal(chunk.toString(),'held\n');resolve();}catch(error){reject(error);}});exit.then(()=>reject(Error('Native reader exited before lock acknowledgment.')),reject);});
+ const revoke=db=>db.exec("UPDATE clank_provider_handoff_source_grant SET state='revoked'");
+ assert.throws(()=>f.mutate(revoke),error=>error.code==='ERR_SQLITE_ERROR'&&error.errcode===5);
+ let calls=0;f.mutate(db=>{calls++;revoke(db);p.stdin.end('release\n');},{busyTimeoutMs:1000});assert.equal(calls,1);
+ assert.deepEqual(await exit,{code:0,signal:null},stderr);
+ const after=new DatabaseSync(f.catalog,{readOnly:true});try{assert.equal(after.prepare('SELECT state FROM clank_provider_handoff_source_grant').get().state,'revoked');assert.equal(after.prepare('SELECT version FROM clank_provider_handoff_bridge_state').get().version,version+1);}finally{after.close();}
 });

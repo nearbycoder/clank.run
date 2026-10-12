@@ -68,22 +68,11 @@
   "sourceSha256": {
     "src/sqlite-task.ts": "265ba448aba8eda9975a0d2eaaf3619b47803c97e879aae92179586b0fc864b1",
     "tests/fixtures/provider-handoff-runtime.mjs": "c63712c1a63b66e8c90705d6409e8e7fe09bcccde692e1b650c842c9ea0077ea",
-    "tests/provider-handoff-runtime.test.mjs": "5902f01672e09d93d12006bee8881fd92ee7263570324d2606f3587d2a63022f",
+    "tests/provider-handoff-runtime.test.mjs": "4792f8b138863b541bf5857685475d604c6182f2c525befb984695c6d540e56c",
     "tests/sqlite-sandbox.test.mjs": "45146319bf0188c484707c6f77fb2dd92e458b91b00da1f32535ac53f270659b"
   },
-  "fullLocalGate": {
-    "counts": {
-      "tests": 3737,
-      "pass": 3700,
-      "fail": 0,
-      "cancelled": 0,
-      "skipped": 37
-    },
-    "logSha256": "d9b6ffc9c495c843d18e6796c6b17b10c538131ee94d432b871254a03f5fb673",
-    "complete": true,
-    "scope": "Framework/examples, dependency contract, coverage, documentation, packed-release conformance and repository/history security passed."
-  },
-  "hostedChecks": "Not yet published; all8 exact-head gates and protected merge remain required.",
+  "fullLocalGate": "Corrected fixture gate running; original production-source gate passed3737/3700/0/0/37.",
+  "hostedChecks": "Original553c4fe head:7 pass; Node24 fails new fixture COMMIT with SQLiteerr5. Corrected head requires all8 fresh checks before protected merge.",
   "finalSourceCancellationSelection": {
     "22": {
       "counts": {
@@ -115,5 +104,66 @@
       },
       "sha256": "6efa0c5d284aa39df9de77dd7ec8e49ebbe879c1cc1ccb4a1de078cb191662c3"
     }
+  },
+  "correctedFocused": {
+    "22": {
+      "counts": {
+        "tests": 153,
+        "pass": 153,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "sha256": "8f83f1d77587172ec81da0646570cd8a091581460122988488e6b7172880acbd",
+      "scope": "Runtime/sandbox/wire suite before final equivalent owned probe timeout guard."
+    },
+    "24": {
+      "counts": {
+        "tests": 153,
+        "pass": 153,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "sha256": "bbfe3d57d110786feb026b74c9b385820dc527fad8d3ddff9d69a3ab6687de2d",
+      "scope": "Runtime/sandbox/wire suite before final equivalent owned probe timeout guard."
+    },
+    "26": {
+      "counts": {
+        "tests": 153,
+        "pass": 153,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "sha256": "025e431438f36e3ea9c1d271495651adbdfccacfee9225b3ce5616be3ed26f18",
+      "scope": "Runtime/sandbox/wire suite before final equivalent owned probe timeout guard."
+    }
+  },
+  "originalFullLocalGate": {
+    "counts": {
+      "tests": 3737,
+      "pass": 3700,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 37
+    },
+    "logSha256": "d9b6ffc9c495c843d18e6796c6b17b10c538131ee94d432b871254a03f5fb673",
+    "complete": true,
+    "scope": "Framework/examples, dependency contract, coverage, documentation, packed-release conformance and repository/history security passed."
+  },
+  "fixtureCorrection": {
+    "originalHead": "553c4fe2355586304682b2d3fb79dedd9821baee",
+    "hostedNode24": {
+      "tests": 3737,
+      "pass": 3699,
+      "fail": 1,
+      "cancelled": 0,
+      "skipped": 37
+    },
+    "failure": "New active-revocation fixture COMMIT collides with a reader lock. Stack points to fixture mutate COMMIT; source watcher reader ownership is inferred from code, not an independently recovered original lock observation.",
+    "reproduction": "An independently owned native SQLite reader retains a shared lock until an explicit command. Original zero-wait fixture COMMIT fails with the same SQLiteerr5 and rolls back. Bounded one-second wait then commits after reader release with one callback invocation, independent revoked-state readback and exactly one catalog version increment.",
+    "change": "Only active/queued cancellation revocation fixtures select a bounded1,000ms native SQLite busy wait. Default zero-wait fixture behavior and all production code remain unchanged; no mutation body or test retry. Owned native probe termination is bounded20seconds and awaits actual close.",
+    "qualification": "Native component evidence. Exact original CI reader connection/timing was not sampled. Native read contention refuses source publication; this does not establish provider-wide stop."
   }
 }
