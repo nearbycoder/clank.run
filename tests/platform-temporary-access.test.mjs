@@ -19,7 +19,7 @@ async function setup(t,subprocess=false) {
   const controlPorts=await reservePlatformTestPorts(),origin='http://127.0.0.1:'+controlPorts.start;
   const f=await fixture(t,subprocess,{publicUrl:origin,organizationSecurity:{},temporaryAccess:{},freshAuthentication:{required:false}});
   t.after(()=>controlPorts.release());
-  const db=new DatabaseSync(join(f.options.dataDirectory,'control.sqlite'));t.after(()=>db.close());
+  const db=new DatabaseSync(join(f.options.dataDirectory,'control.sqlite'));db.exec('PRAGMA busy_timeout=1000');t.after(()=>db.close());
   const recipient=await f.account('temporary-recipient@example.test'),other=await f.account('temporary-other@example.test'),org=f.development.organizationId;
   for(const account of [recipient,other])db.prepare("INSERT INTO clank_platform_memberships VALUES(?,?,'viewer',?,?)").run(org,account.user.id,Date.now(),Date.now());
   await step(f,db,f.owner);await step(f,db,recipient);await f.serve();

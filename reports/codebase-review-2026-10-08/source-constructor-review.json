@@ -9,7 +9,9 @@
     "tests/provider-handoff-runtime.test.mjs": "3eff9c9532db284bd3483db21d23bc4a1c1ea1cda6648f4eb69afb1d44e2273b",
     "tests/fixtures/backend-source-startup.mjs": "58d63f079cfac7ba8b8c3a2f03e5be836a16d73b95ffc310bfe25628deb97654",
     "tests/fixtures/provider-handoff-runtime.mjs": "e41594399a4b6f425f499a9939c9e92331ef3d644988e592bbe5b5d61b1ca8a6",
-    "tests/fixtures/provider-source-startup-native.mjs": "c62d27df611e3497f53791cb82080303d6ac23b528e46f08fd618fcd394a89f9"
+    "tests/fixtures/provider-source-startup-native.mjs": "c62d27df611e3497f53791cb82080303d6ac23b528e46f08fd618fcd394a89f9",
+    "tests/platform-temporary-access.test.mjs": "d58c6e22115a6631c344bca45a821ae2ffef32388ad8b5ab46f74fbb4156858e",
+    "tests/platform.test.mjs": "bacbc434f10832a88b934fac73765e67dc65f31e032ee1a85de7a090c9d54de9"
   },
   "scope": "Explicit original constructor source startup reservation before the first await and native completion before returning a runtime. This does not integrate production launch/health/data ordering or readiness/write admission.",
   "implementation": [
@@ -57,7 +59,7 @@
       "corrected": "Independent original completion assertion after constructor final await; all original catalog/recovery/database pins release before rejection."
     },
     "fullGate": {
-      "file": "full-check26-recovered-21.log",
+      "file": "full-check26-fixture-corrected-37.log",
       "completed": true,
       "exitCode": 0,
       "counts": {
@@ -72,9 +74,9 @@
         "branches": 82.27,
         "functions": 90.11
       },
-      "qualification": "Fresh complete byte-identical final-code gate after exact startup-cleanup recovery on the original owned TMPDIR; no assertion/coverage/skip weakening."
+      "qualification": "Fresh corrected-fixture complete gate; original runtime/source/output/package/host policy unchanged. No automatic retry of assertion failure."
     },
-    "hosted": "Not published yet; fresh final-head hosted checks and protected delivery remain required.",
+    "hosted": "Original c1cec34 head completes with7 passed/Node24 failed. Fresh corrected-head checks and protected delivery required.",
     "interruptedFullGate": {
       "session": 33334,
       "completed": true,
@@ -109,6 +111,90 @@
       "rebuiltOutputsMatch": 321,
       "originalFilesUnchanged": 23,
       "activeWorktreeLocked": true
+    },
+    "supersededLocalFullGate": {
+      "file": "full-check26-recovered-21.log",
+      "completed": true,
+      "exitCode": 0,
+      "counts": {
+        "tests": 3815,
+        "pass": 3778,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 37
+      },
+      "coverage": {
+        "lines": 91.98,
+        "branches": 82.27,
+        "functions": 90.11
+      },
+      "qualification": "Fresh complete byte-identical final-code gate after exact startup-cleanup recovery on the original owned TMPDIR; no assertion/coverage/skip weakening."
+    },
+    "hostedFixtureCorrections": {
+      "pullRequest": 386,
+      "originalHead": "c1cec340bbe6c8d4d4404fda5ab050572e756aed",
+      "originalHosted": {
+        "allChecksTerminal": true,
+        "pass": 7,
+        "fail": 1,
+        "failedJob": 114919680842,
+        "runtimeCounts": {
+          "tests": 3815,
+          "pass": 3776,
+          "fail": 2,
+          "cancelled": 0,
+          "skipped": 37
+        },
+        "failures": [
+          {
+            "test": "SIGKILL of the native controller retires active privileges and preserves historical exact receipts",
+            "cause": "Fixture native membership seed INSERT uses default zero busy timeout while another writer holds control.sqlite; hosted code5 at setup line24. Exact holder not identified by hosted trace.",
+            "controlled": "native-seed-lock-before-after-34.log proves immediateSQLITE_BUSY with timeout0, versus one inserted row after a separately held writer releases with bounded1000ms native wait."
+          },
+          {
+            "test": "workspace usage is durable, transparent, deletion-safe, and admission-enforced",
+            "cause": "Test expects rate denial using earlier requests without pinning the minute window. Controlled next-minute request reproduces200 vs429.",
+            "controlled": "usage-minute-boundary-before-33.log retains original429 assertion with Date.now advanced to prior recorded window+60001; source legitimately admits the new window."
+          }
+        ]
+      },
+      "corrections": {
+        "nativeSeed": "tests/platform-temporary-access.test.mjs adds only PRAGMA busy_timeout=1000 to its native seed connection; one mutation, no manual retry/threshold/role changes.",
+        "clock": "tests/platform.test.mjs pins only Date with native test mock timer while retaining real process/network timers; all original quota/count/privacy/deletion assertions remain.",
+        "focused": {
+          "node22": {
+            "temporaryAccess": 11,
+            "usage": 1,
+            "exitCode": 0,
+            "sessions": [
+              31647,
+              74088
+            ]
+          },
+          "node24": {
+            "temporaryAccess": 11,
+            "usage": 1,
+            "exitCode": 0,
+            "sessions": [
+              21809,
+              80658
+            ]
+          }
+        },
+        "runtimeSourcesUnchanged": true,
+        "compiledOutputsUnchanged": 321,
+        "nativeConstructorProofStillApplies": true
+      },
+      "autoMergeDisabled": true,
+      "freshFullGate": {
+        "session": 61442,
+        "confirmedLive": true,
+        "file": "full-check26-fixture-corrected-37.log",
+        "inputs": "full-gate-corrected-inputs-37.json",
+        "terminalReceiptRequired": true
+      },
+      "acceptance": "29/40 unchanged",
+      "next": "After actual fresh terminal success, verify eight frozen inputs/all321 outputs, save and restore only19 owned generated example diffs, update report/ledger/body to retain original hosted failure and corrected proofs, commit and push corrected PR386 head, require new exact-head all8 checks and protected merge."
     }
   },
   "remaining": [

@@ -6,6 +6,14 @@ Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Twe
 
 A feature is complete only when its documented acceptance evidence exists. Proposed contracts do not count as implemented features. The review baseline remains historical evidence; this ledger records subsequent work.
 
+## Hosted fixture boundary corrections for constructor delivery
+
+PR386's original c1cec34 head completes all eight hosted jobs: seven pass and Node24 fails two cases,3815 tests /3776 passes /two failures /zero cancellations /37 existing skips. The temporary-access setup INSERT has default zero busy wait and loses to a concurrent native writer; the hosted trace reports SQLite code5 but does not identify the holder. A controlled native two-process test reproduces immediate SQLITE_BUSY with timeout0, then one exact insertion after a separately held writer releases under a bounded1000ms native wait. Only the fixture seed connection gains that wait; no manual mutation retry, permission relaxation or production change.
+
+The usage test assumes its earlier requests and later rate denial stay in one minute. A controlled actual next-minute request reproduces200 versus the original429 assertion. The corrected story pins only Date with the native test mock while keeping real process/network timers and every quota/count/privacy/deletion assertion. All12 affected cases pass on Node22 and Node24. Runtime code, all321 outputs,146 declarations, package450 files /7,037,232 bytes and native constructor proofs remain unchanged. The fresh complete local gate passes3815/3778/0/0/37, measured coverage91.98/82.27/90.11, including conformance/docs/dependency/repository/history security. Original hosted failure, controlled reproductions and prior successful local gate are retained. [Constructor/fixture review](source-constructor-review.json).
+
+Auto-merge is disabled while the corrected head is under review. Fresh final-head hosted all8 checks and protected delivery remain required. This repairs verification; original feature scope and **29/40** acceptance remain unchanged.
+
 ## Original constructor source startup reservation
 
 An explicit private startup slot reserves the first original backend constructor before any await, consumes only bounded own data, and refuses later constructors even after failure. Supplied databases and declared jobs are rejected before native opening. The genuine constructor retains original cleanup while building, then initializes through the shared private source helper before returning its runtime. Ordinary no-slot startup and manual initialization remain supported; extra public initialization arguments cannot supply a private constructor bootstrap. This grants no readiness or ordinary-write permission. [Constructor review](source-constructor-review.json).
