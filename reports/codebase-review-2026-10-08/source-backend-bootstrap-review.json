@@ -106,7 +106,28 @@
       },
       "qualification": "Real native HTTP and SQLite lease, no Docker/provider isolation claim for the local canary fixture. Previous source-container proof remains separate."
     },
-    "hosted": "Fresh exact-head hosted gates and protected merge remain required."
+    "hosted": {
+      "pullRequest": "https://github.com/nearbycoder/clank.run/pull/384",
+      "reviewedHead": "812b52cdb443bb12e07becc1c9adcced507dfefa",
+      "protectedMain": "c21308cf962c7441577ef3571a729157d7003d55",
+      "tree": "6d0d8e619a46649fca1d2e79a88103f9ee5e4cbe",
+      "allChecksPass": 8,
+      "counts": {
+        "tests": 3793,
+        "pass": 3756,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 37
+      },
+      "logs": [
+        "terminal-node24-47.json",
+        "terminal-node22-48.json",
+        "terminal-package-48.json"
+      ],
+      "qualification": "Returned hosted terminal logs are truncated. Only actual returned terminal counts are claimed; current exact-head check statuses independently prove all8 checks passed. Normal protection, identical reviewed squash tree, original roots and23 original files verified.",
+      "originalFilesUnchanged": 23,
+      "pairedOutputsUnchanged": 321
+    }
   },
   "retainedFailures": [
     "native-bootstrap22-03.log: original fixture seed table has no primary key; capture correctly rejects before first-base work. Fixture corrected to declared primary key.",

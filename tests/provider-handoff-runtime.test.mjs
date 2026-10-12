@@ -160,6 +160,17 @@ test('revocation while native worker admission is queued releases ownership with
 
 for(const code of ['EACCES','ENOENT'])for(const when of [1,2])test('unavailable proc enumeration '+code+' at observation '+when+' preserves ordinary writes without source authority',async t=>{const root=await mkdtemp(join(tmpdir(),'clank-native-proc-denied-')),path=join(root,'source.sqlite');t.after(()=>rm(root,{recursive:true,force:true}));const original=fs.readdirSync;let reads=0,runtime;fs.readdirSync=function(file,...args){if(file==='/proc/self/fd'&&++reads===when)throw Object.assign(new Error('native observation unavailable'),{code});return original.call(this,file,...args);};syncBuiltinESMExports();try{runtime=await openBackend(defineBackend({schema:defineDatabase({records:defineTable({value:s.string()})})}).functions(()=>({})),{path,agent:false,changePollIntervalMs:0});runtime.database.transaction(db=>db.table('records').insert({value:'ordinary'}));assert.equal(runtime.database.read(db=>db.table('records').collect()).length,1);assert.throws(()=>openBackend[SQLITE_INTERNAL].assertSourceRuntime(runtime),/unambiguous/);}finally{fs.readdirSync=original;syncBuiltinESMExports();runtime?.close();}assert.equal(fs.readdirSync('/proc/self/fd').some(fd=>{try{return fs.readlinkSync('/proc/self/fd/'+fd)===root;}catch{return false;}}),false);});
 
+for(const change of ['created-advance','started-advance','started-regression'])test('original completion refuses '+change+' catalog replay and cannot revive after row restoration',async t=>{
+ const f=await fixture(t);
+ if(change!=='created-advance')f.mutate(db=>db.exec("UPDATE clank_provider_handoff_source_grant SET state='started'"));
+ const before=new DatabaseSync(f.catalog,{readOnly:true});let grant,metadata;
+ try{grant=before.prepare('SELECT state FROM clank_provider_handoff_source_grant WHERE id=1').get();metadata=before.prepare('SELECT version,records_sha256 FROM clank_provider_handoff_bridge_state WHERE id=1').get();}finally{before.close();}
+ const p=await child(t,f,'completion-recheck');assert.deepEqual(await p.next(),{phase:'initialized'});
+ f.mutate(db=>{if(change==='started-regression')db.exec("UPDATE clank_provider_handoff_source_grant SET state='created'");});
+ p.send({attempt:1});assert.deepEqual(await p.next(),{phase:'completion-refused',attempt:1,catalogPinsReleased:true});
+ const restored=new DatabaseSync(f.catalog);try{restored.exec('BEGIN IMMEDIATE');restored.prepare('UPDATE clank_provider_handoff_source_grant SET state=? WHERE id=1').run(grant.state);restored.prepare('UPDATE clank_provider_handoff_bridge_state SET version=?,records_sha256=? WHERE id=1').run(metadata.version,metadata.records_sha256);restored.exec('COMMIT');}finally{restored.close();}
+ p.send({attempt:2});assert.deepEqual(await p.next(),{phase:'completion-refused',attempt:2,catalogPinsReleased:true});await p.done();
+});
 for(const grant of ['created','started'])test('private completion data matches the actual '+grant+' native capture and retained base',async t=>{
  const f=await fixture(t);if(grant==='started')f.mutate(db=>db.exec("UPDATE clank_provider_handoff_source_grant SET state='started'"));
  const p=await child(t,f,'completion'),message=await p.next();assert.equal(message.phase,'initialized');const result=message.completion;

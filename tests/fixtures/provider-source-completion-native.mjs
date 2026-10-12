@@ -1,0 +1,129 @@
+const SOURCE_ENTRY="import fs from 'node:fs';\nimport assert from 'node:assert/strict';\nimport {openBackend,defineBackend,defineDatabase,defineTable} from './framework/backend.js';\nimport {s} from './framework/ai.js';\nimport {SQLITE_INTERNAL} from './framework/sqlite-internal.js';\nconst runtime=await openBackend(defineBackend({schema:defineDatabase({records:defineTable({value:s.string()})})}).functions(()=>({})),{path:'/data/source.sqlite',changePollIntervalMs:0,agent:false});\nruntime.database.transaction(tx=>tx.table('records').insert({value:'original source connection'}));\nfs.writeFileSync('/data/source-ready.json',JSON.stringify({pid:process.pid,uid:process.getuid(),gid:process.getgid()}),{mode:0o600,flag:'wx'});\nconst keep=setInterval(()=>{if(fs.existsSync('/data/close-source')){fs.unlinkSync('/data/close-source');runtime.close();}},25);\ntry{\n const until=Date.now()+45000;while(!fs.existsSync('/data/source-bootstrap.json')){if(Date.now()>until)throw Error('bootstrap deadline');await new Promise(r=>setTimeout(r,25));}\n let encoded=fs.readFileSync('/data/source-bootstrap.json','utf8');fs.unlinkSync('/data/source-bootstrap.json');\n const slot=Symbol.for('clank.provider.source.bootstrap.v1');Object.defineProperty(globalThis,slot,{value:encoded,writable:false,enumerable:false,configurable:true});encoded='';\n const pending=openBackend[SQLITE_INTERNAL].initializeSourceRuntime(runtime);\n assert.throws(()=>runtime.database.transaction(tx=>tx.table('records').insert({value:'during initialization'})),/write|initializ|bootstrap|ownership/i);\n const result=await pending,anchor=openBackend[SQLITE_INTERNAL];\n anchor.assertSourceRuntimeCompletion(runtime,result);let getters=0;\n const fake=Object.freeze({get captureEpoch(){getters++;throw Error('must not inspect copied status');}});\n for(const status of [{...result},JSON.parse(JSON.stringify(result)),new Proxy(result,{}),fake,{},null])assert.throws(()=>anchor.assertSourceRuntimeCompletion(runtime,status),/genuine current/);\n for(const owner of [{...runtime},new Proxy(runtime,{}),{},null])assert.throws(()=>anchor.assertSourceRuntimeCompletion(owner,result),/genuine current/);\n assert.equal(getters,0);\n runtime.database.read(()=>assert.throws(()=>anchor.assertSourceRuntimeCompletion(runtime,result),/idle/));\n anchor.assertSourceRuntimeCompletion(runtime,result);\n assert.throws(()=>runtime.database.transaction(tx=>tx.table('records').insert({value:'after initialization'})),/write|initializ|bootstrap|ownership/i);\n assert.throws(()=>openBackend[SQLITE_INTERNAL].initializeSourceRuntime(runtime),/already/);\n const rows=runtime.database.read(tx=>tx.table('records').collect());assert.equal(rows.length,1);assert.equal(rows[0].value,'original source connection');\n fs.writeFileSync('/data/source-result.json',JSON.stringify({complete:true,result,bootstrapConsumed:!Reflect.has(globalThis,slot),writesFenced:true,secondInitializationRefused:true,originalCompletionVerified:true,copiedCompletionsRefused:true,completionGetterReads:getters}),{mode:0o600,flag:'wx'});\nfor(let attempt=1;attempt<=2;attempt++){\n  const go='/data/source-proof-go-'+attempt,out='/data/source-proof-result-'+attempt;const until=Date.now()+45000;\n  while(!fs.existsSync(go)){if(Date.now()>until)throw Error('completion recheck deadline');await new Promise(r=>setTimeout(r,25));}\n  const action=fs.readFileSync(go,'utf8');fs.unlinkSync(go);if(action==='close')runtime.close();\n  let checked;try{anchor.assertSourceRuntimeCompletion(runtime,result);checked={current:true};}catch(error){checked={current:false,message:error.message};}\n  fs.writeFileSync(out,JSON.stringify(checked),{mode:0o600,flag:'wx'});\n }\n}catch(e){fs.writeFileSync('/data/source-result.json',JSON.stringify({complete:false,name:e.name,message:e.message,stack:e.stack,bootstrapConsumed:!Reflect.has(globalThis,Symbol.for('clank.provider.source.bootstrap.v1'))}),{mode:0o600,flag:'wx'});}\n";
+import net from 'node:net';
+import {createSourceWorkerClientProtocol} from '../../dist/provider-source-worker-wire.js';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import {join,dirname} from 'node:path';
+import {createHash,randomBytes,randomUUID} from 'node:crypto';
+import * as h from '../../dist/provider-handoff.js';
+import cp from 'node:child_process';
+import {syncBuiltinESMExports} from 'node:module';
+import {createSQLiteTaskScope,runSQLiteTask,SQLiteTaskScheduler} from '../../dist/sqlite-task.js';
+import {DatabaseSync} from 'node:sqlite';
+import {providerDockerClient,runProviderDockerClient} from '../../dist/provider-docker-client.js';
+import {openDeploymentProviderDataStore} from '../../dist/provider-data.js';
+import {createDeploymentBundle} from '../../dist/deploy.js';
+import {createDeploymentRuntimeCapsule} from '../../dist/runtime-placement.js';
+const hash=v=>createHash('sha256').update(typeof v==='string'||v instanceof Uint8Array?v:JSON.stringify(v)).digest('hex');
+const limits={maxProjects:10,maxOperations:32,maxArchiveBytes:33554432,maxBatchEntries:256,maxBatchBytes:4194304,maxCaptureTransactionBytes:4194304,maxCaptureStateBytes:33554432,maxJournalEntries:10000,maxJournalBytes:67108864,maxSpoolBytes:268435456,controlTimeoutMs:30000};
+const nonce=randomUUID(),directory=fs.mkdtempSync('/tmp/clank-container-native-'),root=join(directory,'provider'),source=join(directory,'capsule'),image=process.argv[2],mode=process.argv[3]??'bootstrap';
+assert.equal(process.getuid(),1000);assert.equal(process.getgid(),1000);assert.match(image,/^sha256:[a-f0-9]{64}$/);fs.chmodSync(directory,0o755);
+const config=join(directory,'docker-config');fs.mkdirSync(config,{mode:0o700});
+const client=providerDockerClient({executable:'/usr/bin/docker',dockerEnvironment:{DOCKER_HOST:'unix:///var/run/docker.sock',DOCKER_CONFIG:config}});
+const command=(args)=>runProviderDockerClient(client,args,{timeoutMs:15000,maxOutputBytes:65536});
+const events={qualification:'Original container backend connection consumes explicit v2 bootstrap, completes capture through genuine host workers, and revalidates only its exact original completion with independent original-connection native readback. Copied status/owners, active reads, metadata drift/restoration and original close are not readiness authority. Actual worker Node descendants have independently sampled mnt/net/pid/ipc/uts/user namespaces distinct from both the live provider and source. The fixture starts from a previously committed provider baseline; production launch/health/data ordering, readiness/write admission, all-writer stop, ingress/fallback, full handoff and host certification are still outside this proof.',version:process.version,nonce,directory,image,mode};
+let owner,grant,data,container,worker,channel,wireClient,cid,labels,stage='prepare',failed;
+const descriptors=()=>fs.readdirSync('/proc/self/fd').flatMap(fd=>{try{const stat=fs.fstatSync(Number(fd));return [{fd:Number(fd),path:fs.readlinkSync('/proc/self/fd/'+fd),dev:stat.dev,ino:stat.ino}];}catch{return [];}});
+const pins=()=>fs.readdirSync('/proc/self/fd').flatMap(fd=>{try{const path=fs.readlinkSync('/proc/self/fd/'+fd);return path.startsWith(root+'/')?[{fd:Number(fd),path}]:[];}catch{return [];}});
+try{
+ fs.mkdirSync(source);fs.mkdirSync(join(source,'dist'));fs.mkdirSync(join(source,'migrations'));
+ fs.cpSync(new URL('../../dist/',import.meta.url),join(source,'dist','framework'),{recursive:true});
+ fs.writeFileSync(join(source,'dist','server.js'),SOURCE_ENTRY);fs.writeFileSync(join(source,'migrations','0001_seed.sql'),"CREATE TABLE seed(id INTEGER PRIMARY KEY,value TEXT); INSERT INTO seed VALUES(1,'approved source');\n");
+ const artifact=await createDeploymentBundle(source,{version:1,entry:'dist/server.js',include:['dist','migrations'],database:{path:'source.sqlite',migrations:'migrations',allowUnsafeMigrations:false},health:{path:'/healthz',timeoutMs:15000},env:{}},{frameworkVersion:'0.9.4-test',nodeVersion:process.version.slice(1)});
+ const runtime=await createDeploymentRuntimeCapsule({projectId:'native_project',releaseId:'native_release',generation:1,environment:{},database:{path:'source.sqlite',mode:'initialize'},ingress:{route:'/v1/clank/apps/native_project',token:'clanki_native-test-token-12345678901234567890'},artifact},{maxDatabaseBytes:16777216});
+ owner=await h.acquireProviderServiceOwnership(root,true);const domain=await h.createProviderHandoffDomain(owner,client,'native_node','native_owner_'+nonce),identity=await h.initializeProviderHandoff(owner,domain),project=await h.installProviderHandoffProject(owner,domain,'native_project'),bridge=await h.enableProviderHandoffBridge(owner,domain,limits);
+ const store=await openDeploymentProviderDataStore({rootDirectory:root,maxDatabaseBytes:16777216});let prepared;
+ await store.apply({operation:{id:'native_operation',projectId:project.projectId,fence:1,attempt:1,maxAttempts:3},desired:{generation:1,releaseId:'native_release',state:'running',runtimeProtocol:'clank-runtime/1'},runtime,signal:new AbortController().signal},v=>{prepared=v;});
+ const key=randomBytes(32),grantSecret=randomBytes(32),recoveryKey=randomBytes(32),binding={protocol:'clank-provider-source-grant/1',enablementId:bridge.enablementId,indexId:identity.indexId,catalogId:project.catalogId,domainSha256:identity.domainSha256,projectId:project.projectId,releaseId:'native_release',generation:1,capsuleSha256:runtime.sha256,sourceIncarnation:randomUUID(),grantId:randomUUID(),role:'web',instance:0,imageId:image,uid:1000,gid:1000,capture:{keyId:'native_key',keySha256:hash(recoveryKey),maxTransactionBytes:limits.maxCaptureTransactionBytes,maxStateBytes:limits.maxCaptureStateBytes,maxJournalEntries:limits.maxJournalEntries,maxJournalBytes:limits.maxJournalBytes}};
+ const issued=await h.issueProviderHandoffGrant(bridge,{binding,grantSecretSha256:hash(grantSecret),controlSecretSha256:hash(key)});
+ channel=await h.prepareProviderSourceWorkerChannel(bridge,{projectId:project.projectId,grantId:binding.grantId,bindingSha256:issued.bindingSha256,expectedVersion:2},key);events.channelMount=channel.mountSource;
+ labels={'run.clank.managed':'provider-runtime','run.clank.owner':domain.owner,'run.clank.project':binding.projectId,'run.clank.release':binding.releaseId,'run.clank.generation':'1','run.clank.role':'web','run.clank.instance':'0','run.clank.handoff.protocol':binding.protocol,'run.clank.handoff.node':domain.nodeId,'run.clank.handoff.daemon':domain.daemonId,'run.clank.handoff.domain':binding.domainSha256,'run.clank.handoff.enablement':binding.enablementId,'run.clank.handoff.index':binding.indexId,'run.clank.handoff.catalog':binding.catalogId,'run.clank.handoff.grant':binding.grantId,'run.clank.handoff.binding':issued.bindingSha256,'run.clank.handoff.capsule':binding.capsuleSha256,'run.clank.handoff.incarnation':binding.sourceIncarnation};
+ const args=['container','create','--name','clank-container-native-'+nonce,'--interactive','--pull','never','--restart','no','--read-only','--init','--cap-drop','ALL','--security-opt','no-new-privileges=true','--pids-limit','128','--memory','512m','--memory-swap','512m','--cpus','1','--user','1000:1000','--network','bridge','--stop-timeout','2','--tmpfs','/tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777','--tmpfs','/run:rw,noexec,nosuid,nodev,size=8m,mode=755','--log-driver','local','--log-opt','max-size=10m','--log-opt','max-file=3'];
+ for(const [k,v] of Object.entries(labels))args.push('--label',k+'='+v);
+ let channelMount=channel.mountSource;if(mode==='foreign-mount'){channelMount=join(directory,'unapproved-channel');fs.mkdirSync(channelMount,{mode:0o700});}
+ args.push('--mount','type=bind,source='+channelMount+',target=/run/clank-source-worker'+(mode==='writable-mount'?'':',readonly'));
+ args.push('--mount','type=bind,source='+prepared.releaseDirectory+',target=/app,readonly','--mount','type=bind,source='+join(root,'projects',project.projectId,'data')+',target=/data','--mount','type=bind,source='+join(root,'service','handoff','catalogs',project.catalogId)+',target=/run/clank-source,readonly','--workdir','/app',image,'node','dist/server.js');
+ stage='create';cid=(await command(args)).stdout.trim();assert.match(cid,/^[a-f0-9]{64}$/);events.containerId=cid;
+ const input={projectId:project.projectId,grantId:binding.grantId,bindingSha256:issued.bindingSha256,containerId:cid,expectedVersion:2};
+ stage='created acknowledgment';events.created=await h.recordProviderHandoffContainerCreated(bridge,input);events.channelBinding=await channel.bindCreated({...input,expectedVersion:3});await command(['container','start',cid]);
+ stage='started acknowledgment';events.started=await h.recordProviderHandoffContainerStarted(bridge,{...input,expectedVersion:3});
+ grant=await h.retainProviderSourceGrant(bridge,{...input,expectedVersion:4},key);data=await h.retainProviderSourceRuntimeData(grant);events.pinCountBefore=pins().length;events.descriptorsBefore=descriptors();
+ events.inspect=JSON.parse((await command(['container','inspect',cid])).stdout)[0];stage='channel mount admission';
+ if(['writable-mount','foreign-mount'].includes(mode)){
+  await assert.rejects(h.retainProviderSourceContainer(data),/mount topology/);events.expectedMountRefusal=true;
+ }else{
+  container=await h.retainProviderSourceContainer(data);container.assertCurrent();for(let i=0;i<5;i++)await container.verifyCurrent();
+  const added=descriptors().filter(v=>!events.descriptorsBefore.some(w=>JSON.stringify(w)===JSON.stringify(v)));assert.equal(added.length,7);events.admitted={pid:container.pid,birth:container.birth,descriptorDelta:added.length};
+  events.independentMountinfo=fs.readFileSync('/proc/'+container.pid+'/mountinfo','utf8');
+  const host=fs.lstatSync(channel.mountSource),mounted=fs.statSync('/proc/'+container.pid+'/root/run/clank-source-worker');assert.equal(mounted.dev,host.dev);assert.equal(mounted.ino,host.ino);events.channelInode={dev:host.dev,ino:host.ino};
+  const probe=await command(['container','exec',cid,'node','--input-type=module','--eval',"import fs from 'node:fs';const p='/run/clank-source-worker/sqlite.sock';const s=fs.lstatSync(p);let code;try{fs.unlinkSync(p);}catch(e){code=e.code;}process.stdout.write(JSON.stringify({socket:s.isSocket(),mode:s.mode&511,code})+'\\n');"]);
+  events.nativeReadOnlyProbe=JSON.parse(probe.stdout);assert.deepEqual(events.nativeReadOnlyProbe,{socket:true,mode:384,code:'EROFS'});
+  assert.ok(['bootstrap','completion-drift','completion-close','completion-catalog-replay','completion-catalog-advance'].includes(mode));
+  const sourceData=join(root,'projects',project.projectId,'data'),ready=join(sourceData,'source-ready.json'),resultPath=join(sourceData,'source-result.json');
+  const waitFile=async file=>{const until=Date.now()+45000;while(!fs.existsSync(file)){if(Date.now()>until)throw Error('native source fixture deadline');await new Promise(r=>setTimeout(r,25));}return JSON.parse(fs.readFileSync(file,'utf8'));};
+  events.originalSource=await waitFile(ready);assert.ok(events.originalSource.pid>0);assert.equal(events.originalSource.uid,1000);assert.equal(events.originalSource.gid,1000);
+  const sourceChildren=fs.readFileSync('/proc/'+container.pid+'/task/'+container.pid+'/children','utf8').trim().split(/\s+/).filter(Boolean).map(Number);
+  const sourceNode=sourceChildren.find(pid=>fs.readFileSync('/proc/'+pid+'/status','utf8').match(/^NSpid:\s+(.+)$/m)?.[1].trim().split(/\s+/).at(-1)===String(events.originalSource.pid));
+  assert.ok(sourceNode);const originalExe=fs.readlinkSync('/proc/'+sourceNode+'/exe');assert.ok(originalExe.endsWith('/node'));events.originalSource.hostPid=sourceNode;events.originalSource.executable=originalExe;
+
+  const nativeSpawn=cp.spawn,spawns=[];let owned,actualClose=false,heldResolve;const held=new Promise(r=>heldResolve=r);
+  const namespaces=pid=>Object.fromEntries(['mnt','net','pid','ipc','uts','user'].map(name=>[name,fs.readlinkSync('/proc/'+pid+'/ns/'+name)]));
+  const descendants=pid=>{const result=[],visit=id=>{if(result.length>16)throw Error('owned descendant bound');result.push(id);for(const child of fs.readFileSync('/proc/'+id+'/task/'+id+'/children','utf8').trim().split(/\s+/).filter(Boolean))visit(Number(child));};visit(pid);return result;};
+  const sample=async child=>{const until=Date.now()+2000;while(Date.now()<until){for(const pid of descendants(child.pid)){let exe;try{exe=fs.readlinkSync('/proc/'+pid+'/exe');}catch{continue;}if(exe.endsWith('/node')){const actual=namespaces(pid),host=namespaces(process.pid),source=namespaces(container.pid);for(const name of Object.keys(actual)){assert.notEqual(actual[name],host[name]);assert.notEqual(actual[name],source[name]);}return {pid,exe,namespaces:actual,host,source};}}await new Promise(r=>setTimeout(r,10));}throw Error('original owned worker namespace sample deadline');};
+  const samples=[];
+  cp.spawn=(exe,args,options)=>{const child=nativeSpawn(exe,args,options);if(exe==='/usr/bin/setpriv'&&args.includes('/usr/bin/bwrap')){
+   spawns.push({pid:child.pid,exe,args,environmentNames:Object.keys(options.env)});const end=child.stdin.end;
+   child.stdin.end=function(...args){void sample(child).then(value=>{samples.push(value);if(['revoke-active','close-active'].includes(mode)){owned=child;child.once('close',()=>actualClose=true);heldResolve();}else Reflect.apply(end,this,args);}).catch(error=>{events.sampleError=error.message;child.kill('SIGKILL');heldResolve();});return this;};
+  }return child;};syncBuiltinESMExports();
+  const dispatch=channel.dispatch(container);dispatch.catch(()=>{});
+  const bootstrap={protocol:'clank-provider-source-bootstrap/2',binding,bindingSha256:issued.bindingSha256,containerId:cid,catalogPath:'/run/clank-source/catalog.sqlite',grantSecret:grantSecret.toString('base64url'),controlSecret:key.toString('base64url'),recoveryKey:recoveryKey.toString('base64url'),workerChannel:events.channelBinding};
+  if(mode==='channel-mismatch')bootstrap.workerChannel={...bootstrap.workerChannel,channelId:randomUUID()};
+  if(mode==='binding-mismatch')bootstrap.workerChannel={...bootstrap.workerChannel,containerId:'c'.repeat(64)};
+  if(mode==='malformed-bootstrap')bootstrap.sql='SELECT 1';
+  fs.writeFileSync(join(sourceData,'source-bootstrap.json'),JSON.stringify(bootstrap),{flag:'wx',mode:0o600});
+  if(['revoke-active','close-active'].includes(mode)){await held;if(!owned)throw Error('No original sampled worker');events.cancelAt=Date.now();if(mode==='revoke-active')await h.revokeProviderHandoffGrant(bridge,{projectId:project.projectId,grantId:binding.grantId,bindingSha256:issued.bindingSha256,containerId:cid,expectedVersion:4});else fs.writeFileSync(join(sourceData,'close-source'),'close',{flag:'wx',mode:0o600});}
+  try{
+   events.sourceResult=await waitFile(resultPath);events.namespaceSamples=samples;
+   assert.equal(events.sourceResult.bootstrapConsumed,true);
+   if(['bootstrap','completion-drift','completion-close','completion-catalog-replay','completion-catalog-advance'].includes(mode)){
+    assert.equal(events.sourceResult.complete,true,JSON.stringify(events.sourceResult));await dispatch;
+    assert.equal(spawns.length,3);assert.equal(samples.length,3);for(const spawn of spawns){assert.ok(spawn.args.includes('--unshare-all'));assert.deepEqual(spawn.environmentNames,['NODE_NO_WARNINGS']);}events.workerSpawns=spawns;
+    assert.equal(events.sourceResult.writesFenced,true);assert.equal(events.sourceResult.secondInitializationRefused,true);
+    const db=new DatabaseSync(data.databasePath,{readOnly:true});try{const state=db.prepare('SELECT * FROM clank_pitr_state').all();assert.equal(state.length,1);assert.equal(state[0].epoch,events.sourceResult.result.captureEpoch);assert.equal(state[0].base_id,events.sourceResult.result.baseBackupId);assert.equal(state[0].sequence,0);assert.equal(db.prepare('SELECT count(*) AS n FROM clank_pitr_journal').get().n,0);events.independentNativeState=state[0];}finally{db.close();}
+    events.originalConnectionCompletion=true;
+    assert.equal(events.sourceResult.originalCompletionVerified,true);assert.equal(events.sourceResult.copiedCompletionsRefused,true);assert.equal(events.sourceResult.completionGetterReads,0);
+    const checked=async(attempt,action)=>{fs.writeFileSync(join(sourceData,'source-proof-go-'+attempt),action,{flag:'wx',mode:0o600});return waitFile(join(sourceData,'source-proof-result-'+attempt));};
+    let originalSchema,originalCatalog;
+    const catalogMode=['completion-catalog-replay','completion-catalog-advance'].includes(mode),catalogPath=join(root,'service','handoff','catalogs',project.catalogId,'catalog.sqlite');
+    if(catalogMode){const mutable=new DatabaseSync(catalogPath);try{
+     mutable.exec('BEGIN IMMEDIATE');const grant=mutable.prepare('SELECT * FROM clank_provider_handoff_source_grant WHERE id=1').get(),metadata=mutable.prepare('SELECT version,records_sha256 FROM clank_provider_handoff_bridge_state WHERE id=1').get();
+     assert.equal(grant.state,'started');assert.equal(metadata.version,4);originalCatalog={state:grant.state,...metadata};
+     const next=mode==='completion-catalog-replay'?'created':'started';mutable.prepare('UPDATE clank_provider_handoff_source_grant SET state=? WHERE id=1').run(next);
+     const records={grant:{...mutable.prepare('SELECT * FROM clank_provider_handoff_source_grant WHERE id=1').get()},transfer:null,operations:[],spools:[]};
+     mutable.prepare('UPDATE clank_provider_handoff_bridge_state SET version=5,records_sha256=? WHERE id=1').run(hash(JSON.stringify(records)));mutable.exec('COMMIT');events.catalogReplay={from:'started',to:next,version:5,mirror:hash(JSON.stringify(records))};
+    }finally{mutable.close();}}
+    if(mode==='completion-drift'){const mutable=new DatabaseSync(data.databasePath);try{originalSchema=mutable.prepare('SELECT schema_hash FROM clank_pitr_state WHERE id=1').get().schema_hash;mutable.prepare('UPDATE clank_pitr_state SET schema_hash=? WHERE id=1').run('f'.repeat(64));}finally{mutable.close();}}
+    events.firstCompletionCheck=await checked(1,mode==='completion-close'?'close':'verify');assert.equal(events.firstCompletionCheck.current,mode==='bootstrap');
+    if(mode==='completion-drift'){const mutable=new DatabaseSync(data.databasePath);try{mutable.prepare('UPDATE clank_pitr_state SET schema_hash=? WHERE id=1').run(originalSchema);}finally{mutable.close();}}
+    if(catalogMode){const mutable=new DatabaseSync(catalogPath);try{mutable.exec('BEGIN IMMEDIATE');mutable.prepare('UPDATE clank_provider_handoff_source_grant SET state=? WHERE id=1').run(originalCatalog.state);mutable.prepare('UPDATE clank_provider_handoff_bridge_state SET version=?,records_sha256=? WHERE id=1').run(originalCatalog.version,originalCatalog.records_sha256);mutable.exec('COMMIT');events.catalogRestored=true;}finally{mutable.close();}}
+    events.secondCompletionCheck=await checked(2,'verify');assert.equal(events.secondCompletionCheck.current,mode==='bootstrap','Native drift or original close must not revive a copied/cached completion after metadata restoration.');
+
+   }else{
+    assert.equal(events.sourceResult.complete,false);await channel.close();await assert.rejects(dispatch);
+    if(['revoke-active','close-active'].includes(mode)){assert.equal(spawns.length,1);assert.equal(actualClose,true);assert.equal(owned.signalCode,'SIGKILL');assert.equal(fs.existsSync('/proc/'+owned.pid),false);events.cancelledWorker={pid:owned.pid,signal:owned.signalCode,elapsedMs:Date.now()-events.cancelAt};assert.ok(events.cancelledWorker.elapsedMs<3000);}
+    else assert.equal(spawns.length,0);
+    const db=new DatabaseSync(join(sourceData,'source.sqlite'),{readOnly:true});try{const exists=db.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_pitr_state'").get();if(['binding-mismatch','malformed-bootstrap'].includes(mode))assert.equal(exists,undefined);else{const state=db.prepare('SELECT * FROM clank_pitr_state').all();assert.equal(state.length,1);assert.equal(state[0].base_id,'');assert.equal(state[0].sequence,0);events.retainedIncompleteState=state[0];}}finally{db.close();}
+    events.expectedRefusal=true;events.workerCount=spawns.length;
+   }
+  }finally{cp.spawn=nativeSpawn;syncBuiltinESMExports();key.fill(0);grantSecret.fill(0);recoveryKey.fill(0);}
+
+ }
+ await channel.close();container?.close();data.close();grant.close();owner.close();assert.equal(pins().length,0);events.pinsReleased=true;events.complete=true;
+}catch(e){failed=e;events.complete=false;events.failure={stage,name:e.name,message:e.message,stack:e.stack};}
+finally{
+ if(failed&&cid)try{events.failureInspect=JSON.parse((await command(['container','inspect',cid])).stdout)[0];}catch(e){events.failureInspectError=e.message;}
+ try{wireClient?.close();await channel?.close();await worker?.close();container?.close();data?.close();grant?.close();owner?.close();}catch(e){events.cleanupError=e.message;failed??=e;}
+ if(cid){try{const v=JSON.parse((await command(['container','inspect',cid])).stdout)[0];assert.equal(v.Id,cid);assert.equal(v.Image,image);assert.deepEqual(v.Config.Labels,labels);if(v.State.Paused)await command(['container','unpause',cid]);if(v.State.Running)await command(['container','stop','--time','2',cid]);const final=JSON.parse((await command(['container','inspect',cid])).stdout)[0];assert.equal(final.Id,cid);assert.deepEqual(final.Config.Labels,labels);assert.equal(final.State.Running,false);events.finalState=final.State;await command(['container','rm',cid]);assert.equal((await command(['container','ls','--all','--no-trunc','--filter','id='+cid,'--format','{{.ID}}'])).stdout.trim(),'');events.cleanup={removed:true,absence:true};}catch(e){events.cleanupError=e.message;failed??=e;}}
+ fs.writeFileSync(join(directory,'evidence.json'),JSON.stringify(events,null,2)+'\n');console.log(JSON.stringify(events));
+}
+if(failed)process.exitCode=1;

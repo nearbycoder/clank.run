@@ -579,11 +579,15 @@ Object.defineProperty(openPointInTimeRecovery,SQLITE_INTERNAL,{value:Object.free
     };
     const capture=context.binding.capture;
     recovery=await openRecovery(context.database,{...capture,directory:root.anchor,encryptionKey:key,exportIntervalMs:false},{...context,key,current,root,pins,publish}) as InitializedRecovery;current();
-    let consumed=false;
+    let consumed=false,completed:ReturnType<InitializedRecovery["complete"]>|undefined;
     return Object.freeze({complete(){
       if(consumed)throw new Error("Private initialization completion was consumed.");consumed=true;
       if(closing)throw new Error("Private initialization is closed.");
-      context.assertInitialized();current();const result=recovery!.complete();current();context.assertInitialized();return result;
+      context.assertInitialized();current();const result=recovery!.complete();current();context.assertInitialized();completed=result;return result;
+    },assertComplete(){
+      if(!completed||closing)throw new Error("Private source completion is absent or closed.");
+      context.assertInitialized();current();const actual=recovery!.complete();current();context.assertInitialized();
+      if(JSON.stringify(actual)!==JSON.stringify(completed))throw new Error("Original native source completion changed.");
     },close});
   }catch(error){await close();throw error;}
 }})});

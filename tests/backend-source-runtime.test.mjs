@@ -32,6 +32,16 @@ test('private constructor lookup cannot be replaced and copied or proxied handle
   for(const value of [{...runtime},new Proxy(runtime,{}),{},null])assert.throws(()=>check(value),/genuine live backend/);
   check(runtime);
 });
+test('uninitialized and copied completion claims refuse before getters without reserving ordinary runtime writes',async t=>{
+  const runtime=await fixture(t),anchor=openBackend[SQLITE_INTERNAL];let reads=0;
+  const claimed=Object.freeze({get captureEpoch(){reads++;throw Error('never read a claimed completion');}});
+  for(const handle of [runtime,{...runtime},new Proxy(runtime,{}),{},null]){
+    assert.throws(()=>anchor.assertSourceRuntimeCompletion(handle,claimed),/genuine current source runtime completion/);
+  }
+  assert.equal(reads,0);check(runtime);
+  runtime.database.transaction(db=>db.table('records').insert({value:'ordinary support remains'}));
+  assert.equal(runtime.database.read(db=>db.table('records').collect()).length,1);
+});
 test('runtime database and definition replacements refuse even when structurally identical',async t=>{
   const runtime=await fixture(t),database=runtime.database,backend=runtime.definition;
   runtime.database={...database};assert.throws(()=>check(runtime),/original backend|identity changed/);runtime.database=database;

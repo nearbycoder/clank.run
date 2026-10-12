@@ -234,7 +234,7 @@ export async function openProviderSourceReader(encoded:string){
       for(const p of c.pins){assertPin(c,p);if(fs.fstatSync(p.fd).gid!==binding.gid||fs.lstatSync(p.path).gid!==binding.gid)fail("Source catalog group changed.");}
       if(fs.realpathSync(parent.path)!==parent.path||fs.realpathSync(file.path)!==file.path||entries(c,parent,2).some(name=>name!=="catalog.sqlite"))fail("Source catalog namespace changed.");
     };
-    const assertCurrent=()=>{
+    const checkCurrent=()=>{
       current();let db:any;
       try{
         db=new DatabaseSync(`${parent.anchor}/catalog.sqlite`,{readOnly:true});
@@ -248,10 +248,17 @@ export async function openProviderSourceReader(encoded:string){
         const mirror=hash(boundedJSON(records,BRIDGE_CATALOG_MAX));
         if(state.id!==1||state.protocol!==2||state.enablement_id!==binding.enablementId||!positive(state.version)||state.version<3||state.records_sha256!==mirror||state.version<version||state.version===version&&mirror!==recorded)fail("Source catalog mirror or version changed.");
         // Later readiness/control states require their owning transition validator.
-        if(records.transfer||records.operations.length||records.spools.length||!grant||grant.id!==1||grant.protocol!==2||grant.grant_id!==binding.grantId||grant.binding_json!==json||grant.binding_sha256!==input.bindingSha256||grant.grant_secret_sha256!==hash(secrets[0])||grant.control_secret_sha256!==hash(secrets[1])||!["created","started"].includes(grant.state)||grant.container_id!==input.containerId||grant.readiness_json!==null||grant.readiness_sha256!==null)fail("Source grant does not permit bootstrap initialization.");
+        if(records.transfer||records.operations.length||records.spools.length||!grant||grant.id!==1||grant.protocol!==2||grant.grant_id!==binding.grantId||grant.binding_json!==json||grant.binding_sha256!==input.bindingSha256||grant.grant_secret_sha256!==hash(secrets[0])||grant.control_secret_sha256!==hash(secrets[1])||!["created","started"].includes(grant.state)||state.version!==({created:3,started:4} as Row)[grant.state]||grant.container_id!==input.containerId||grant.readiness_json!==null||grant.readiness_sha256!==null)fail("Source grant does not permit bootstrap initialization.");
         db.exec("COMMIT");current();version=state.version;recorded=mirror;
       }finally{db?.close();}
       current();worker?.assertCurrent();
+    };
+    const assertCurrent=()=>{
+      try{checkCurrent();}catch(error){
+        // A failed native authority check cannot be revived by restoring rows.
+        try{close();}catch(cleanup){throw new AggregateError([error,cleanup],"Source bootstrap authority failed and cleanup did not settle.");}
+        throw error;
+      }
     };
     assertCurrent();
     if(remote){
