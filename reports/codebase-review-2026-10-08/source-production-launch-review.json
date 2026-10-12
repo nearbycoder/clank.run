@@ -1,0 +1,124 @@
+{
+  "base": "8937f27c2a12a2899c0fdf3aeb9a29c75b3ba36a",
+  "branch": "codex/provider-source-launch-integration-389",
+  "feature": "07",
+  "acceptedFeatures": 29,
+  "scope": "Private original production launch for an already committed source generation. No source readiness/control/write/all-role stop/target/ingress/fallback/interruption or complete feature acceptance is claimed.",
+  "implementation": {
+    "originalAuthority": "Resolve genuine source service/data owner pairing before launch context; reject copied or foreign data. Final empty-project catalog recheck after owner await.",
+    "artifact": "Authenticate serialized capsule identity and original released bytes/modes/owners/inodes; exact inventory rejects extra entries. Retain original file descriptors over all startup awaits, with parent owner cleanup.",
+    "admission": "Refuse existing managed project writers before grant; require sole exact container before first-base dispatch and after actual bounded HTTP health. Jobs require distinct original writer ownership and remain refused here.",
+    "nativePath": "Actual issuer, original channel, native C1 observations, original grant/data/container leases and stdin EOF entry; immutable cached image and unchanged default security/resource profile. No ordinary activation is exposed.",
+    "retirement": "Original process and read-only channel mount are retained independently of retired initializer transport. Closed transport still refuses new worker authority; replacement/restoration permanently closes container observation. Adds one actual original directory descriptor for channel-enabled containers; legacy three-mount observation remains seven descriptors.",
+    "ambiguity": "Missing or invalid original create ID never authorizes removal; cleanup uncertainty is explicit and retained original file pins close through the original owner. No replacement is adopted by label/name.",
+    "limits": "Capsule input matches the existing default runtime format bound. Environment stays512 fields/3MiB; original bootstrap/frame bounds, immutable image, non-root UID/GID and bounded port are preserved."
+  },
+  "focused": {
+    "node22": "270/270;production-regression22-54.log",
+    "node24": "270/270;production-regression24-56.log",
+    "qualification": "Native SQLite/ownership and scripted Docker transport for negative cases; no real-daemon success is inferred from these cases."
+  },
+  "native": {
+    "priorEvidence": "/var/tmp/clank-source-launch-137ad21-by4_xx5k",
+    "cases": [
+      {
+        "log": "native-production22-final-05.log",
+        "version": "22.16",
+        "mode": "normal",
+        "finalModuleRun": true
+      },
+      {
+        "log": "native-production26-final-06.log",
+        "version": "26.10",
+        "mode": "normal",
+        "finalModuleRun": "running"
+      },
+      {
+        "log": "production-native22-close-owner-54.log",
+        "version": "22.16",
+        "mode": "close-owner",
+        "priorRoot": true
+      },
+      {
+        "log": "production-native26-mount-drift-55.log",
+        "version": "26.10",
+        "mode": "mount-drift",
+        "priorRoot": true
+      }
+    ],
+    "qualification": "Actual production function, cached immutable Docker images, original backend constructor and native base readback. Application writes stay fenced; grant stays started/version4. Exact original container removal and zero remaining pins are observed. Existing kernel validators run, but no fresh independent worker namespace sampling or host certificate is claimed.",
+    "correctedSourceCases": [
+      "native-production22-corrected-18.log:session64516 terminal0",
+      "native-production26-corrected-19.log:session60786 terminal0"
+    ],
+    "ioObservation": {
+      "log": "native-production26-final-06.log",
+      "observation": "VM paused on actual QMP root nospace; original pending5052 continued after sameVM cont with confirmed recovered capacity and PID/birth/disk identity. It then exited0; no restart/rerun or changed virtual layout.",
+      "evidence": [
+        "native-qmp-io-observation-09.json",
+        "native-same-vm-resume-10.json",
+        "native-final-result-11.json"
+      ]
+    }
+  },
+  "types": "54 packed positive/negative fixtures;149 inherited diagnostics/zero new versus154 baseline; packed OpenAPI examples pass",
+  "outputs": {
+    "outputs": "Full hash map retained in paired-outputs-04.json",
+    "count": 323,
+    "declarationsUnchanged": 146,
+    "changed": [
+      "provider-handoff.js",
+      "provider-source-launch.js"
+    ],
+    "pairedIdentical": true
+  },
+  "package": {
+    "files": 452,
+    "bytes": 7072728,
+    "ceiling": 8388608,
+    "dependencies": 0
+  },
+  "evidenceRoot": "/var/tmp/clank-production-source-8937f27-6mlseh_1",
+  "retainedFailures": [
+    {
+      "logs": [
+        "production-native22-first-46.log",
+        "production-native22-broker-observed-47.log",
+        "production-native22-stages-observed-48.log"
+      ],
+      "cause": "Fixture seed table lacked a primary key. Original recovery correctly refuses unsupported schema; only fixture schema corrected. Initial before-create commentary was not proven and is withdrawn; third-run trace shows actual create/start/removal.",
+      "details": "native-fixture-schema-observation-49.json"
+    },
+    {
+      "log": "production-native22-supported-49.log",
+      "cause": "Immediate health fetch failed; constructor failure after cleanup may be secondary. Production now waits for actual bounded HTTP health; no assertion failure is retried as success."
+    },
+    {
+      "log": "production-native22-health-50.log",
+      "cause": "Native container observer depended on retired initialization channel. Genuine separate retained mount observation fixes lifecycle without granting new tasks/readiness/writes."
+    },
+    {
+      "log": "full-check26-02.log",
+      "counts": "3893/3856/0/0/37",
+      "coverage": "91.95/82.27/90.05",
+      "terminalSession": 48086,
+      "terminalExit": 1,
+      "cause": "Only final package audit fails because exact manifest lacks newly added module; derived required-file messages follow the empty accepted manifest. Actual packed required files remain present.",
+      "repair": "Exactly one actual module path added to exact release manifest.8MiB ceiling,dependency and forbidden-path assertions unchanged."
+    }
+  ],
+  "fullGate": {
+    "state": "running",
+    "session": 17133,
+    "log": "full-check26-corrected-16.log",
+    "frozenInputs": "frozen-inputs-corrected-16.json"
+  },
+  "delivery": "Not yet committed, pushed or merged. Fresh final native/complete local and exact-head hosted gates remain required.",
+  "originalFeatureScope": "All11 pending features and each original acceptance requirement remain. Source generation bootstrap does not complete online transfer.",
+  "ownerPairingCorrection": {
+    "before": "wrong-owner-before-07.log:1/0/1; session73601 terminal1",
+    "after": "wrong-owner-after-17.log:1/1/0; session84730 terminal0",
+    "regression": "corrected-owner22-14.log and corrected-owner24-15.log:31/31 each,zero failures/cancellations/skips",
+    "implementation": "Synchronous genuine owner/data pairing occurs before capsule access or one-use reservation. A rejected wrong owner leaves the rightful owner able to launch its data."
+  }
+}

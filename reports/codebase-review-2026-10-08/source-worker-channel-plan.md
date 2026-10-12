@@ -94,3 +94,11 @@ PR388 is protected main137ad215e8460361ab57fee279d8e05a00ce42c8, exact reviewed 
 ## Original settled launch data before C1
 
 A private observer now retains original committed database/release paths and the exact fence before source container creation. It refuses a genuine pre-commit journal, older metadata after a post-validation fence rewrite, concurrent admission beyond its fixed budget, and native path/metadata drift through publication. [Data retention review](source-launch-data-review.json). This is the committed-data prerequisite; the production launcher must still consume it and couple the original grant/channel/bootstrap/native completion. Full readiness/control/write/every-role stop/target/ingress/fallback/interruption requirements and29/40 acceptance remain unchanged.
+
+## Protected pre-C1 data delivery
+
+PR389 is protected main8937f27c2a12a2899c0fdf3aeb9a29c75b3ba36a, exact reviewed tree55db5beec42437faf89c320db0e1c280306f228d; all8 exact-head checks and the complete local gate pass. Both original roots/23 original files and all322 outputs are verified, and no PR remains open. [Data retention review](source-launch-data-review.json). The next branch is codex/provider-source-launch-integration-389. Source launch still must consume original service/data authority before Docker cleanup/create and couple the actual C1/grant/channel/bootstrap/native completion. Complete readiness/control/write/every-role stop/target/ingress/fallback/interruption scope and29/40 acceptance remain unchanged.
+
+## Production function integration
+
+The private production function now binds original service/data/capsule/release authority to C1/grant/channel/stdin and first-base dispatch, then waits actual bounded HTTP health. [Production launch review](source-production-launch-review.json). Initializer retirement is separate from the original container/mount observation; it never permits another worker, readiness or ordinary writes. Original source readiness/control/write admission, every-role writer exclusion/stop and complete transfer/target/ingress/fallback/interruption proof remain required.29/40 remains unchanged.

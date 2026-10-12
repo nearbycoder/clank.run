@@ -75,10 +75,76 @@
     }
   ],
   "fullGate": {
-    "state": "running",
+    "state": "passed",
     "session": 7517,
+    "terminalExit": 0,
     "log": "full-check26-04.log",
-    "frozenInputs": "frozen-inputs-04.json"
+    "counts": {
+      "tests": 3881,
+      "pass": 3844,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 37
+    },
+    "coverage": {
+      "lines": 91.98,
+      "branches": 82.28,
+      "functions": 90.12
+    },
+    "frozenInputsUnchanged": true,
+    "all322OutputsUnchanged": true,
+    "documentationConformanceDependenciesRepositoryHistorySecurity": "passed"
   },
-  "delivery": "Not yet committed, pushed or merged. Fresh exact-head hosted checks and protected delivery remain required."
+  "delivery": {
+    "pr": 389,
+    "reviewedHead": "88ac1a4ee3aab0a5de2c2aa2cc36325b19e224fc",
+    "merged": "8937f27c2a12a2899c0fdf3aeb9a29c75b3ba36a",
+    "tree": "55db5beec42437faf89c320db0e1c280306f228d",
+    "parent": "137ad215e8460361ab57fee279d8e05a00ce42c8",
+    "allEightHostedPassed": true,
+    "localGatePassed": true,
+    "phases": [
+      {
+        "root": "/home/nearby/Sites/clank",
+        "synced": true,
+        "filesVerified": 16
+      },
+      {
+        "root": "/home/nearby/.vnc/codex-home/.codex/worktrees/d164/clank",
+        "synced": true,
+        "filesVerified": 7
+      },
+      {
+        "root": "/home/nearby/.vnc/codex-home/.codex/worktrees/error-inbox-type-inference/clank",
+        "branch": "codex/provider-source-launch-integration-389",
+        "outputsVerified": 322
+      }
+    ],
+    "openPrs": [],
+    "originalFilesVerified": 23,
+    "url": "https://github.com/nearbycoder/clank.run/pull/389"
+  },
+  "hosted": {
+    "head": "88ac1a4ee3aab0a5de2c2aa2cc36325b19e224fc",
+    "allEightPassed": true,
+    "counts": {
+      "Node22": "3881/3844/0/0/37",
+      "Node24": "3881/3844/0/0/37",
+      "packagedRelease": "3881/3844/0/0/37"
+    },
+    "types": "54 packed fixtures;149 inherited/0 new diagnostics; OpenAPI pass",
+    "nativePostgreSQL": "24/24 each22/26",
+    "qualification": "Runtime/package logs are truncated; only returned terminal status and summary facts are claimed.",
+    "evidence": [
+      "hosted-final-20.json",
+      "hosted-node22-24.json",
+      "hosted-node24-final-25.json",
+      "hosted-package-23.json"
+    ]
+  },
+  "retainedUnavailableObservation": {
+    "evidence": "hosted-live-node24-observation-21.json",
+    "meaning": "Live log HTTP502 unavailable observation only; no terminal failure, retry or rerun was inferred."
+  },
+  "artifact": "PR389 attached; only completed narrow maintenance PR330 UI artifact unlinked to free the100-item slot after merged ancestor verification. Git files/history/worktrees and GitHub PRs unchanged."
 }
