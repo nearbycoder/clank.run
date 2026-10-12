@@ -1,5 +1,5 @@
 {
-  "phase": "Reviewed private ownership implementation; complete local and hosted delivery pending",
+  "phase": "Protected corrected delivery verified",
   "base": "153d7e83b68db43ea11d9ee4af6140f9d667484a",
   "behavior": [
     "Reserve exactly one original source-service admission per genuine native bridge owner before the first await.",
@@ -59,27 +59,7 @@
     "receipt": "owned-upload-archive-relocation-06.json",
     "qualification": "Only a verified completed task-owned upload archive was relocated to its identical regular-filesystem copy, preserving the original path as a symlink. VM inode/profile, guest reserve, cached images, user files and failed evidence unchanged."
   },
-  "fullGate": {
-    "head": "ba38edc60d26ee9a7f0dfc45b7e84c32ff0ecbff",
-    "tree": "6b9b5c8687883be9049cd4e9d7d349ed8cf2072a",
-    "session": 32058,
-    "exit": 0,
-    "counts": {
-      "tests": 3862,
-      "pass": 3825,
-      "fail": 0,
-      "cancelled": 0,
-      "skipped": 37
-    },
-    "coverage": {
-      "lines": 91.97,
-      "branches": 82.28,
-      "functions": 90.11
-    },
-    "conformanceDocsDependenciesRepositoryHistorySecurity": "passed",
-    "ownedGeneratedOutputsPreservedAndRestored": 19,
-    "reviewedFilesUnchanged": 7
-  },
+  "fullGate": "Original completed local3862 result retained; corrected completed local3863 result and protected delivery recorded separately.",
   "evidenceRoot": "/var/tmp/clank-source-service-153d7e8-d0w31cr3",
   "accepted": 29,
   "pending": [
@@ -137,7 +117,75 @@
       "cancelled": 0,
       "skipped": 37
     },
-    "correctedFullGate": "running session10094; fresh exact-head hosted checks and protected delivery still required",
-    "autoMerge": "Original queue15 executed successfully then explicitly disabled on Node24 failure; old merge16 has never executed."
+    "correctedFullGate": "Terminal exit0 session10094,3863/3826/0/0/37; all8 fresh corrected-head hosted checks pass.",
+    "autoMerge": "Original queue15 executed then explicitly disabled19; corrected queue27 and corrected merge/sync28 each executed once successfully. Original merge16 never executed."
+  },
+  "correctedFullGate": {
+    "head": "2d1e95e9804f57a7683cf415b263d428d6d70204",
+    "tree": "b0b7f21ad0b6b98ddd9073c0a7548f1a82554678",
+    "session": 10094,
+    "exit": 0,
+    "counts": {
+      "tests": 3863,
+      "pass": 3826,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 37
+    },
+    "coverage": {
+      "lines": 91.97,
+      "branches": 82.29,
+      "functions": 90.11
+    },
+    "conformanceDocsDependenciesRepositoryHistorySecurity": "passed",
+    "ownedGeneratedOutputsPreservedAndRestored": 19,
+    "reviewedFilesUnchanged": 10
+  },
+  "delivery": {
+    "pullRequest": "https://github.com/nearbycoder/clank.run/pull/388",
+    "reviewedHead": "2d1e95e9804f57a7683cf415b263d428d6d70204",
+    "mergedMain": "137ad215e8460361ab57fee279d8e05a00ce42c8",
+    "tree": "b0b7f21ad0b6b98ddd9073c0a7548f1a82554678",
+    "parent": "153d7e83b68db43ea11d9ee4af6140f9d667484a",
+    "protectedSquash": true,
+    "hostedChecks": 8,
+    "allHostedChecksPass": true,
+    "originalFilesUnchanged": 23,
+    "compiledOutputsMatch": 322,
+    "publicDeclarationsUnchanged": 146,
+    "nextBranch": "codex/provider-source-launch-388",
+    "openPullRequests": [],
+    "all40ScopePreserved": true,
+    "accepted": 29,
+    "pending": [
+      7,
+      9,
+      10,
+      13,
+      14,
+      17,
+      30,
+      36,
+      37,
+      38,
+      40
+    ]
+  },
+  "hostedCorrected": {
+    "head": "2d1e95e9804f57a7683cf415b263d428d6d70204",
+    "all8Pass": true,
+    "runtimeAndPackageCounts": {
+      "tests": 3863,
+      "pass": 3826,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 37
+    },
+    "nativePostgreSQLCasesPerRuntime": 24,
+    "packedTypes": 54,
+    "inheritedTypeDiagnostics": 149,
+    "newTypeDiagnostics": 0,
+    "logsTruncated": true,
+    "qualification": "Exact backend terminal statuses and returned Node22/24/package summaries only. Original failed Node24 head, unknown specific reset cause, controlled TCP before/after proof and live-log HTTP502 observation remain retained; no assertion retry or transport-loss acceptance."
   }
 }

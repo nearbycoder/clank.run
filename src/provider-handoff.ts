@@ -149,6 +149,16 @@ export interface ProviderSourceServiceOwnership {
 type SourceServiceContext={owner:ProviderServiceOwnership;bridge:ProviderHandoffBridge;check:()=>void};
 const sourceServiceOwners=new WeakMap<ProviderSourceServiceOwnership,SourceServiceContext>();
 const sourceServiceReservations=new WeakSet<ProviderServiceOwnership>();
+const sourceLaunchDataLeases=new WeakMap<object,{check:()=>void}>();
+const ownerSourceLaunchData=new WeakMap<ProviderServiceOwnership,Set<()=>void>>();
+const usedSourceLaunchProjects=new WeakMap<ProviderServiceOwnership,Set<string>>();
+const pendingSourceLaunchData=new WeakMap<ProviderServiceOwnership,number>();
+function closeSourceLaunchData(owner:ProviderServiceOwnership):void {
+  const errors:unknown[]=[];
+  for(const close of [...(ownerSourceLaunchData.get(owner)??[])])try{close();}catch(error){errors.push(error);}
+  if(errors.length===1)throw errors[0];
+  if(errors.length)throw new AggregateError(errors,"Provider source launch data failed to close.");
+}
 // Retained grant observations are deliberately distinct from worker authority.
 // No task, path, socket, process or ordinary write is authorized by this lease.
 export interface ProviderSourceGrantLease {
@@ -390,6 +400,7 @@ export async function acquireProviderServiceOwnership(rootDirectory:string,creat
       if(c.closed)return;c.closed=true;c.mode="closed";const failures:unknown[]=[];
       try{closeWorkerChannels(owner);}catch(error){failures.push(error);}
       try{closeSourceLeases(owner);}catch(error){failures.push(error);}
+      try{closeSourceLaunchData(owner);}catch(error){failures.push(error);}
       try{c.database.close();}catch(error){failures.push(error);}
       try{releasePins(c,0);}catch(error){failures.push(error);}
       if(failures.length===1)throw failures[0];if(failures.length)throw new AggregateError(failures,"Provider service ownership failed to close cleanly.");
@@ -583,6 +594,69 @@ export function assertProviderSourceServiceOwnership(value:ProviderSourceService
 export function providerSourceServiceOwner(value:ProviderSourceServiceOwnership):ProviderServiceOwnership {
   assertProviderSourceServiceOwnership(value);
   return sourceServiceOwners.get(value)!.owner;
+}
+export interface ProviderSourceLaunchDataLease {
+  readonly projectId:string;readonly releaseId:string;readonly generation:number;
+  readonly capsuleSha256:string;readonly fence:number;
+  readonly databasePath:string;readonly dataDirectory:string;readonly releaseDirectory:string;
+  assertCurrent():void;verifyCurrent():Promise<void>;close():void;
+}
+/** Original settled data observation before C1; no container/task/write authority. */
+export async function retainProviderSourceLaunchData(service:ProviderSourceServiceOwnership,input:unknown):Promise<ProviderSourceLaunchDataLease>{
+  const owner=providerSourceServiceOwner(service),registered=sourceServiceOwners.get(service)!;
+  const keys=["projectId","releaseId","generation","capsuleSha256","fence"];
+  if(!input||typeof input!=="object"||Array.isArray(input))fail("Provider source launch binding is invalid.");
+  const descriptors=Object.getOwnPropertyDescriptors(input);
+  if(Reflect.ownKeys(descriptors).length!==keys.length||keys.some(key=>!Object.hasOwn(descriptors,key)||!Object.hasOwn(descriptors[key],"value")||!descriptors[key].enumerable))fail("Provider source launch binding requires closed own data.");
+  const binding=Object.freeze(Object.fromEntries(keys.map(key=>[key,descriptors[key].value]))) as Row;
+  if(!match(binding.projectId,ID)||!match(binding.releaseId,ID)||!positive(binding.generation)||!match(binding.capsuleSha256,DIGEST)||!positive(binding.fence))fail("Provider source launch binding is invalid.");
+  const used=usedSourceLaunchProjects.get(owner)??new Set<string>();
+  if(used.has(binding.projectId)||(ownerSourceLaunchData.get(owner)?.size??0)+(pendingSourceLaunchData.get(owner)??0)>=2)fail("Provider source launch data cannot be duplicated or recycled.");
+  used.add(binding.projectId);usedSourceLaunchProjects.set(owner,used);
+  pendingSourceLaunchData.set(owner,(pendingSourceLaunchData.get(owner)??0)+1);
+  let result:ProviderSourceLaunchDataLease|undefined;
+  try{
+    const module=await import("./provider-data.ts");service.assertCurrent();
+    const decode=(module.openDeploymentProviderDataStore as any)[SQLITE_INTERNAL].decodeSourceState;
+    await withBridge(registered.bridge,true,(c,root,state)=>{
+      service.assertCurrent();
+      if(!state.projects.some(project=>project.project_id===binding.projectId))fail("Provider source launch project is not installed.");
+      const from=c.pins.length,held:Pin[]=[];
+      try{
+        const projects=directory(c,c.root,"projects"),project=directory(c,projects,binding.projectId),journal=c.path.join(project.path,"journal.json");
+        if(!absent(c,journal))fail("Unsettled provider source data refuses launch.");
+        const stateFile=pin(c,c.path.join(project.path,"state.json"),false,65536),fenceFile=pin(c,c.path.join(project.path,"fence.json"),false,65536);
+        const stateJSON=sourceMetadata(c,stateFile),fenceJSON=sourceMetadata(c,fenceFile),active=decode(stateJSON,binding.projectId).active;
+        if(active.releaseId!==binding.releaseId||active.generation!==binding.generation||active.capsuleSha256!==binding.capsuleSha256||active.fence!==binding.fence)fail("Provider source launch requires its exact committed generation and fence.");
+        let fence:Row;try{fence=JSON.parse(fenceJSON);}catch{fail("Provider source launch fence is invalid.");}
+        if(!exact(fence,["protocol","projectId","fence"])||fence.protocol!=="clank-provider-data-fence/1"||fence.projectId!==binding.projectId||fence.fence!==binding.fence||JSON.stringify(fence)+"\n"!==fenceJSON)fail("Provider source launch committed fence differs.");
+        const data=directory(c,project,"data"),generations=directory(c,project,"generations"),release=directory(c,generations,active.releaseDirectory.slice("generations/".length));
+        const databasePath=c.path.join(project.path,...active.databasePath.split("/")),parent=c.path.dirname(databasePath);
+        if(c.fs.realpathSync(parent)!==parent)fail("Provider source launch database parent is not canonical.");
+        const leaf=parent===data.path?data:pin(c,parent,true),database=pin(c,databasePath,false,2*1024*1024*1024);
+        held.push(...c.pins.splice(from));let closed=false;
+        const closes=ownerSourceLaunchData.get(owner)??new Set<()=>void>();
+        const close=()=>{if(closed)return;closed=true;closes.delete(close);const errors:unknown[]=[];for(const p of held.splice(0).reverse())try{c.fs.closeSync(p.fd);}catch(error){errors.push(error);}if(errors.length===1)throw errors[0];if(errors.length)throw new AggregateError(errors,"Provider source launch pins failed to close.");};
+        const check=()=>{
+          try{
+            if(closed)fail("Provider source launch data is closed.");service.assertCurrent();
+            for(const p of held)assertPin(c,p);
+            if(c.fs.realpathSync(leaf.path)!==leaf.path||c.fs.realpathSync(database.path)!==database.path||c.fs.realpathSync(release.path)!==release.path||!absent(c,journal)||sourceMetadata(c,stateFile)!==stateJSON||sourceMetadata(c,fenceFile)!==fenceJSON)fail("Provider source launch data observation changed.");
+          }catch(error){try{close();}catch(cleanup){throw new AggregateError([error,cleanup],"Provider source launch observation and cleanup failed.");}throw error;}
+        };
+        const verifyCurrent=async()=>{try{check();await service.verifyCurrent();check();}catch(error){try{close();}catch(cleanup){throw new AggregateError([error,cleanup],"Provider source launch verification and cleanup failed.");}throw error;}};
+        result=Object.freeze({...binding,databasePath:database.path,dataDirectory:data.path,releaseDirectory:release.path,assertCurrent:check,verifyCurrent,close}) as ProviderSourceLaunchDataLease;
+        check();closes.add(close);ownerSourceLaunchData.set(owner,closes);sourceLaunchDataLeases.set(result,{check});
+      }catch(error){const errors:unknown[]=[error];for(const p of held.splice(0).reverse())try{c.fs.closeSync(p.fd);}catch(cleanup){errors.push(cleanup);}try{releasePins(c,from);}catch(cleanup){errors.push(cleanup);}if(errors.length>1)throw new AggregateError(errors,"Provider source launch retention failed.");throw error;}
+    });
+    assertProviderSourceLaunchDataLease(result!);return result!;
+  }catch(error){try{result?.close();}catch(cleanup){throw new AggregateError([error,cleanup],"Provider source launch publication failed.");}throw error;}
+  finally{pendingSourceLaunchData.set(owner,(pendingSourceLaunchData.get(owner)??1)-1);}
+}
+export function assertProviderSourceLaunchDataLease(value:ProviderSourceLaunchDataLease):void {
+  const registered=sourceLaunchDataLeases.get(value);
+  if(!registered)fail("A genuine provider source launch data lease is required.");
+  registered.check();
 }
 async function withBridge<Value>(bridge:ProviderHandoffBridge,live:boolean,action:(c:Context,root:Row,state:ReturnType<typeof inspect>,registered:BridgeContext)=>Value):Promise<Value>{
   const registered=bridgeCurrent(bridge,live);
