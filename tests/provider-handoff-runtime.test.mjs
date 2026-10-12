@@ -252,3 +252,22 @@ for(const initialized of [false,true])test('R1 durable API revocation denies act
  if(initialized){p.send({revoke:true});assert.deepEqual(await p.next(),{ok:true,records:0});}else {p=await child(t,f,'refuse');assert.equal((await p.next()).ok,true);}await p.done();
  const db=new DatabaseSync(f.catalog,{readOnly:true});try{assert.equal(db.prepare('SELECT state FROM clank_provider_handoff_source_grant').get().state,'revoked');}finally{db.close();}
 });
+
+
+for(const loss of ['revocation','backend closure','catalog replacement'])test('native source '+loss+' promptly stops an active owned worker before rejecting initialization',async t=>{
+ const f=await fixture(t),p=await child(t,f,'fault',{fault:'worker-active'}),held=await p.next();assert.equal(held.phase,'held');assert.equal(held.label,'worker-active');assert.equal(held.spawns,1);assert.ok(held.pid>0);assert.match(held.birth,/^[0-9]+$/);
+ const before=performance.now();
+ if(loss==='revocation')f.mutate(db=>db.exec("UPDATE clank_provider_handoff_source_grant SET state='revoked'"));
+ else if(loss==='backend closure')fs.writeFileSync(join(f.app,'cancel-source.json'),'close',{mode:0o600});
+ else {fs.copyFileSync(f.catalog,f.catalog+'.replacement');fs.chmodSync(f.catalog+'.replacement',0o600);fs.renameSync(f.catalog+'.replacement',f.catalog);}
+ let timer;const result=await Promise.race([p.next(),new Promise((_,reject)=>timer=setTimeout(()=>reject(Error('Revoked source worker is still active after the cancellation bound.')),2000))]).finally(()=>clearTimeout(timer));
+ assert.equal(result.ok,true);assert.equal(result.spawns,1);assert.ok(performance.now()-before<2000);await p.done();
+ const directory=join(f.app,'.clank-source-recovery-'+f.bootstrap.binding.sourceIncarnation);assert.equal(fs.existsSync(join(directory,'head.json')),false);assert.equal(fs.existsSync(join(directory,'epoch.json')),false);
+});
+
+test('native queued source revocation cancels promptly without terminating independent ordinary workers',async t=>{
+ const f=await fixture(t),p=await child(t,f,'fault',{fault:'worker-queued-cancel'}),held=await p.next();assert.equal(held.phase,'held');assert.equal(held.label,'worker-queued-cancel');assert.equal(held.spawns,2);
+ f.mutate(db=>db.exec("UPDATE clank_provider_handoff_source_grant SET state='revoked'"));let timer;
+ const result=await Promise.race([p.next(),new Promise((_,reject)=>timer=setTimeout(()=>reject(Error('Revoked source is still queued after the cancellation bound.')),2000))]).finally(()=>clearTimeout(timer));
+ assert.equal(result.ok,true);assert.equal(result.spawns,3,'only a later independent ordinary inspection was added');await p.done();
+});

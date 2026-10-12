@@ -36,7 +36,7 @@ const runtime=await runtimePending;
 const anchor=openBackend[SQLITE_INTERNAL],slot=Symbol.for('clank.provider.source.bootstrap.v1');
 const cached=runtime.database[SQLITE_INTERNAL].prepare("INSERT INTO clank_meta(_key,_value) VALUES('bootstrap_escape',1)");
 
-let held=false,spawns=0;const queuedInputs=[],queueTasks=[];
+let held=false,spawns=0,activeWorker,activeWorkerClosed=false;const queuedInputs=[],queueTasks=[];
 const gate=async label=>{if(held)return;held=true;report({phase:'held',label,spawns});const command=JSON.parse((await lines.next()).value);if(command.close)runtime.close();};
 if(config.sourceTask){
  let token;const pins=[];const freeze=Object.freeze;
@@ -119,11 +119,11 @@ if(config.fault){
  }
  const access=fs.promises.access;fs.promises.access=async(...args)=>{const value=await access(...args);if(config.fault==='worker-admission'&&args[0]==='/usr/bin/setpriv')await gate(config.fault);return value;};
  const open=fs.promises.open;fs.promises.open=async(...args)=>{const handle=await open(...args);if(config.fault==='file-sync'&&String(args[0]).endsWith('/database.enc')){const sync=handle.sync.bind(handle);handle.sync=async()=>{const value=await sync();await gate(config.fault);return value;};}return handle;};
- const spawn=childProcess.spawn;childProcess.spawn=(...args)=>{spawns++;const child=spawn(...args);if(config.fault==='worker-queue'&&spawns<=2){const end=child.stdin.end.bind(child.stdin);child.stdin.end=(...input)=>{queuedInputs.push(()=>end(...input));return child.stdin;};}if(config.fault==='worker-close'){const on=child.on;child.on=function(event,handler){return on.call(this,event,event==='close'?async(...values)=>{await gate(config.fault);handler(...values);}:handler);};}return child;};
+ const spawn=childProcess.spawn;childProcess.spawn=(...args)=>{spawns++;const child=spawn(...args);if(config.fault==='worker-active'&&spawns===1){activeWorker=child;const cancelWatch=setInterval(()=>{const command=join(config.app,'cancel-source.json');if(fs.existsSync(command)){clearInterval(cancelWatch);runtime.close();}},10);child.once('close',()=>{activeWorkerClosed=true;clearInterval(cancelWatch);});child.stdin.end=()=>{held=true;report({phase:'held',label:config.fault,spawns,pid:child.pid,birth:(()=>{const stat=fs.readFileSync('/proc/'+child.pid+'/stat','utf8');return stat.slice(stat.lastIndexOf(')')+2).split(' ')[19];})()});return child.stdin;};}if(['worker-queue','worker-queued-cancel'].includes(config.fault)&&spawns<=2){const end=child.stdin.end.bind(child.stdin);child.stdin.end=(...input)=>{queuedInputs.push(()=>end(...input));return child.stdin;};}if(config.fault==='worker-close'){const on=child.on;child.on=function(event,handler){return on.call(this,event,event==='close'?async(...values)=>{await gate(config.fault);handler(...values);}:handler);};}return child;};
  syncBuiltinESMExports();
 }
-if(config.fault==='worker-queue'){
- const acquire=SQLiteTaskScheduler.prototype.acquire;let acquisitions=0;SQLiteTaskScheduler.prototype.acquire=async function(...args){const pending=acquire.apply(this,args);acquisitions++;if(acquisitions===3){await gate('worker-queue');for(const send of queuedInputs)send();}return await pending;};
+if(['worker-queue','worker-queued-cancel'].includes(config.fault)){
+ const acquire=SQLiteTaskScheduler.prototype.acquire;let acquisitions=0;SQLiteTaskScheduler.prototype.acquire=async function(...args){const pending=acquire.apply(this,args);pending.catch(()=>{});acquisitions++;if(acquisitions===3){if(config.fault==='worker-queue'){await gate('worker-queue');for(const send of queuedInputs)send();}else{held=true;report({phase:'held',label:config.fault,spawns});}}return await pending;};
  for(let n=0;n<2;n++){const directory=join(config.app,'queued-'+n);fs.mkdirSync(directory,{mode:0o700});const path=join(directory,'data.sqlite'),db=new DatabaseSync(path);db.exec('CREATE TABLE record(value TEXT)');db.close();queueTasks.push(runSQLiteTask('inspection','inspectSQLite',[path]));}
  const deadline=Date.now()+5000;while(queuedInputs.length!==2){assert.ok(Date.now()<deadline,'two actual workers must own scheduler slots');await new Promise(resolve=>setTimeout(resolve,5));}
 }
@@ -209,7 +209,7 @@ try{
     if(config.finalFault==='native')assert.throws(()=>completionHandle.complete(),/consumed/);
     else{assert.throws(()=>completionHandle.complete(),/closed|consumed/);assert.throws(()=>completionHandle.complete(),/consumed/);}
     const retained=fs.readdirSync('/proc/self/fd').flatMap(fd=>{try{const path=fs.readlinkSync('/proc/self/fd/'+fd);return path.includes('.clank-source-recovery-')||config.cleanupFault&&(path===config.app||path.startsWith(config.app+'/')||path==='/run/clank-source')?[path]:[];}catch{return [];}});assert.deepEqual(retained,[],'owned repository pins must settle before rejection');
-   }assert.throws(()=>runtime.database.transaction(()=>{}));if(config.fault)assert.equal(held,true);if(config.fault==='worker-queue'){await Promise.all(queueTasks);assert.equal(spawns,2);const again=await runSQLiteTask('inspection','inspectSQLite',[config.database]);assert.ok(again);}report({ok:true,mode:config.mode,spawns});}
+   }assert.throws(()=>runtime.database.transaction(()=>{}));if(config.fault)assert.equal(held,true);if(config.fault==='worker-active'){assert.equal(activeWorkerClosed,true,'rejection must await actual child close');assert.equal(fs.existsSync('/proc/'+activeWorker.pid),false,'owned worker must be absent');assert.equal(activeWorker.signalCode,'SIGKILL');}if(config.fault==='worker-queued-cancel'){assert.equal(spawns,2,'no source worker was spawned while queued');for(const send of queuedInputs)send();await Promise.all(queueTasks);assert.equal(spawns,2);const again=await runSQLiteTask('inspection','inspectSQLite',[config.database]);assert.ok(again);}if(config.fault==='worker-queue'){await Promise.all(queueTasks);assert.equal(spawns,2);const again=await runSQLiteTask('inspection','inspectSQLite',[config.database]);assert.ok(again);}report({ok:true,mode:config.mode,spawns});}
   else {
    const completion=await pending;
    if(config.mode==='completion'){

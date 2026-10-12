@@ -1,0 +1,119 @@
+{
+  "basis": "068559f249a1bda0171e3343bd97f3bf520f2964",
+  "scope": "Active and queued cancellation for original constructor-minted source initialization tasks. No host worker capability, channel transport, coupled Docker/bootstrap, source readiness or provider-wide writer-stop certificate is established. Acceptance remains29/40.",
+  "implementation": [
+    "Optional native AbortSignal admission removes only its queued entry, clears timer/listener and preserves round-robin capacity/order. Cancellation after admission cannot release an active owned slot.",
+    "Original source context is retained and sampled every50ms through admission, preparation, native worker and cleanup. First authority-loss reason aborts; subsequent polls do not revisit failed authority. Existing before/after-await, spawn/stdin and result checks remain.",
+    "Abort terminates only the actual ChildProcess handle. Rejection waits for its close event; worker/sandbox descriptors and scheduler ownership release afterward. All abort listeners and watches settle on completion/refusal.",
+    "Ordinary workers retain their previous paths and limits. Source tokens still require the existing default Linux namespace policy and fixed three-operation projection."
+  ],
+  "nativeReproduction": {
+    "old": "Original main source worker, with its real stdin submission withheld, remained active after native catalog revocation beyond a2-second test bound. Parent fixture cleanup awaits owned child exit.",
+    "corrected": "Actual default-namespace source workers now stop under revocation, backend closure and catalog inode replacement; source fixture independently requires ChildProcess close, SIGKILL and PID absence before reporting rejection. A queued source cancels while two unrelated ordinary workers retain ownership, then complete normally; later ordinary inspection still admits.",
+    "qualification": "Original constructor-minted backend tokens, native SQLite, real Bubblewrap workers and real catalogue/descriptor changes. Docker-domain/grant row setup is explicitly scripted component evidence. No genuine coupled provider-host transport or full host certification claim."
+  },
+  "tests": {
+    "22": {
+      "counts": {
+        "tests": 174,
+        "pass": 174,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "logSha256": "ced4259d5ec285fd2f3c1e1a2f623c0e3b38cd628969cde09e15efcfafd267bd",
+      "qualification": "Focused before final equivalent watch cleanup (skip already-aborted checks); final complete gate remains required."
+    },
+    "24": {
+      "counts": {
+        "tests": 174,
+        "pass": 174,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "logSha256": "c57b72b7fff6733a02c640af417fe7ded70aae4471e8e473e033335100a99883",
+      "qualification": "Focused before final equivalent watch cleanup (skip already-aborted checks); final complete gate remains required."
+    },
+    "26": {
+      "counts": {
+        "tests": 174,
+        "pass": 174,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "logSha256": "0d6623c40219c9d8640b6f976145bcc38679f972cb5a9363c57e6d1aaed6b3d7",
+      "qualification": "Focused before final equivalent watch cleanup (skip already-aborted checks); final complete gate remains required."
+    }
+  },
+  "types": "54 packed fixtures;149 inherited/0 new diagnostics vs154.",
+  "pairedBuild": {
+    "outputs": 321,
+    "changedSinceMain": [
+      "sqlite-task.js"
+    ],
+    "publicDeclarationsChanged": false
+  },
+  "package": {
+    "files": 450,
+    "bytes": 6996714,
+    "ceilingBytes": 8388608,
+    "dependencies": 0
+  },
+  "originalFailure": {
+    "log": "old-active26-01.log",
+    "sha256": "3568a3574ba0fafde6d1cdb211985a0fff4694c97b9b9bbe1e6c00bdb97931a3"
+  },
+  "sourceSha256": {
+    "src/sqlite-task.ts": "265ba448aba8eda9975a0d2eaaf3619b47803c97e879aae92179586b0fc864b1",
+    "tests/fixtures/provider-handoff-runtime.mjs": "c63712c1a63b66e8c90705d6409e8e7fe09bcccde692e1b650c842c9ea0077ea",
+    "tests/provider-handoff-runtime.test.mjs": "5902f01672e09d93d12006bee8881fd92ee7263570324d2606f3587d2a63022f",
+    "tests/sqlite-sandbox.test.mjs": "45146319bf0188c484707c6f77fb2dd92e458b91b00da1f32535ac53f270659b"
+  },
+  "fullLocalGate": {
+    "counts": {
+      "tests": 3737,
+      "pass": 3700,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 37
+    },
+    "logSha256": "d9b6ffc9c495c843d18e6796c6b17b10c538131ee94d432b871254a03f5fb673",
+    "complete": true,
+    "scope": "Framework/examples, dependency contract, coverage, documentation, packed-release conformance and repository/history security passed."
+  },
+  "hostedChecks": "Not yet published; all8 exact-head gates and protected merge remain required.",
+  "finalSourceCancellationSelection": {
+    "22": {
+      "counts": {
+        "tests": 10,
+        "pass": 10,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "sha256": "588a7213ef9749fda0a1432c196a93cdeb6f87a321ae80993fe0174c7796b482"
+    },
+    "24": {
+      "counts": {
+        "tests": 10,
+        "pass": 10,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "sha256": "e75d96a4e0eff9e1051089fa37eb136947d1ca1d92c8359a61c685eb796e4fd8"
+    },
+    "26": {
+      "counts": {
+        "tests": 10,
+        "pass": 10,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "sha256": "6efa0c5d284aa39df9de77dd7ec8e49ebbe879c1cc1ccb4a1de078cb191662c3"
+    }
+  }
+}

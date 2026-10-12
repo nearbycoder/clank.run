@@ -186,3 +186,20 @@ test('SQLite scratch filesystem has a real 64 MiB allocation ceiling', linux, as
   try { assert.equal((await execute(sandbox)).trim(), 'bounded'); }
   finally { await sandbox.close(); await rm(root, { recursive: true, force: true }); }
 });
+
+
+test('SQL scheduler removes only the aborted queued tenant and preserves other admission order',async()=>{
+ const scheduler=new SQLiteTaskScheduler(1,3,2,1000),active=await scheduler.acquire('active'),controller=new AbortController(),reason=Error('source revoked');
+ const canceled=scheduler.acquire('source',controller.signal);const rejected=assert.rejects(canceled,error=>error===reason);
+ const order=[],b=scheduler.acquire('b').then(release=>{order.push('b');release();}),c=scheduler.acquire('c').then(release=>{order.push('c');release();});
+ controller.abort(reason);await rejected;
+ const d=scheduler.acquire('d').then(release=>{order.push('d');release();});active();await Promise.all([b,c,d]);assert.deepEqual(order,['b','c','d']);
+});
+test('SQL scheduler refuses pre-aborted admission without consuming capacity',async()=>{
+ const scheduler=new SQLiteTaskScheduler(1,1,1,1000),controller=new AbortController();controller.abort(Error('closed'));
+ await assert.rejects(scheduler.acquire('closed',controller.signal),/closed/);const release=await scheduler.acquire('live');release();
+});
+test('abort after scheduler admission cannot release an active owned slot before its owner settles',async()=>{
+ const scheduler=new SQLiteTaskScheduler(1,1,1,1000),controller=new AbortController(),release=await scheduler.acquire('source',controller.signal);let admitted=false;
+ const next=scheduler.acquire('next').then(end=>{admitted=true;end();});controller.abort(Error('closed'));await new Promise(resolve=>setTimeout(resolve,20));assert.equal(admitted,false);release();await next;assert.equal(admitted,true);
+});
