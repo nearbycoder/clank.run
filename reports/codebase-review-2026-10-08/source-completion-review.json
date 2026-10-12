@@ -1,0 +1,87 @@
+{
+  "feature": 7,
+  "base": "c21308cf962c7441577ef3571a729157d7003d55",
+  "accepted": 29,
+  "pending": 11,
+  "scope": "Original C0 completion provenance and independent native revalidation before future source readiness. This check grants no write/readiness/controller authority and resolves no production health/data startup ordering.",
+  "files": {
+    "src/backend.ts": "6ee2b20573feec40f8107e75c854914a7b3bdd564b87dcc0343d21b6c8d82c05",
+    "src/point-in-time.ts": "9ad5a9cb82bf7e1b98331492be5902d663070c457c7e8d3175f9bd20381e644c",
+    "tests/backend-source-runtime.test.mjs": "ac5951e2e8012a9f802df4e81f2889a559226081eb9468de3459e81379c7c10d",
+    "tests/fixtures/provider-source-completion-native.mjs": "890118e18553903daf3c1773e4cf3c484a322f1783e122a8cdb9096f56911076",
+    "tests/fixtures/provider-handoff-runtime.mjs": "52a28a1edc452374a286bc082f000873c0cb2940261cf3bd85ce7c8974b928a1"
+  },
+  "implementation": [
+    "Retain exact original completion only after independent native completion and worker-client finalization succeed. Original constructor/runtime and result object identity are required before touching claimed status fields.",
+    "Recheck original runtime definition/database identity and actual idleness, current original catalog/native directory pins and sealed capture metadata through the original connection. Compare independent native epoch/key/schema/base/cursor to retained original completion.",
+    "Closing the original backend, native metadata drift/another writer, or catalog/namespace loss prevents proof. Restoring external metadata cannot clear the original capture seal failure. Existing ordinary runtime behavior is unchanged; private initialization still fences ordinary writes."
+  ],
+  "verification": {
+    "focusedNode22": 157,
+    "focusedNode24": 157,
+    "native": "native-completion-matrix-05.json:6 paired real Node22/26 cases prove exact original/copy/accessor/active-read checks, original completion after actual native drift/restoration and after original runtime close.",
+    "cleanup": "All7 exact owned containers absent on original unchanged daemon; unchanged2.25GB reserve maintained.",
+    "types": {
+      "packed": 54,
+      "existing": 149,
+      "new": 0
+    },
+    "pairedOutputs": 321,
+    "publicDeclarationsUnchanged": 146,
+    "changedOutputs": [
+      "backend.js",
+      "point-in-time.js"
+    ],
+    "package": {
+      "files": 450,
+      "bytes": 7035081,
+      "ceiling": 8388608,
+      "dependencies": 0
+    },
+    "fullGate": {
+      "file": "full-check26-corrected-11.log",
+      "completed": true,
+      "exitCode": 0,
+      "counts": {
+        "tests": 3794,
+        "pass": 3757,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 37
+      },
+      "coverage": {
+        "lines": 91.97,
+        "branches": 82.25,
+        "functions": 90.11
+      },
+      "qualification": "Fresh final-code complete gate on original owned regular-filesystem TMPDIR; no assertion or coverage requirement weakening."
+    },
+    "faultInstrumentation": {
+      "gate": "full-check26-05.log",
+      "counts": {
+        "tests": 3794,
+        "pass": 3746,
+        "fail": 11,
+        "cancelled": 0,
+        "skipped": 37
+      },
+      "exitCode": 1,
+      "completeReleaseGate": false,
+      "cause": "Original fixture monkeypatch detects a two-field private completion handle. New complete/assertComplete/close handle has three fields, so original fault injection never triggers and completionHandle stays undefined.",
+      "correction": "Match exactly three own named function fields complete/assertComplete/close. Original injection point, native corruption/close/revoke/path-replacement and cleanup assertions all remain in place. No skip or retry of assertion failure.",
+      "focusedCorrected": {
+        "node22": 157,
+        "node24": 157
+      },
+      "runtimeUnchanged": true
+    },
+    "hosted": "Fresh exact-head hosted checks and protected delivery remain required."
+  },
+  "browserBlock": "Chrome refused fixture access because its admin-enforced policy could not be verified. No bypass, alternative controls, indirect target or permission weakening. User asked once to restore policy verification; native browser acceptance remains pending.",
+  "remaining": [
+    "Production operator enablement and pre-commit health/post-commit initialization ordering",
+    "Original source readiness/control validators and write admission",
+    "All-role source writer exclusion, seal/tail retention, target activation and ingress/fallback interruption proof",
+    "All10 other pending original feature scopes"
+  ]
+}

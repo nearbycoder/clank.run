@@ -493,7 +493,8 @@ type SourceInitialization = {
   phase:"initializing"|"initialized"|"failed"|"closed"; token?:object;
   current():void; write():void;
   reader?:Awaited<ReturnType<typeof import("./provider-handoff.ts").openProviderSourceReader>>;
-  flight?:Promise<SourceInitializationResult>; recovery?:{close():Promise<void>};
+  flight?:Promise<SourceInitializationResult>; result?:SourceInitializationResult;
+  recovery?:{close():Promise<void>;assertComplete():void};
 };
 const sourceSQLiteDatabases = new WeakMap<object, SourceDatabase>();
 const sourceBackendRuntimes = new WeakMap<object, {identity():void;database:object}>();
@@ -3250,6 +3251,14 @@ Object.defineProperty(openBackend, SQLITE_INTERNAL, { value: Object.freeze({
     assertRuntime.identity();sourceSQLiteDatabases.get(assertRuntime.database)!.idle();
   },
   sourceContext(token:object){const context=sourceContexts.get(token);if(!context)throw new Error("A genuine private source initialization is required.");context.current();return context;},
+  assertSourceRuntimeCompletion(runtime:object,result:unknown):void{
+    const registered=sourceBackendRuntimes.get(runtime),state=sourceInitializations.get(runtime);
+    // Compare original object identity before touching caller-supplied fields.
+    // A frozen/serialized/copied status is not a captured native completion.
+    if(!registered||!state||state.phase!=="initialized"||!state.result||result!==state.result||!state.recovery)throw new Error("A genuine current source runtime completion is required.");
+    registered.identity();const database=sourceSQLiteDatabases.get(registered.database)!;
+    database.idle();state.current();state.recovery.assertComplete();state.current();database.idle();
+  },
   initializeSourceRuntime(runtime:object):Promise<SourceInitializationResult>{
     const registered=sourceBackendRuntimes.get(runtime);
     if(!registered)throw new Error("Source initialization requires a genuine live backend runtime.");
@@ -3283,7 +3292,7 @@ Object.defineProperty(openBackend, SQLITE_INTERNAL, { value: Object.freeze({
       // Own cleanup before any post-await validation can reject or observe close.
       const initialized=await (openPointInTimeRecovery as any)[SQLITE_INTERNAL].initializeSource(token);state.recovery=initialized;
       state.current();if(state.phase!=="initializing")throw new Error("Source initialization was closed.");
-      database.idle();state.phase="initialized";const result=initialized.complete();context.assertInitialized();state.reader.worker?.complete();return result;
+      database.idle();state.phase="initialized";const result=initialized.complete();context.assertInitialized();state.reader.worker?.complete();state.result=result;return result;
     })().catch(async error=>{
       if(state.phase!=="closed")state.phase="failed";sourceContexts.delete(token);let failed=false,failure:unknown;
       try{state.reader?.close();}catch(cleanup){failed=true;failure=cleanup;}

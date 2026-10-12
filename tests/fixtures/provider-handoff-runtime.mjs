@@ -166,7 +166,7 @@ if(config.cleanupFault){
 let completionHandle,finalAwaitReached=false;
 if(config.finalFault||config.mode==='completion'){
  const freeze=Object.freeze;
- Object.freeze=function(value){const result=freeze(value);if(value&&typeof value.close==='function'&&Object.keys(value).length===2&&('complete' in value||'result' in value)){
+ Object.freeze=function(value){const result=freeze(value);if(value&&Object.keys(value).length===3&&['complete','assertComplete','close'].every(name=>Object.hasOwn(value,name)&&typeof value[name]==='function')){
   Object.freeze=freeze;completionHandle=result;
   if(config.finalFault)queueMicrotask(()=>{
    finalAwaitReached=true;
