@@ -28,9 +28,9 @@ const line = prefix => {
 };
 const source = [
   line("const sidebarMedia="),
-  ...["navigate", "consoleFocusVisible", "sidebarIsOpen", "sidebarFocusTargets", "openSidebar", "closeSidebar", "handleSidebarKeydown", "handleConsoleFocus", "cancelNavigationFocus"].map(name => line(`function ${name}(`)),
+  ...["navigate", "settingsHaveDraft", "confirmSettingsNavigation", "requestIncidentConfirmation", "finishIncidentConfirmation", "consoleFocusVisible", "sidebarIsOpen", "sidebarFocusTargets", "openSidebar", "closeSidebar", "handleSidebarKeydown", "handleConsoleFocus", "cancelNavigationFocus"].map(name => line(`function ${name}(`)),
   line("async function navigateWithFocus("), line('sidebarMedia.addEventListener('), line('q("#skip-navigation").onclick='),
-  line('q("#sidebar-scrim").onclick='), line('q("#sidebar-close").onclick='),
+  line('q("#sidebar-scrim").onclick='), line('q("#sidebar-close").onclick='), line('q("#incident-confirm-cancel").onclick='),
   html.match(/q\("#mobile-menu"\)\.onclick=[^\n]+/)[0],
   ...lines.filter(value => value.startsWith('document.addEventListener(') && /handleSidebarKeydown|handleConsoleFocus|cancelNavigationFocus|a\[data-route\]/.test(value)),
   line('window.addEventListener("popstate"'),
@@ -61,6 +61,8 @@ function fixture(mobile = true) {
       setAttribute(name, value) { this.attributes[name] = value; }, removeAttribute(name) { delete this.attributes[name]; },
       focus(options) { if (this.disabled || this.closest("[hidden],[inert]")) return; this.focuses++; this.focusOptions = options; document.activeElement = this; dispatch("focusin", { target: this }); },
       scrollIntoView(options) { this.scrollOptions = options; },
+      showModal() { this.open = true; openDialog = this; }, close() { this.open = false; openDialog = null; },
+      addEventListener(name, callback) { this[name] = callback; },
     };
     nodes.set(`#${id}`, node);
     return node;
@@ -82,13 +84,15 @@ function fixture(mobile = true) {
   const input = element("project-search", "INPUT", true); main.append(input);
   const outside = element("outside-control", "BUTTON", true); body.append(outside);
   let openDialog = null;
+  const dialog=element("incident-confirmation", "DIALOG");body.append(dialog);
+  for(const id of ["incident-confirm-message","incident-confirm-accept","incident-confirm-cancel"])dialog.append(element(id,"BUTTON",true));
   const location = { pathname: "/overview", search: "", origin: "https://console.example.test" };
   const updateLocation = path => { const url = new URL(path, location.origin); location.pathname = url.pathname; location.search = url.search; };
   const context = { state, initial, document, hooks,
     q(selector) { return selector === "dialog[open]" ? openDialog : nodes.get(selector) || null; },
     qa(selector, root) { assert.equal(root, sidebar); const result = []; function walk(node) { for (const child of node.children) { if (child.focusable) result.push(child); walk(child); } } walk(root); return result; },
-    temporaryAccessView: null,
-    window: { location, confirm() { return true; }, matchMedia(query) { assert.equal(query, "(max-width:900px)"); return media; },
+    temporaryAccessView: null, confirm() { throw Error("Native confirmation must not run."); },
+    window: { location, confirm() { throw Error("Native confirmation must not run."); }, matchMedia(query) { assert.equal(query, "(max-width:900px)"); return media; },
       getComputedStyle(node) { let visibility = node.visibility; if (media.matches && sidebar.contains(node) && !sidebar.classList.contains("open")) visibility = "hidden"; return { visibility }; },
       history: { pushState(_data, _title, path) { history.push(["push", path]); updateLocation(path); }, replaceState(_data, _title, path) { history.push(["replace", path]); updateLocation(path); } },
       addEventListener(name, callback) { windowListeners.set(name, callback); },
@@ -121,9 +125,11 @@ test("039: opening mobile navigation contains focus, marks a modal drawer, and m
 });
 
 test('temporary-access drafts can cancel route navigation without changing history or focus',async()=>{
-  const f=fixture();f.context.temporaryAccessView={hasPendingChanges:()=>true};f.context.window.confirm=()=>false;
-  const focused=f.document.activeElement;await f.context.navigate('/usage',false,true);assert.equal(f.history.length,0);assert.equal(f.document.activeElement,focused);
-  f.context.window.confirm=()=>true;await f.context.navigate('/usage',false,true);assert.equal(f.history.length,1);
+  const f=fixture();f.context.temporaryAccessView={hasPendingChanges:()=>true};
+  Object.assign(f.state,{currentProject:'project_exact_01',projectTab:'settings',dashboard:{account:{id:'owner_exact_01'}},projectData:{detail:{access:{role:'owner'}}}});
+  const focused=f.document.activeElement,cancelled=f.context.navigate('/usage',false,true);assert.equal(f.q('#incident-confirmation').open,true);assert.equal(f.history.length,0);
+  f.q('#incident-confirm-cancel').onclick();await cancelled;assert.equal(f.history.length,0);assert.equal(f.document.activeElement,focused);
+  const accepted=f.context.navigate('/usage',false,true);f.q('#incident-confirm-accept').onclick();await accepted;assert.equal(f.history.length,1);
 });
 
 test("039: Tab and Shift+Tab wrap only at drawer boundaries and outside focus is returned inside", () => {
@@ -259,7 +265,9 @@ test("039/041: mobile controls stay readable while browser zoom remains availabl
 });
 
 test("edited cost drafts can cancel deliberate console navigation before history changes", async () => {
-  const f=fixture(false);f.context.costView={hasPendingChanges:()=>true};let confirmations=0;f.context.confirm=()=>{confirmations++;return false;};
-  await f.context.navigate('/usage',false,false);assert.equal(confirmations,1);assert.deepEqual(f.history,[]);assert.equal(f.state.route.kind,'overview');
-  f.context.confirm=()=>true;await f.context.navigate('/usage',false,false);assert.deepEqual(f.history,[['push','/usage']]);assert.equal(f.state.route.kind,'usage');
+  const f=fixture(false);f.context.costView={hasPendingChanges:()=>true};
+  Object.assign(f.state,{currentProject:'project_exact_01',projectTab:'settings',dashboard:{account:{id:'owner_exact_01'}},projectData:{detail:{access:{role:'owner'}}}});
+  const cancelled=f.context.navigate('/usage',false,false);assert.equal(f.q('#incident-confirmation').open,true);assert.deepEqual(f.history,[]);
+  f.q('#incident-confirm-cancel').onclick();await cancelled;assert.deepEqual(f.history,[]);assert.equal(f.state.route.kind,'overview');
+  const accepted=f.context.navigate('/usage',false,false);f.q('#incident-confirm-accept').onclick();await accepted;assert.deepEqual(f.history,[['push','/usage']]);assert.equal(f.state.route.kind,'usage');
 });
