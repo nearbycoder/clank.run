@@ -1,0 +1,18 @@
+{
+  "date": "2026-10-13",
+  "scope": "Cost and temporary-access navigation prompts use the existing in-page dialog. Other native console confirmation actions remain outside this change.",
+  "behavior": [
+    "Cancelling or Escape retains drafts and returns focus.",
+    "Explicit leaving never retries or undoes a dispatched mutation.",
+    "The queued destination is refused after account, session, project, role or captured-view changes.",
+    "Disposal of a captured view closes the review; disposing an absent unrelated panel does not close it.",
+    "Project role refresh and forced route changes cancel obsolete reviews."
+  ],
+  "verification": {
+    "focused": "Emitted console modal and adjacent controller/UI tests, including native HTTP cost retries.",
+    "browser": "Fresh actual navigation acceptance remains pending: Chrome reports ERR_BLOCKED_BY_CLIENT for new local and requested tailnet fixture navigation. Existing native modal browser evidence retains its narrower scope."
+  },
+  "publicApiChange": false,
+  "schemaChange": false,
+  "dependenciesAdded": 0
+}

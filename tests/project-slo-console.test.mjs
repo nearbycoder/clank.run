@@ -6,7 +6,7 @@ import {platformConsolePage} from '../dist/platform-console.js';
 const html=await platformConsolePage('http://localhost',{user:null,csrfToken:null},'',false,false).text();
 const start=html.indexOf('const sloClient='),end=html.indexOf('const incidentClient=',start);assert.ok(start>0&&end>start);
 const fragment=html.slice(start,end),lines=html.split('\n');
-const shared=['navigate','incidentHasDraft','requestIncidentConfirmation','finishIncidentConfirmation','confirmIncidentNavigation'].map(name=>lines.find(line=>line.startsWith('function '+name+'('))).join('\n');
+const shared=['navigate','settingsHaveDraft','confirmSettingsNavigation','incidentHasDraft','requestIncidentConfirmation','finishIncidentConfirmation','confirmIncidentNavigation'].map(name=>lines.find(line=>line.startsWith('function '+name+'('))).join('\n');
 const project='project_slo_exact_01',policyId='policy_slo_exact_01';
 const configuration={name:'Checkout',objective:{kind:'request-success'},targetBasisPoints:9900,windowMinutes:5,minimumRequests:100,burnThreshold:2,enabled:true};
 const assessment=(version=1,target=9900)=>({policy:{...configuration,targetBasisPoints:target,id:policyId,projectId:project,version:version,createdAt:1000,updatedAt:1000},evaluation:{status:'insufficient-data',reason:'missing-measurements',from:1000,until:2000,coverage:{complete:false,expectedMinutes:5,coveredMinutes:0,missingMinutes:5},requests:0,good:0,bad:0,allowedBadRequests:null,remainingBudgetRequests:null,burnRate:null,burning:null},alert:null});
