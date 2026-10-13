@@ -16,6 +16,8 @@ class Element {
   get disabled() { return this.isDisabled; }
   set disabled(value) { this.isDisabled = value; if (value && this.ownerDocument.activeElement === this) this.ownerDocument.activeElement = this.ownerDocument.body; }
   focus() { if (this.isConnected && !this.disabled) this.ownerDocument.activeElement = this; }
+  showModal() { this.open=true; }
+  close() { this.open=false; this.onclose?.(); }
   remove() { if (this.contains(this.ownerDocument.activeElement)) this.ownerDocument.activeElement = this.ownerDocument.body; if (this.parentNode) this.parentNode.childNodes = this.parentNode.childNodes.filter(node => node !== this); this.parentNode = null; }
   get textContent() { return this.ownText + this.childNodes.map(node => node.textContent).join(''); }
   set textContent(value) { this.replaceChildren(); this.ownText = value; }
@@ -39,10 +41,28 @@ for(const movedOutside of [true,false])test('held current refresh failure uses s
  else{assert.equal(f.document.activeElement.getAttribute('role'),'status');assert.match(f.document.activeElement.textContent,/Attachments unavailable for this account/);}
 });
 const nodes = (root, tag) => root.childNodes.flatMap(node => [...(node.tag === tag ? [node] : []), ...nodes(node, tag)]);
+test('discard modal preserves the local copy on Escape and restores its action focus',async t=>{
+ const f=await fixture(t),discard=button(f.root,'Discard local copy');discard.focus();const action=discard.onclick(),dialog=nodes(f.root,'dialog')[0];
+ assert.equal(dialog.open,true);assert.equal(f.document.activeElement.textContent,'Keep local copy');assert.deepEqual(f.calls,[]);assert.match(dialog.textContent,/does not remove a server file/);
+ dialog.oncancel({preventDefault(){}});await action;assert.equal(nodes(f.root,'dialog').length,0);assert.equal(f.document.activeElement,discard);assert.deepEqual(f.calls,[]);
+});
+test('disposal dismisses an open discard review without changing local storage or another view focus',async t=>{
+ const f=await fixture(t),action=button(f.root,'Discard local copy').onclick();assert.equal(nodes(f.root,'dialog').length,1);
+ f.dispose();f.elsewhere.focus();await action;assert.deepEqual(f.calls,[]);assert.equal(f.root.childNodes.length,0);assert.equal(f.document.activeElement,f.elsewhere);
+});
+test('a row replaced during its discard review cannot dispatch the stale action',async t=>{
+ const f=await fixture(t),action=button(f.root,'Discard local copy').onclick(),dialog=nodes(f.root,'dialog')[0];
+ f.emit([{...failed,status:'uploading'}]);button(dialog,'Discard local copy').onclick();await action;assert.deepEqual(f.calls,[]);assert.equal(f.document.activeElement.getAttribute('role'),'status');
+});
+test('account snapshot loss dismisses the open discard review and announces current refusal',async t=>{
+ const f=await fixture(t),action=button(f.root,'Discard local copy').onclick();let reads=0;
+ f.queue.snapshot=async()=>{reads++;throw Error('Account changed')};await observeRefresh(()=>reads>0);await action;await settle();
+ assert.equal(nodes(f.root,'dialog').length,0);assert.deepEqual(f.calls,[]);assert.equal(f.document.activeElement.getAttribute('role'),'status');
+});
 const button = (root, label) => { const found = nodes(root, 'button').find(node => node.textContent === label); assert.ok(found, label); return found; };
 const failed = { id: 'retained-id', key: 'private-key', path: 'attach', size: 22, status: 'failed', errorCode: 'CONTENT_TYPE_NOT_ALLOWED' };
 async function fixture(t) {
-  const document = { createElement: tag => new Element(tag, document), defaultView: { confirm: () => true } };
+  const document = { createElement: tag => new Element(tag, document), defaultView: { confirm: () => {throw Error('Native confirmation must not be used');} } };
   document.body = document.createElement('body'); document.activeElement = document.body;
   const root = document.createElement('div'), elsewhere = document.createElement('input'); document.body.append(root, elsewhere);
   let items = [failed], listener, resolve, reject; const calls = [];
@@ -95,7 +115,7 @@ test('failed retry leaves a different action focused, but announces failure at t
 
 test('discard moves removed-row focus to status and disposal fences stale controls and late failure', async t => {
   const f = await fixture(t), discard = button(f.root, 'Discard local copy'); discard.focus();
-  const action = discard.onclick(); f.emit([]); f.succeed(); await action;
+  const action = discard.onclick(); const dialog=nodes(f.root,'dialog')[0]; button(dialog,'Discard local copy').onclick(); await settle(); f.emit([]); f.succeed(); await action;
   assert.equal(f.document.activeElement.getAttribute('role'), 'status'); assert.match(f.root.textContent, /0 pending attachments/);
   f.emit([failed]); const retry = button(f.root, 'Retry'); retry.focus(); const held = retry.onclick();
   f.dispose(); f.elsewhere.focus(); f.fail(); await held; await retry.onclick();
