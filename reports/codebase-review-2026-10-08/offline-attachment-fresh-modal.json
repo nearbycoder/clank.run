@@ -24,10 +24,7 @@
     "focusedPass": 37,
     "focusedFail": 0
   },
-  "pending": [
-    "Final exact implementation release/types/security/package gates and hosted checks",
-    "Protected delivery before updating canonical acceptance count"
-  ],
+  "pending": [],
   "retainedFailure": "First owned listener pause process exited; original root retained and recovered. No silent success or production failure claim.",
   "files": {
     "src/offline-attachments.ts": "bfbd2e65d680465c0115d486393430c1e31bc3c94b6fed2c1d6f99d83055913f",
@@ -35,5 +32,22 @@
     "tests/fixtures/offline-attachments-network-server.mjs": "95189100e1f24c8a9725a48937bd7ddd0185463e5b344f70421b9569e740b467",
     "tests/fixtures/offline-attachments-network-client.mjs": "cc3a41aa933584371b6e05480ac13fa2b771765e0c37e9d458663d2d110e9b15",
     "tests/fixtures/fresh-narrow-browser-server.mjs": "d3aa9cb0fce64ebf65b26e7c0cb6befb6a72cfa78acc62b415b069720c5408b3"
+  },
+  "accepted": true,
+  "protectedDelivery": {
+    "pullRequest": "https://github.com/nearbycoder/clank.run/pull/394",
+    "reviewedHead": "a7ee91674b22f76669245fc315995cadd50f1fce",
+    "mergedMain": "aa5f1e44193ff1e07431d652a0a4e5bcf55a5864",
+    "identicalTree": "c09538dee3a2fd7fb8f923561b1767043385317e",
+    "hostedChecksSuccess": 8,
+    "fullLocalRepeat": {
+      "tests": 3907,
+      "passed": 3864,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 43,
+      "remainingGates": "coverage, documentation, packaged conformance, security passed"
+    },
+    "retainedInitialFailure": "Existing native supervisor observer database is locked; cause/holder unproven. Both unchanged cases pass separately and identical-head full repeat succeeds; no timeout/assertion/retry/production changes."
   }
 }
