@@ -37,5 +37,36 @@
   },
   "finalNative": "pending",
   "localRelease": "pending",
-  "hostedChecks": "pending"
+  "hostedChecks": "pending",
+  "secondNativeFailure": {
+    "protectedBaseHead": "0cba64ee012d18858a21056b41614cccdfb1786f",
+    "tests": 6,
+    "pass": 5,
+    "fail": 1,
+    "skip": 0,
+    "failure": "Native automatic retirement can remove candidate before post-traffic dockerlogs reads"
+  },
+  "logObserver": [
+    "Attach actual Docker log stream before budgetedtraffic; readiness requires a native healthlog",
+    "Bound incoming fragment to64KiB and retainedrequestrecords to64",
+    "Retain method/path only; discard ingress headers",
+    "Preserve actual originalPID/birth and awaitexactownedobserverclose",
+    "Await exactlytwo native request observations, then automatic complete/attempt-limit/stopRequestedfalse and actualcandidateabsence"
+  ],
+  "baselineLocalFailure": {
+    "head": "0cba64ee012d18858a21056b41614cccdfb1786f",
+    "tests": 3924,
+    "pass": 3880,
+    "fail": 1,
+    "skip": 43,
+    "location": "tests/fixtures/platform-crash-controller.mjs:47",
+    "failure": "Existing candidate writer observer database is locked despite original5000ms busytimeout",
+    "cause": "Holder/underlyingcause unproven; no observer timeout/retry/assertion changed"
+  },
+  "isolatedNativeObserver": {
+    "pass": 1,
+    "fail": 0,
+    "skip": 0,
+    "qualification": "Scratchcopy with protectedSDKandindependentcurrentNative26certificate; finalfullfixture/runtime gates remainpending"
+  }
 }
