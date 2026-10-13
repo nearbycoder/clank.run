@@ -297,6 +297,7 @@ export function createProjectCostView(root: HTMLElement, options: ProjectCostVie
   let disposed = false, busy = false, generation = 0, current: ProjectCostReport | null = null, dirty = false;
   let policyVersion = 0, overrideVersion = 0, overridePolicyVersion = 0;
   let pending: {kind: "reconcile" | "policy" | "override"; input: ProjectCostReconcileInput | ProjectCostPolicyInput | ProjectCostOverrideInput} | undefined;
+  let review: {title: string; details: string[]; action: () => void; opener: HTMLElement | null} | undefined;
   const node = <Tag extends keyof HTMLElementTagNameMap>(tag: Tag, text?: string): HTMLElementTagNameMap[Tag] => {
     const value = document.createElement(tag); if (text !== undefined) value.textContent = text; return value;
   };
@@ -326,15 +327,41 @@ export function createProjectCostView(root: HTMLElement, options: ProjectCostVie
   overrideForm.append(node("h3", "Temporary admission override"));
   const expiry = field(overrideForm, "Override duration, minutes; zero revokes", "number"), overrideReason = field(overrideForm, "Override reason"); expiry.min = "0"; expiry.max = "60"; expiry.value = "10"; expiry.required = overrideReason.required = true; submit(overrideForm, "Review and apply override");
   manager.append(reconcileForm, policyForm, overrideForm); manager.hidden = true;
+  const dialog = node("dialog"), reviewTitle = node("h3"), reviewDetails = node("div"), keepEditing = node("button", "Keep editing"), applyReview = node("button");
+  const reviewId = "clank-cost-review-" + crypto.randomUUID(); reviewTitle.id = reviewId; dialog.setAttribute("aria-labelledby", reviewId);
+  dialog.style.maxWidth = "min(32rem, calc(100vw - 32px))"; dialog.style.boxSizing = "border-box"; dialog.style.overflowWrap = "anywhere";
+  keepEditing.type = applyReview.type = "button"; dialog.append(reviewTitle, reviewDetails, keepEditing, applyReview); root.append(dialog);
+  const closeReview = (restoreFocus = true) => {
+    const opener = review?.opener; review = undefined;
+    if (dialog.open) dialog.close(); reviewTitle.textContent = ""; reviewDetails.replaceChildren(); applyReview.textContent = "";
+    if (!disposed) disable();
+    if (restoreFocus && !disposed && opener && root.contains(opener)) opener.focus({preventScroll: true});
+  };
+  const openReview = (title: string, details: string[], label: string, action: () => void) => {
+    if (review || disposed || busy || pending || !manage()) return;
+    review = {title, details, action, opener: document.activeElement as HTMLElement | null};
+    reviewTitle.textContent = title; reviewDetails.replaceChildren(...details.map(text => node("p", text))); applyReview.textContent = label;
+    dialog.showModal(); keepEditing.focus({preventScroll: true}); disable();
+  };
+  keepEditing.addEventListener("click", () => { closeReview(); disable(); });
+  dialog.addEventListener("cancel", event => { event.preventDefault(); closeReview(); disable(); });
+  applyReview.addEventListener("click", () => {
+    if (!review) return;
+    if (disposed || options.getAccountId() !== account) { dispose(); return; }
+    const action = review.action;
+    if (busy || pending || !current || !manage()) { closeReview(false); disable(); return; }
+    closeReview(false); action(); disable();
+  });
   const currentAccount = () => {
     if (disposed || options.getAccountId() !== account) { dispose(); throw new Error("Cost account changed. Reload this view."); }
   };
   const format = (value: string | null) => value === null ? "Unknown" : /^(?:0|[1-9][0-9]{0,49})$/u.test(value) ? new Intl.NumberFormat().format(BigInt(value)) : "Unavailable";
   const manage = () => !disposed && options.canManage?.() === true;
   const disable = () => {
-    for (const control of manager.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>("input,select,button")) control.disabled = busy || !!pending;
-    refresh.disabled = busy; retry.disabled = busy; retry.hidden = !pending; manager.hidden = !manage();
-    discard.hidden = !dirty || !manage(); discard.disabled = busy || !!pending;
+    if (review && !manage()) closeReview(false);
+    for (const control of manager.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>("input,select,button")) control.disabled = busy || !!pending || !!review;
+    refresh.disabled = busy || !!review; retry.disabled = busy || !!review; retry.hidden = !pending; manager.hidden = !manage();
+    discard.hidden = !dirty || !manage(); discard.disabled = busy || !!pending || !!review;
   };
   const render = (report: ProjectCostReport) => {
     currentAccount();
@@ -350,7 +377,7 @@ export function createProjectCostView(root: HTMLElement, options: ProjectCostVie
     }
     if (snapshot) summary.append(node("p", `Rate card ${snapshot.rateCard.id}, revision ${snapshot.rateCard.revision} · observed through ${new Intl.DateTimeFormat(undefined, {dateStyle: "medium", timeStyle: "short"}).format(snapshot.observedUntil)} · ${snapshot.reason}`));
     if (report.override) summary.append(node("p", `Override ${report.override.active ? "active" : "inactive"}: ${report.override.reason}`));
-    if (!dirty && !pending && !manager.contains(document.activeElement)) {
+    if (!dirty && !pending && !review && !manager.contains(document.activeElement)) {
       policyVersion = report.policy?.version ?? 0; overrideVersion = report.override?.version ?? 0; overridePolicyVersion = report.policy?.version ?? 0;
       policyCurrency.value = report.policy?.currency ?? snapshot?.rateCard.currency ?? ""; limit.value = report.policy?.limitMinor ?? "";
       warning.value = String(report.policy?.warningPercent ?? 80); age.value = String(report.policy?.maxMeasurementAgeMs ?? 60_000); admission.value = report.policy?.admission ?? "observe";
@@ -394,23 +421,25 @@ export function createProjectCostView(root: HTMLElement, options: ProjectCostVie
   });
   policyForm.addEventListener("submit", event => {
     event.preventDefault(); if (disposed || options.getAccountId() !== account) { dispose(); return; } if (busy || pending || !current || !manage()) return;
-    if (!confirm("Apply this reviewed cost budget and admission policy?")) return;
-    pending = {kind: "policy", input: {expectedVersion: policyVersion, operationId: crypto.randomUUID(), currency: policyCurrency.value, limitMinor: limit.value, warningPercent: Number(warning.value), admission: admission.value as ProjectCostPolicy["admission"], maxMeasurementAgeMs: Number(age.value), reason: policyReason.value}}; void dispatch();
+    const input: ProjectCostPolicyInput = {expectedVersion: policyVersion, operationId: crypto.randomUUID(), currency: policyCurrency.value, limitMinor: limit.value, warningPercent: Number(warning.value), admission: admission.value as ProjectCostPolicy["admission"], maxMeasurementAgeMs: Number(age.value), reason: policyReason.value};
+    openReview("Review budget policy", [`Project ${projectId} · policy version ${input.expectedVersion}`, `Budget: ${input.currency} ${input.limitMinor} smallest currency units. Warning at ${input.warningPercent}%.`, input.admission === "observe" ? "Observe costs without blocking admission." : "Block admission when the observed budget is exhausted or measurement coverage is unknown.", `Maximum measurement age: ${input.maxMeasurementAgeMs} milliseconds.`, `Reason: ${input.reason}`], "Apply reviewed budget", () => { pending = {kind: "policy", input}; void dispatch(); });
   });
   overrideForm.addEventListener("submit", event => {
     event.preventDefault(); if (disposed || options.getAccountId() !== account) { dispose(); return; } if (busy || pending || !current || !manage()) return;
-    if (!confirm("Apply this temporary admission override, or revoke it when duration is zero?")) return;
     const minutes = Number(expiry.value);
     if (!Number.isInteger(minutes) || minutes < 0 || minutes > 60) { status.textContent = "Choose an override duration from zero through 60 minutes."; status.focus(); return; }
-    pending = {kind: "override", input: {expectedVersion: overrideVersion, policyVersion: overridePolicyVersion, operationId: crypto.randomUUID(), expiresAt: minutes === 0 ? 0 : Date.now() + minutes * 60_000, reason: overrideReason.value}}; void dispatch();
+    const input: ProjectCostOverrideInput = {expectedVersion: overrideVersion, policyVersion: overridePolicyVersion, operationId: crypto.randomUUID(), expiresAt: minutes === 0 ? 0 : Date.now() + minutes * 60_000, reason: overrideReason.value};
+    openReview(minutes === 0 ? "Review override revocation" : "Review admission override", [`Project ${projectId} · policy version ${input.policyVersion} · override version ${input.expectedVersion}`, minutes === 0 ? "Revoke the temporary admission override immediately." : `Allow admission until ${new Intl.DateTimeFormat(undefined, {dateStyle: "medium", timeStyle: "short"}).format(input.expiresAt)}.`, `Reason: ${input.reason}`], minutes === 0 ? "Revoke reviewed override" : "Apply reviewed override", () => { pending = {kind: "override", input}; void dispatch(); });
   });
   refresh.addEventListener("click", () => { void refreshView(); }); retry.addEventListener("click", () => { void dispatch(); });
   discard.addEventListener("click", () => {
     if (disposed || options.getAccountId() !== account) { dispose(); return; }
-    if (busy || pending || !manage() || !confirm("Discard this draft and load the current budget policy?")) return;
-    dirty = false; policyReason.value = ""; overrideReason.value = "";
-    // Move focus before loading so the refreshed version can replace this draft.
-    status.focus({preventScroll: true}); disable(); void refreshView();
+    if (busy || pending || !manage()) return;
+    openReview("Discard cost draft", ["Discard the unsaved budget and override drafts and load the current policy. No accepted server operation is undone."], "Discard draft and refresh", () => {
+      dirty = false; policyReason.value = ""; overrideReason.value = "";
+      // Move focus before loading so the refreshed version can replace this draft.
+      status.focus({preventScroll: true}); disable(); void refreshView();
+    });
   });
   const timer = setInterval(() => { if (!disposed && !busy) void refreshView(); }, 5_000);
   const beforeLeave = (event: BeforeUnloadEvent) => {
@@ -418,7 +447,7 @@ export function createProjectCostView(root: HTMLElement, options: ProjectCostVie
   };
   if (typeof window !== "undefined") window.addEventListener("beforeunload", beforeLeave);
   function dispose() {
-    if (disposed) return; disposed = true; generation++; clearInterval(timer); pending = undefined; current = null;
+    if (disposed) return; disposed = true; generation++; clearInterval(timer); pending = undefined; current = null; closeReview(false);
     if (typeof window !== "undefined") window.removeEventListener("beforeunload", beforeLeave);
     for (const control of manager.querySelectorAll<HTMLInputElement>("input")) control.value = "";
     summary.replaceChildren(); components.replaceChildren(); history.replaceChildren(); status.textContent = ""; root.replaceChildren();
