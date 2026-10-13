@@ -138,9 +138,9 @@ process.on('message', async message => {
           deploymentAgents: { registrationToken: configuration.registrationToken, placement: { activationTimeoutMs: 15000 } },
           ...(configuration.shadowCertificate ? { providerPromotionHosts: {
             'docker-canary-provider': configuration.shadowCertificate,
-          }, shadowTraffic: { revision: 1, readPaths: ['/', '/healthz'], methods: ['GET', 'HEAD'],
+          }, ...(configuration.disabled ? {} : { shadowTraffic: { revision: 1, readPaths: ['/', '/healthz'], methods: ['GET', 'HEAD'],
             maxSamplePercent: 100, maxDurationMs: 30000, maxAttempts: 20, maxConcurrent: 2,
-            maxResponseBytes: 4096, maxRequestMs: 1000, maxReports: 2 } } : {}),
+            maxResponseBytes: 4096, maxRequestMs: 1000, maxReports: 2 } }) } : {}),
           ...(configuration.disabled ? {} : { canary: {
             stages: configuration.stages, maximumErrorRate: 0.2, maximumP95Ms: 3000,
             provider: { databasePolicy: 'isolated-read-only', readPaths: ['/', '/healthz'] },
