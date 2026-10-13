@@ -1,0 +1,42 @@
+{
+  "feature": "36",
+  "freshStatus": "accepted",
+  "protectedMain": "cc2324244aa304450b324f8015421330b4cb37cc",
+  "story": "Operator creates and assigns an incident, retains release context, records a recovery note and resolves it. Current role checks protect links and mutations; deleted releases retain only safe immutable context.",
+  "browser": [
+    "Actual connected Chrome/Tailscale owner console creates one critical incident, assigns its existing owner, attaches the actual captured release, saves a known recovery note and resolves it.",
+    "Actual controller close/open in the same parent preserves the browser receipt, exact version4 incident, one note, one link and four native receipts."
+  ],
+  "nativeRequirementCases": [
+    "project incidents retain ownership, notes and resolution across restart without replaying later changes",
+    "incident permission and current membership fence reads, assignment and retained receipts",
+    "incident references follow actual recurrence, traces, jobs, workflows and native alerts without copying private diagnostics",
+    "current membership, permission and session fence a body held after authentication",
+    "role, session, protocol and version changes during held diagnostics cannot authorize late commits",
+    "actual SIGKILL after incident commit and before HTTP delivery replays one durable receipt without reviving later state"
+  ],
+  "requirements": {
+    "releaseErrorTraceJobAlerts": "Named native diagnostic case runs actual recurrence, trace timeline, jobs, workflow and alert sources; links persist only identifiers and approved release context, without private payloads. Browser separately links the actual provider release.",
+    "ownerNotesResolution": "Actual browser and independent native SQLite observe owner, exact note/resolution, version4 and four operation receipts.",
+    "revokedRoles": "Current membership, permissions, sessions, body intake and diagnostic-await boundaries deny reads/mutations and historical receipt replay after revocation.",
+    "deletedRelease": "Named native diagnostic case deletes the old release through the ordinary API, reopens the controller and retains only id/digest/createdAt; diagnostics become unavailable."
+  },
+  "qualifications": [
+    "The browser reopen is same-parent controller close/open. Actual SIGKILL durability is covered by the named separate native case.",
+    "The source-loss destination is the already accepted trusted native PITR fixture; this incident audit does not accept online Source07 handoff.",
+    "Pending-form text briefly displayed a generic response-loss message while controls were busy. Settled submissions succeeded; no lost-response or Chrome POST-block claim is made for incidents.",
+    "Customer status native-form POST and the quorum origin remain blocked by Chrome; neither feature gains acceptance here.",
+    "Canonical35/40 becomes36/40 only after protected acceptance-record delivery; broader fresh verification remains unfinished."
+  ],
+  "evidence": {
+    "work/incident-recovery-resolved-native.json": "6d02a55c811570867102ae9aed1f54eb3ed1758501ff8439ed277f4999979431",
+    "work/incident-recovery-reopened-native.json": "1bdf4548e0f8a2e190008d1f8e3a5dcfebd4b8925af5f1c102c38ae4681ea920",
+    "work/incident-recovery-resolved.dom.txt": "105077c7f5d733074712cd09a8bfc1766a51a72db8e3ae4f27a4eab9292364e9",
+    "work/incident-recovery-reopened.dom.txt": "072f36dfa3bcf49444a3576f8f84e626d437d190b703353e62cdf249fd0d2531",
+    "work/incident-protected-graph-proof.json": "246757c79d76accaec2d22657a231b09af936127bc4ce308eab43da0d5d1f68e",
+    "outputs/incident-recovery-resolved.png": "4a60157fd920b2ec6a44d2ee68d01c6abceb55fded5eff64be8fb78e116b83bf",
+    "outputs/incident-recovery-reopened.png": "61741315e93d7cec37c592e9bb6a6222a9fef8ef6c27a82334a780b495afd327",
+    "work/remaining-native-focused-results.json": "ecd098e44c9cb40d032d838ccf9079f36f7828a225814b4642d802d139f42b54"
+  },
+  "focusedLogSha256": "28c4bd60c798fc5b7a148e68074cf12e47edec9f6eef48a14df495420e9ea105"
+}
