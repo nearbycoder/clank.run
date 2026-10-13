@@ -1,0 +1,117 @@
+{
+  "protectedMain": "3f05439e114044c9f0021f83563145e1d78d06b7",
+  "runtimeHead": "5ac9d4d7b694c03d36070ee5398256a787169035",
+  "browser": "Connected Chrome3, actual canonical HTTPS full production console",
+  "operatorUrl": "https://nearbyserver.tail5d719.ts.net:8480/fixture/as/owner",
+  "native": {
+    "ready": true,
+    "pid": 48595,
+    "birth": "1310758",
+    "root": "/var/tmp/clank-platform-docker-canary-og3rQT",
+    "origin": "https://nearbyserver.tail5d719.ts.net:8480",
+    "nativeOrigin": "http://127.0.0.1:20106",
+    "projectId": "2-fZWV4bdpn6TTx2EdnHq9C5",
+    "projectSlug": "docker-canary",
+    "owner": "platform-canary-888d395838e74ba2",
+    "releaseId": "zaRTP6IJqfilWXapnm2tGe2w",
+    "certificateId": "bd269c2c-f472-40ea-aaa8-e66a436890af",
+    "certificateExpiresAt": 1791923028014,
+    "operator": "/fixture/as/owner",
+    "scope": "Actual Docker/browser fixture with production console/API and test-only normal-session delivery; no physical-authenticator or production-host claim"
+  },
+  "automatic": {
+    "sessionId": "shadow_e759fcec-e052-4313-9b80-b69724f15b74",
+    "phase": "complete",
+    "outcome": "expired",
+    "stopRequested": false,
+    "counters": {
+      "reserved": 4,
+      "settled": 4,
+      "comparable": 4,
+      "statusClassEqual": 4,
+      "statusClassDifferent": 0,
+      "mediaTypeEqual": 4,
+      "mediaTypeDifferent": 0,
+      "bothComplete": 4,
+      "unknown": {
+        "not-submitted": 0,
+        "candidate-timeout": 0,
+        "candidate-oversized": 0,
+        "candidate-error": 0,
+        "primary-incomplete": 0,
+        "primary-oversized": 0,
+        "cancelled": 0,
+        "authority-lost": 0,
+        "interrupted": 0,
+        "persistence-uncertain": 0,
+        "content-type-invalid": 0
+      }
+    },
+    "skips": {
+      "ineligible": 0,
+      "sampled-out": 0,
+      "capacity": 2,
+      "attempt-limit": 0,
+      "handoff-timeout": 0,
+      "withdrawn": 0
+    },
+    "onlyPrimaryContainerRemains": true
+  },
+  "explicit": {
+    "sessionId": "shadow_f86b3c64-1267-485f-a6ad-2e5dcf5d1ac9",
+    "phase": "complete",
+    "outcome": "stopped",
+    "stopRequested": true,
+    "controllerEpoch": 18,
+    "counters": {
+      "reserved": 0,
+      "settled": 0,
+      "comparable": 0,
+      "statusClassEqual": 0,
+      "statusClassDifferent": 0,
+      "mediaTypeEqual": 0,
+      "mediaTypeDifferent": 0,
+      "bothComplete": 0,
+      "unknown": {
+        "not-submitted": 0,
+        "candidate-timeout": 0,
+        "candidate-oversized": 0,
+        "candidate-error": 0,
+        "primary-incomplete": 0,
+        "primary-oversized": 0,
+        "cancelled": 0,
+        "authority-lost": 0,
+        "interrupted": 0,
+        "persistence-uncertain": 0,
+        "content-type-invalid": 0
+      }
+    },
+    "onlyPrimaryContainerRemains": true,
+    "primaryRows": [
+      [
+        "primary",
+        "startup"
+      ]
+    ]
+  },
+  "retainedStatusEpoch": 25,
+  "observations": [
+    "Browser first refuses review that omits required public health path; no session created.",
+    "Native six primary requests remain HTTP200/primary; four actual comparisons settle and two capacity skips stay outside denominators.",
+    "Browser reads real immutable artifact/primary/epoch and effective bounds before explicit start.",
+    "Both deadline expiry and exact original-epoch18 operator stop leave only the original primary container; native original database remains one startup row.",
+    "Browser transient shadow status refusal clears actions; next explicit refresh renders both exact retained sessions and four comparable pairs with no new mutation. Specific initial SHADOW error code and cause were not captured."
+  ],
+  "qualifications": [
+    "Native fixture signing key/UV is not physical-authenticator acceptance.",
+    "Separate owned test host certificate; no original or production-host certification inferred.",
+    "Earlier loopback Chrome block and canonical fixture control-origin/ID-vs-slug setup failures are retained; no runtime/CSRF/frame/security bypass."
+  ],
+  "evidence": {
+    "work/shadow-browser-automatic-native.json": "a43b70814df4357d094d8ed6ac57056dab17d9847034c4a9f3237c3557322ea8",
+    "work/shadow-browser-explicit-stop-native.json": "476dba136798044d864916952b6dc81277d33c20c9f2ecd12cf8f42f4e7e8905",
+    "work/shadow-history-read-refusal.json": "80f84f09a6d8e16ca992b008aa52700a9ba390555127fefe3960213b697adba5",
+    "work/shadow-native-reviewed-results.json": "61bedb73e9d52c492405c595f349769c69d2f0a9754b300c7717b27c584eb221",
+    "outputs/shadow-native-receipts.jpg": "b65dae86eac2ccf7e1aa048f2f698aaa232f8cc3a22413d62f6da975ce2b06aa"
+  }
+}

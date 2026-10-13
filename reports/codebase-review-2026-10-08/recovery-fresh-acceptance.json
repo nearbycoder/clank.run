@@ -1,0 +1,33 @@
+{
+  "feature": "10",
+  "protectedMain": "3f05439e114044c9f0021f83563145e1d78d06b7",
+  "runtimeHead": "5ac9d4d7b694c03d36070ee5398256a787169035",
+  "freshStatus": "accepted",
+  "requirements": {
+    "encryptedScheduling": "Actual browser configures checkpoint schedule; native encrypted checkpoints retained at sequence3, default30archive capacity enforced before manual capture intent. Disabled schedule policy3 preserves all checkpoints.",
+    "inspectRecoveryHorizon": "Browser renders actual retained checkpoints, immutable release binding and allowed sequence0\u20133.",
+    "separateProjectRestore": "Browser selected sequence2 into distinct new suspended project; independent SQLite exactly mutation two and zero copied credentials. Native TCP unavailable before activation.",
+    "sourceLoss": "Actual owned source application process killed and volume deleted before browser restoration; retained encrypted archive survives.",
+    "corruptionAndRetentionGaps": "158 freshly passing focused native tests cover corruption, retention gaps, bounded exports, current authority, exact original lease and captured known ledger.",
+    "restartAndReplay": "Browser activation serves mutation two HTTP200; controller reopened in same parent process keeps receipt, desired runtime and one restore. Ordinary exact API replay after activation/reopen returns same receipt and does not reset target."
+  },
+  "qualifications": [
+    "Trusted native captured provider, actual Node process/SQLite/HTTP and cryptographic fixture UV. No Docker-host certificate, physical authenticator or production deployment claim.",
+    "Browser controller reopening uses close/open in same parent; separate fresh native selection covers real SIGKILL.",
+    "Manual capture browser requests correctly refused at unchanged default max30 archives; no positive browser manual-capture claim.",
+    "Runtime settings horizontal overflow observed; deferred UI defect is tracked and not a flawless layout claim."
+  ],
+  "evidence": {
+    "work/recovery-browser-scheduled-native.json": "0958beeac8c52dac875586141450173f020ef29d835f68735805cdf36d2ce4b3",
+    "work/recovery-browser-capacity-native.json": "0b6db225c394fd7a9af61c289da2ad98cc8d8926eaa82c3e14f15adfa4d270ad",
+    "work/recovery-browser-source-lost.json": "f71acec8cc18ba0fcbedd59c93706bcf876248bc052fbaba9011a6f521c00b99",
+    "work/recovery-browser-restored-native.json": "2db7017c1c8acefdd9beb583031de2e2327f0357f17c329c2582eefed612fd1e",
+    "work/recovery-browser-before-activation.json": "61e1e1cfc98346c23aa583567ded58deb873cf65472089ee56feec3bf85fbb32",
+    "work/recovery-browser-activated-native.json": "6bcd49097cd6371d39170cd71b2f42d983144c03559909512a50bfc07c2cbe4e",
+    "work/recovery-browser-controller-reopen.json": "d6b8c228708ec4c7a0f36a7c0ce9b5798ffd34c08c05a5799983b65427ad110e",
+    "work/recovery-browser-unchanged-retry.json": "b8cd3fbeaebd0ae36aee667d93ca9de2d5d638d0cc5885b56406c2a8bc08ea1d",
+    "work/remaining-native-focused-results.json": "ecd098e44c9cb40d032d838ccf9079f36f7828a225814b4642d802d139f42b54",
+    "outputs/recovery-restored-receipt.jpg": "ba9a1ea007ca0f8b8a7c88b37f1ab978d9078bf551701ca6ee4c808f9e059539",
+    "outputs/recovery-restored-runtime.jpg": "a8f43d5e0d6777c84aafa8a9e557944904ee8d2521622a54dd671850e7a6029e"
+  }
+}
