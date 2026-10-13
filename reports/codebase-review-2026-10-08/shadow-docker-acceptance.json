@@ -1,0 +1,59 @@
+{
+  "feature": 9,
+  "accepted": false,
+  "base": "d29dee5d5339a3c7d255a7d08d7aa4a704c420a4",
+  "inputManifest": "/var/tmp/clank-source-control-d29dee5-3jj3p5jo/shadow-docker-inputs-225.json",
+  "native22": {
+    "shadow": {
+      "log": "/var/tmp/clank-source-control-d29dee5-3jj3p5jo/shadow-docker-native22-225.log",
+      "pass": 2,
+      "fail": 0,
+      "skip": 0,
+      "logSha256": "e76420e2f3a8978793e2ca3ae2dbce2e3dedd9330b3fc3d503e0e07a6d132036"
+    },
+    "canary": {
+      "log": "/var/tmp/clank-source-control-d29dee5-3jj3p5jo/shadow-canary-regression22-222.log",
+      "pass": 5,
+      "fail": 0,
+      "skip": 0,
+      "qualification": "Precedes removal of unused pause helper; production and exercised fixture logic identical.",
+      "logSha256": "feec6cc6fdd3daf32ff16b062860310e9b0f418410069c089d1b948ab94dabc1"
+    }
+  },
+  "native26": {
+    "log": "/var/tmp/clank-source-control-d29dee5-3jj3p5jo/shadow-docker-canary-native26-226.log",
+    "pass": 7,
+    "fail": 0,
+    "skip": 0,
+    "logSha256": "c6c75acdc502d62e265605a945f2b74234f0400a07599c2950f8d2781f52e46c"
+  },
+  "focusedLocal26": {
+    "log": "/var/tmp/clank-source-control-d29dee5-3jj3p5jo/shadow-focused26-224.log",
+    "pass": 62,
+    "fail": 0,
+    "skip": 0,
+    "logSha256": "91a9b469f6eb5a75ff474fc8910ec482e48bb1ef91a58d189ff2543b50520ff5"
+  },
+  "certificates": {
+    "22": "6f42e6d9-4319-4910-ad55-be527e024297",
+    "26": "35f09260-2f6b-49a5-a3d8-ae5ecbae4963"
+  },
+  "proved": [
+    "Native HTTP adapter and public staging/preview/start/stop routes",
+    "six bounded sanitized comparisons",
+    "actual container CPU/memory/PID limits and uid/capabilities/no-new-privileges",
+    "actual file EROFS and SQLite write denial",
+    "actual blocked connection to a test-owned host endpoint; zero host connections",
+    "continued primary writes without candidate writes",
+    "exact candidate container/data/bridge/nft retirement",
+    "session revocation retires candidate and freezes counters"
+  ],
+  "qualifications": [
+    "Operator coordinator uses actual root certificate profile; provider remains uid1000 operator and application uid1000/caps0",
+    "Fixture signature uses native authentication routes; no physical device or browser UX acceptance claimed",
+    "Native distribution from source module map201; final manifest readback204 not natively retested, no complete current source07 claim",
+    "Remaining complete operator/browser acceptance and frozen full/hosted release gate remain; no PR created; ledger29/40"
+  ],
+  "jobsTerminal": true,
+  "scope": "Docker integration acceptance prerequisite; complete feature09 remains pending"
+}

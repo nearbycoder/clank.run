@@ -8,31 +8,36 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { openPlatform } from '../../dist/platform.js';
+import { serve } from '../../dist/node.js';
 import { openDockerDeploymentProviderService } from '../../dist/provider-service.js';
 import { createDeploymentCoordinatorClient, openProviderDeploymentAgent } from '../../dist/index.js';
 import { createLinuxDockerNetworkPlan } from '../../dist/linux-project-isolation.js';
 
 assert.ok(process.send, 'Owned IPC is required.');
-assert.equal(process.getuid(), 1000);
-assert.equal(process.getgid(), 1000);
-const status = await readFile('/proc/self/status', 'utf8');
-assert.match(status, /^Groups:[ \t]*$/m);
-assert.match(status, /^NoNewPrivs:\s+1$/m);
 const role = process.argv[2];
 assert.ok(['platform', 'provider'].includes(role));
-for (const field of ['CapEff', 'CapPrm', 'CapInh', 'CapBnd', 'CapAmb']) {
-  assert.equal(BigInt('0x' + status.match(new RegExp('^' + field + ':\\s+([a-f0-9]+)$', 'm'))[1]), role === 'provider' ? 0x201002n : 0n);
+const operatorRoot = process.env.CLANK_SHADOW_OPERATOR_ROOT === '1';
+assert.ok(!operatorRoot || role === 'platform');
+if (operatorRoot) {
+  assert.equal(process.getuid(), 0); assert.equal(existsSync('/etc/clank-disposable-test-host'), true);
+} else {
+  assert.equal(process.getuid(), 1000); assert.equal(process.getgid(), 1000);
+  const status = await readFile('/proc/self/status', 'utf8');
+  assert.match(status, /^Groups:[ \t]*$/m); assert.match(status, /^NoNewPrivs:\s+1$/m);
+  for (const field of ['CapEff', 'CapPrm', 'CapInh', 'CapBnd', 'CapAmb']) {
+    assert.equal(BigInt('0x' + status.match(new RegExp('^' + field + ':\\s+([a-f0-9]+)$', 'm'))[1]), role === 'provider' ? 0x201002n : 0n);
+  }
 }
 
 let configuration, platform, provider, agent, server, closing, observedApplicationRequests = 0;
 const gates = new Map(), events = [], diagnostics = [];
 const note = event => { events.push(event); if (events.length > 128) events.shift(); };
 const execute = promisify(execFile);
-const diagnostic = error => { diagnostics.push(String(error?.message ?? error).slice(0, 500)); if (diagnostics.length > 16) diagnostics.shift(); };
+const diagnostic = error => { process.stderr.write(String(error?.stack ?? error) + '\n'); diagnostics.push(String(error?.message ?? error).slice(0, 500)); if (diagnostics.length > 16) diagnostics.shift(); };
 const close = () => closing ??= (async () => {
   for (const gate of gates.values()) gate.release();
   await agent?.close();
-  if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+  if (server) { if (server.url) await server.close(); else { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } }
   await platform?.close();
   await provider?.close();
 })();
@@ -120,6 +125,7 @@ process.on('message', async message => {
     let value;
     if (message.method === 'open') {
       assert.equal(configuration, undefined); configuration = message.input;
+      if (role === 'platform') assert.equal(Boolean(configuration.shadowCertificate), operatorRoot, 'Root operator mode is reserved for the genuine shadow certificate profile.');
       if (role === 'platform') {
         platform = await openPlatform({
           dataDirectory: configuration.root, publicUrl: configuration.origin,
@@ -130,12 +136,17 @@ process.on('message', async message => {
           backups: { intervalMs: false }, previews: { cleanupIntervalMs: false },
           ingress: { baseDomain: 'apps.example.test' },
           deploymentAgents: { registrationToken: configuration.registrationToken, placement: { activationTimeoutMs: 15000 } },
+          ...(configuration.shadowCertificate ? { providerPromotionHosts: {
+            'docker-canary-provider': configuration.shadowCertificate,
+          }, shadowTraffic: { revision: 1, readPaths: ['/', '/healthz'], methods: ['GET', 'HEAD'],
+            maxSamplePercent: 100, maxDurationMs: 30000, maxAttempts: 20, maxConcurrent: 2,
+            maxResponseBytes: 4096, maxRequestMs: 1000, maxReports: 2 } } : {}),
           ...(configuration.disabled ? {} : { canary: {
             stages: configuration.stages, maximumErrorRate: 0.2, maximumP95Ms: 3000,
             provider: { databasePolicy: 'isolated-read-only', readPaths: ['/', '/healthz'] },
           } }), onError: diagnostic,
         });
-        await listen(configuration.port, request => platform.handle(request));
+        server = await serve(platform, { hostname: '127.0.0.1', port: configuration.port, allowedHosts: ['127.0.0.1', 'docker-canary.apps.example.test'], maxBodySize: 8 * 1024 * 1024, requestTimeout: 120000, onError: diagnostic });
       } else {
         await mkdir(join(configuration.root, 'docker-config'), { recursive: true, mode: 0o700 });
         provider = await openDockerDeploymentProviderService({

@@ -1267,3 +1267,20 @@ All 61 focused tests passed, including runtime size/work budgets and the coverag
 The real SSR/browser fixture (`tests/fixtures/hydration-browser.mjs`) preserves the matching button and its Enter-key interaction, locates a nested structural fallback at child path `0.1` with source `HydrationDemo.tsx:8:124`, and records a text correction at `0.0` with source `HydrationDemo.tsx:10:38`. Its JSON export excludes synthetic private SSR text/attributes and directory paths; keyboard export focuses/selects the read-only report. At a 390px viewport, client and content widths are both 375px. Disposal removes both inspected apps, runs the second attachment cleanup and clears retained inspection entries. Expected mismatch warnings are static; browser errors are absent.
 
 An experimental Node 26 coverage artifact was malformed after all runnable tests passed. The existing one-retry detector now recognizes Node 26’s wrapped JSON parse error as well as the prior SyntaxError form. Actual test failures, cancelled tests, inconsistent counts, unrecognized errors and coverage shortfalls remain ineligible for retry; a second artifact failure still fails the gate. Line/branch/function thresholds remain 80/65/80. The final complete `npm run check` passed: 1,644 tests reported, 1,641 passed, no failures/cancellations and three privileged cases skipped; coverage 91.92% lines, 79.65% branches, 89.74% functions. The publish allowlist contains 393 files within the unchanged 394-file / 6 MiB limits. See [hydration verification](hydration-verification.json) for source/log hashes and parent-batch hosted checks.
+
+
+## Shadow Docker isolation acceptance prerequisite
+
+The opt-in public shadow integration suite now uses the real Docker provider,
+native Node HTTP adapter and independently generated per-runtime host
+certificates. It verifies read-only file/SQLite writes, application uid/caps,
+CPU/memory/PID limits, secret exclusion, blocked access to a test-owned host
+endpoint, six sanitized comparisons, continued primary writes, exact candidate
+resource retirement and session-revocation cleanup. Existing canary integration
+cases use the shared fixture. The operator coordinator uses the actual root
+certification profile; provider and application privileges retain their prior
+bounds. Fixture signing keys use native authentication routes without claiming
+physical-device or browser checks. Initial Node22 and26 results are recorded in
+`shadow-docker-acceptance.json`; the final delivery gate is recorded separately.
+Complete Feature09 operator/browser acceptance remains pending; this prerequisite
+does not change the29/40 accepted feature count.
