@@ -149,7 +149,7 @@ export interface ProviderSourceServiceOwnership {
 type SourceServiceContext={owner:ProviderServiceOwnership;bridge:ProviderHandoffBridge;check:()=>void};
 const sourceServiceOwners=new WeakMap<ProviderSourceServiceOwnership,SourceServiceContext>();
 const sourceServiceReservations=new WeakSet<ProviderServiceOwnership>();
-const sourceLaunchDataLeases=new WeakMap<object,{check:()=>void}>();
+const sourceLaunchDataLeases=new WeakMap<object,{owner:ProviderServiceOwnership;check:()=>void;children:Set<()=>void>}>();
 const ownerSourceLaunchData=new WeakMap<ProviderServiceOwnership,Set<()=>void>>();
 const usedSourceLaunchProjects=new WeakMap<ProviderServiceOwnership,Set<string>>();
 const pendingSourceLaunchData=new WeakMap<ProviderServiceOwnership,number>();
@@ -635,8 +635,8 @@ export async function retainProviderSourceLaunchData(service:ProviderSourceServi
         if(c.fs.realpathSync(parent)!==parent)fail("Provider source launch database parent is not canonical.");
         const leaf=parent===data.path?data:pin(c,parent,true),database=pin(c,databasePath,false,2*1024*1024*1024);
         held.push(...c.pins.splice(from));let closed=false;
-        const closes=ownerSourceLaunchData.get(owner)??new Set<()=>void>();
-        const close=()=>{if(closed)return;closed=true;closes.delete(close);const errors:unknown[]=[];for(const p of held.splice(0).reverse())try{c.fs.closeSync(p.fd);}catch(error){errors.push(error);}if(errors.length===1)throw errors[0];if(errors.length)throw new AggregateError(errors,"Provider source launch pins failed to close.");};
+        const closes=ownerSourceLaunchData.get(owner)??new Set<()=>void>(),children=new Set<()=>void>();
+        const close=()=>{if(closed)return;closed=true;closes.delete(close);const errors:unknown[]=[];for(const child of [...children])try{child();}catch(error){errors.push(error);}children.clear();for(const p of held.splice(0).reverse())try{c.fs.closeSync(p.fd);}catch(error){errors.push(error);}if(errors.length===1)throw errors[0];if(errors.length)throw new AggregateError(errors,"Provider source launch pins failed to close.");};
         const check=()=>{
           try{
             if(closed)fail("Provider source launch data is closed.");service.assertCurrent();
@@ -646,7 +646,7 @@ export async function retainProviderSourceLaunchData(service:ProviderSourceServi
         };
         const verifyCurrent=async()=>{try{check();await service.verifyCurrent();check();}catch(error){try{close();}catch(cleanup){throw new AggregateError([error,cleanup],"Provider source launch verification and cleanup failed.");}throw error;}};
         result=Object.freeze({...binding,databasePath:database.path,dataDirectory:data.path,releaseDirectory:release.path,assertCurrent:check,verifyCurrent,close}) as ProviderSourceLaunchDataLease;
-        check();closes.add(close);ownerSourceLaunchData.set(owner,closes);sourceLaunchDataLeases.set(result,{check});
+        check();closes.add(close);ownerSourceLaunchData.set(owner,closes);sourceLaunchDataLeases.set(result,{owner,check,children});
       }catch(error){const errors:unknown[]=[error];for(const p of held.splice(0).reverse())try{c.fs.closeSync(p.fd);}catch(cleanup){errors.push(cleanup);}try{releasePins(c,from);}catch(cleanup){errors.push(cleanup);}if(errors.length>1)throw new AggregateError(errors,"Provider source launch retention failed.");throw error;}
     });
     assertProviderSourceLaunchDataLease(result!);return result!;
@@ -657,6 +657,33 @@ export function assertProviderSourceLaunchDataLease(value:ProviderSourceLaunchDa
   const registered=sourceLaunchDataLeases.get(value);
   if(!registered)fail("A genuine provider source launch data lease is required.");
   registered.check();
+}
+export function assertProviderSourceLaunchOwner(service:ProviderSourceServiceOwnership,data:ProviderSourceLaunchDataLease):void {
+  const owner=providerSourceServiceOwner(service),retained=sourceLaunchDataLeases.get(data);
+  if(!retained||retained.owner!==owner)fail("Source launch requires data retained by its original service owner.");
+  retained.check();
+}
+/** Private original launch context only; callers cannot rebind another owner's data. */
+export async function providerSourceLaunchContext(service:ProviderSourceServiceOwnership,data:ProviderSourceLaunchDataLease){
+  assertProviderSourceLaunchOwner(service,data);
+  const retained=sourceLaunchDataLeases.get(data)!,registered=sourceServiceOwners.get(service)!;
+  const result=await withBridge(registered.bridge,true,(c,root,state)=>{
+    service.assertCurrent();retained.check();
+    const project=state.projects.find(p=>p.project_id===data.projectId),source=state.states.find(p=>p.projectId===data.projectId);
+    if(!project||!source||source.grant||source.version!==1)fail("Source launch requires its original empty project catalog.");
+    const domain=bridges.get(registered.bridge)!.domain,client=domains.get(domain)?.client;if(!client)fail();
+    const check=()=>{service.assertCurrent();retained.check();};
+    const initial=JSON.stringify(source);
+    const assertInitial=()=>{check();const next=inspect(c,marker(c)).states.find(p=>p.projectId===data.projectId);
+      if(JSON.stringify(next)!==initial)fail("Source launch catalog changed before context publication.");};
+    const retainCleanup=(close:()=>void)=>{check();if(typeof close!=="function"||retained.children.size)fail("Source launch cleanup is already owned.");retained.children.add(close);return ()=>retained.children.delete(close);};
+    return Object.freeze({bridge:registered.bridge,domain,client,check,assertInitial,retainCleanup,indexId:root.index_id,catalogId:project.catalog_id,
+      domainSha256:root.domain_sha256,limits:root.bridge.limits,
+      catalogDirectory:c.path.join(c.service.path,"handoff","catalogs",project.catalog_id)});
+  });
+  // Publication is outside the owner lane's final await. Do not convert a
+  // cached pre-await observation into permission to create an application.
+  result.assertInitial();return result;
 }
 async function withBridge<Value>(bridge:ProviderHandoffBridge,live:boolean,action:(c:Context,root:Row,state:ReturnType<typeof inspect>,registered:BridgeContext)=>Value):Promise<Value>{
   const registered=bridgeCurrent(bridge,live);
@@ -1060,7 +1087,7 @@ function sourceWorkerChannelFor(context:SourceRuntimeDataContext):SourceWorkerCh
 const SOURCE_CONTAINER_PROJECTION=`{"identity":${CONTAINER_PROJECTION},"host":{{json .HostConfig}},"mounts":{{json .Mounts}},"apparmor":{{json .AppArmorProfile}},"workingDirectory":{{json .Config.WorkingDir}}}`;
 const SOURCE_MASKED_PATHS=["/proc/asound","/proc/acpi","/proc/kcore","/proc/keys","/proc/latency_stats","/proc/timer_list","/proc/timer_stats","/proc/sched_debug","/proc/scsi","/sys/firmware","/sys/devices/virtual/powercap"];
 const SOURCE_READONLY_PATHS=["/proc/bus","/proc/fs","/proc/irq","/proc/sys","/proc/sysrq-trigger"];
-function sourceContainerObservation(encoded:string,data:ProviderSourceRuntimeDataLease,context:SourceRuntimeDataContext):{pid:number;encoded:string} {
+function sourceContainerObservation(encoded:string,data:ProviderSourceRuntimeDataLease,context:SourceRuntimeDataContext,originalChannel?:SourceWorkerChannelContext|null):{pid:number;encoded:string} {
   const {parent,grant}=context,c=parent.context,binding=grant.binding;
   const text=encoded.endsWith("\n")?encoded.slice(0,-1):encoded;let value:Row;
   try{value=JSON.parse(text);}catch{fail("Provider source container profile is invalid.");}
@@ -1085,7 +1112,7 @@ function sourceContainerObservation(encoded:string,data:ProviderSourceRuntimeDat
   for(const [port,bindings] of Object.entries(ports))if(!/^[1-9][0-9]{0,4}\/tcp$/u.test(port)||Number(port.slice(0,-4))>65535||!Array.isArray(bindings)||bindings.length!==1
     ||!exact(bindings[0],["HostIp","HostPort"])||bindings[0].HostIp!=="127.0.0.1"||!match(bindings[0].HostPort,/^[1-9][0-9]{0,4}$/u)||Number(bindings[0].HostPort)>65535)fail("Provider source container port topology differs.");
   const expected=[{target:"/app",source:data.releaseDirectory,rw:false},{target:"/data",source:data.dataDirectory,rw:true},{target:"/run/clank-source",source:c.path.join(c.service.path,"handoff","catalogs",binding.catalogId),rw:false}];
-  const channel=sourceWorkerChannelFor(context);if(channel)expected.push({target:"/run/clank-source-worker",source:channel.mountSource,rw:false});
+  const channel=originalChannel===undefined?sourceWorkerChannelFor(context):originalChannel;if(channel)expected.push({target:"/run/clank-source-worker",source:channel.mountSource,rw:false});
   if(!Array.isArray(value.mounts)||value.mounts.length!==expected.length)fail("Provider source container mount topology differs.");
   for(const wanted of expected){const mounts=value.mounts.filter((m:Row)=>m.Destination===wanted.target);
     if(mounts.length!==1||!exact(mounts[0],["Type","Source","Destination","Mode","RW","Propagation"])||mounts[0].Type!=="bind"||mounts[0].Source!==wanted.source||mounts[0].Mode!==""||mounts[0].RW!==wanted.rw||mounts[0].Propagation!=="rprivate")fail("Provider source container mount topology differs.");}
@@ -1102,7 +1129,7 @@ function sourceProcText(c:Context,path:string,maximum=65536):string {
     const visible=c.fs.lstatSync(path);if(visible.dev!==held.dev||visible.ino!==held.ino||length>maximum)fail("Provider source process metadata changed.");return new TextDecoder("utf-8",{fatal:true}).decode(bytes.subarray(0,length));
   }finally{c.fs.closeSync(fd);}
 }
-function sourceProcess(c:Context,pid:number,containerId:string,binding:Row,channel?:SourceWorkerChannelContext):{birth:string;namespaces:Record<string,string>} {
+function sourceProcess(c:Context,pid:number,containerId:string,binding:Row,channel?:SourceWorkerChannelContext,observeChannel?:()=>void):{birth:string;namespaces:Record<string,string>} {
   const root=`/proc/${pid}`,stat=sourceProcText(c,root+"/stat"),end=stat.lastIndexOf(") "),fields=stat.slice(end+2).trim().split(/\s+/u);
   if(end<1||stat.slice(0,stat.indexOf(" "))!==String(pid)||fields.length<20||!["R","S","D","I"].includes(fields[0])||!match(fields[19],/^[1-9][0-9]{0,19}$/u))fail("Provider source process identity is unavailable.");
   const rows=new Map<string,string>();for(const line of sourceProcText(c,root+"/status").split("\n")){const colon=line.indexOf(":");if(colon!==-1){const key=line.slice(0,colon);if(rows.has(key))fail();rows.set(key,line.slice(colon+1).trim());}}
@@ -1120,7 +1147,7 @@ function sourceProcess(c:Context,pid:number,containerId:string,binding:Row,chann
   }
   const mounts=sourceProcText(c,root+"/mountinfo").trim().split("\n").map(line=>line.split(" "));
   const requiredMounts=[["/","ro"],["/app","ro"],["/data","rw"],["/run/clank-source","ro"]];
-  if(channel){channel.check();requiredMounts.push(["/run/clank-source-worker","ro"]);}
+  if(channel){if(observeChannel)observeChannel();else channel.check();requiredMounts.push(["/run/clank-source-worker","ro"]);}
   for(const [target,option] of requiredMounts){
     const entries=mounts.filter(row=>row[4]===target);if(entries.length!==1||entries[0].length<10||!entries[0][5].split(",").includes(option))fail("Provider source process kernel mount permissions differ.");
   }
@@ -1155,6 +1182,16 @@ export async function retainProviderSourceContainer(data:ProviderSourceRuntimeDa
       // process. Retain namespaces as well as its root so inode numbers cannot
       // be recycled while this capability lives; recheck birth after opening.
       const fd=c.fs.openSync(root,c.fs.constants.O_RDONLY|c.fs.constants.O_DIRECTORY);held.push(fd);
+      // Process/mount observation must survive retirement of the three-task
+      // initializer. Retain its original directory independently; this grants
+      // no new channel task, readiness, write or stop authority.
+      let observeChannel:(()=>void)|undefined;
+      if(channel){
+        channel.check();const path=channel.mountSource,before=c.fs.lstatSync(path),descriptor=c.fs.openSync(path,c.fs.constants.O_RDONLY|c.fs.constants.O_DIRECTORY|c.fs.constants.O_NOFOLLOW);held.push(descriptor);
+        observeChannel=()=>{for(const stat of [c.fs.fstatSync(descriptor),c.fs.lstatSync(path)]){
+          if(!stat.isDirectory()||stat.dev!==before.dev||stat.ino!==before.ino||stat.uid!==grant.binding.uid||stat.gid!==grant.binding.gid||(stat.mode&0o777)!==0o700)fail("Provider source channel mount observation changed.");
+        }if(c.fs.realpathSync(path)!==path)fail("Provider source channel mount path changed.");};observeChannel();
+      }
       const namespacePins=Object.entries(process.namespaces).map(([name,link])=>{
         const descriptor=c.fs.openSync(`/proc/${observed.pid}/ns/${name}`,c.fs.constants.O_RDONLY);held.push(descriptor);
         const stat=c.fs.fstatSync(descriptor);if(String(stat.ino)!==link.slice(name.length+2,-1))fail("Provider source namespace pin identity differs.");return {descriptor,dev:stat.dev,ino:stat.ino};
@@ -1163,7 +1200,7 @@ export async function retainProviderSourceContainer(data:ProviderSourceRuntimeDa
       if(channel)mounted.push({target:"/run/clank-source-worker",source:channel.mountSource});
       const identity=mounted.map(m=>{const s=c.fs.lstatSync(m.source);return {...m,dev:s.dev,ino:s.ino};});
       const check=()=>{
-        try{if(closed)fail("Provider source container lease is closed.");scope.check();const fresh=sourceProcess(c,observed.pid,parent.input.containerId,grant.binding,channel);
+        try{if(closed)fail("Provider source container lease is closed.");scope.check();const fresh=sourceProcess(c,observed.pid,parent.input.containerId,grant.binding,channel,observeChannel);
           if(fresh.birth!==process.birth||JSON.stringify(fresh.namespaces)!==JSON.stringify(process.namespaces))fail("Provider source process identity changed.");
           for(const p of namespacePins){const retained=c.fs.fstatSync(p.descriptor);if(retained.dev!==p.dev||retained.ino!==p.ino)fail("Provider source namespace pin changed.");}
           const retained=c.fs.fstatSync(fd),visible=c.fs.statSync(root);if(retained.dev!==visible.dev||retained.ino!==visible.ino)fail("Provider source process root changed.");
@@ -1173,7 +1210,7 @@ export async function retainProviderSourceContainer(data:ProviderSourceRuntimeDa
       };
       const verifyCurrent=async()=>{
         try{check();await exclusive(parent.registered.owner,async()=>{check();await verifyDomain(parent.registered.owner,parent.registered.domain,true);check();
-          const next=await runProviderDockerClient(client,args,{timeoutMs:15000,maxOutputBytes:65536});check();const confirmed=sourceContainerObservation(next.stdout,data,scope);if(confirmed.encoded!==observed.encoded){const before=JSON.parse(observed.encoded),after=JSON.parse(confirmed.encoded);const field=["identity","host","mounts","apparmor","workingDirectory"].find(key=>JSON.stringify(before[key])!==JSON.stringify(after[key]));fail("Provider source container configuration changed ("+field+").");}
+          const next=await runProviderDockerClient(client,args,{timeoutMs:15000,maxOutputBytes:65536});check();const confirmed=sourceContainerObservation(next.stdout,data,scope,channel??null);if(confirmed.encoded!==observed.encoded){const before=JSON.parse(observed.encoded),after=JSON.parse(confirmed.encoded);const field=["identity","host","mounts","apparmor","workingDirectory"].find(key=>JSON.stringify(before[key])!==JSON.stringify(after[key]));fail("Provider source container configuration changed ("+field+").");}
           await verifyDomain(parent.registered.owner,parent.registered.domain,true);check();},parent.bridge);check();
         }catch(error){try{close();}catch(cleanup){throw new AggregateError([error,cleanup],"Provider source container verification and cleanup failed.");}throw error;}
       };
@@ -1197,10 +1234,12 @@ export function assertProviderSourceWorkerLease(value:ProviderSourceWorkerLease)
 }
 export async function retainProviderSourceWorker(container:ProviderSourceContainerLease):Promise<ProviderSourceWorkerLease> {
   const retained=sourceContainerLeases.get(container);if(!retained)fail("A genuine provider source container lease is required.");retained.check();
+  const channel=sourceWorkerChannelFor(retained.scope);channel?.check();
   const wire=await import("./provider-source-worker-wire.ts");retained.check();
   const sandbox=await import("./sqlite-sandbox.ts");retained.check();
   const task=await import("./sqlite-task.ts");retained.check();
   await container.verifyCurrent();retained.check();
+  channel?.check();
   if(retained.workerRetained)fail("Provider source worker authority cannot be duplicated or recycled.");
   const {data,scope}=retained,binding=scope.grant.binding,path=scope.parent.context.path;
   let closed=false,reason:unknown,sequence=0,backupId:string|undefined,flight:Promise<unknown>|undefined;
@@ -1219,7 +1258,7 @@ export async function retainProviderSourceWorker(container:ProviderSourceContain
   };
   const current=()=>{
     if(closed)throw reason;
-    try{retained.check();
+    try{retained.check();channel?.check();
       const fs=scope.parent.context.fs;
       for(const pin of workspacePins){sandbox.assertPinnedSQLiteDirectory(pin);const held=fs.fstatSync(pin.fd),visible=fs.lstatSync(pin.path);
         if(!held.isDirectory()||!visible.isDirectory()||held.dev!==visible.dev||held.ino!==visible.ino

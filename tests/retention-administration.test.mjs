@@ -99,7 +99,16 @@ test('scheduled cleanup commits one durable occurrence, revalidates its session 
     const input = { id: 'daily', scope: a.id, expectedVersion: 0, kinds: ['import'], olderThanMs: 0, everyMs: 1000, maxDeletes: 1000, state: 'active' };
     const scheduled = await c.saveSchedule(input, 'schedule'); assert.deepEqual(await c.saveSchedule(input, 'schedule'), scheduled);
     f.native.prepare('UPDATE clank_retention_schedules SET next_at=0').run(); await f.restart();
-    assert.equal(f.retention.runDue(), 1); assert.equal(f.retention.runDue(), 0); assert.equal((await c.schedules(a.id))[0].lastReceipt.records > 0, true);
+    // Pin only the synchronous runner observations: the next occurrence is
+    // aligned to the schedule epoch and can be one millisecond away.
+    const nativeNow=Date.now,at=Math.floor(nativeNow()/1000)*1000+999;
+    Date.now=()=>at;
+    try{
+      assert.equal(f.retention.runDue(), 1);assert.equal(f.retention.runDue(), 0);
+      const next=f.native.prepare('SELECT next_at FROM clank_retention_schedules WHERE id=?').get('daily').next_at;
+      assert.equal(next,at+1);
+    }finally{Date.now=nativeNow;}
+    assert.equal((await c.schedules(a.id))[0].lastReceipt.records > 0, true);
     assert.equal(f.native.prepare('SELECT count(*) AS n FROM clank_durableImportChunks').get().n, 0);
     f.native.prepare('UPDATE clank_retention_schedules SET next_at=0').run(); f.native.prepare('DELETE FROM clank_auth_sessions WHERE user_id=?').run(a.id);
     assert.equal(f.retention.runDue(), 0); const row = f.native.prepare('SELECT definition,error FROM clank_retention_schedules').get(); assert.equal(JSON.parse(row.definition).state, 'paused'); assert.equal(row.error, 'RETENTION_RUN_FAILED');

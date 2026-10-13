@@ -228,6 +228,7 @@
   "dist/provider-service.d.ts",
   "dist/provider-service.js",
   "dist/provider-source-entry.js",
+  "dist/provider-source-launch.js",
   "dist/provider-source-worker-wire.js",
   "dist/provider.d.ts",
   "dist/provider.js",

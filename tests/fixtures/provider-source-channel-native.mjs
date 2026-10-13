@@ -51,7 +51,7 @@ try{
   await assert.rejects(h.retainProviderSourceContainer(data),/mount topology/);events.expectedMountRefusal=true;
  }else{
   container=await h.retainProviderSourceContainer(data);container.assertCurrent();for(let i=0;i<5;i++)await container.verifyCurrent();
-  const added=descriptors().filter(v=>!events.descriptorsBefore.some(w=>JSON.stringify(w)===JSON.stringify(v)));assert.equal(added.length,7);events.admitted={pid:container.pid,birth:container.birth,descriptorDelta:added.length};
+  const added=descriptors().filter(v=>!events.descriptorsBefore.some(w=>JSON.stringify(w)===JSON.stringify(v)));assert.equal(added.length,8);events.admitted={pid:container.pid,birth:container.birth,descriptorDelta:added.length};
   events.independentMountinfo=fs.readFileSync('/proc/'+container.pid+'/mountinfo','utf8');
   const host=fs.lstatSync(channel.mountSource),mounted=fs.statSync('/proc/'+container.pid+'/root/run/clank-source-worker');assert.equal(mounted.dev,host.dev);assert.equal(mounted.ino,host.ino);events.channelInode={dev:host.dev,ino:host.ino};
   const probe=await command(['container','exec',cid,'node','--input-type=module','--eval',"import fs from 'node:fs';const p='/run/clank-source-worker/sqlite.sock';const s=fs.lstatSync(p);let code;try{fs.unlinkSync(p);}catch(e){code=e.code;}process.stdout.write(JSON.stringify({socket:s.isSocket(),mode:s.mode&511,code})+'\\n');"]);
