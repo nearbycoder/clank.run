@@ -1284,3 +1284,16 @@ physical-device or browser checks. Initial Node22 and26 results are recorded in
 `shadow-docker-acceptance.json`; the final delivery gate is recorded separately.
 Complete Feature09 operator/browser acceptance remains pending; this prerequisite
 does not change the29/40 accepted feature count.
+
+
+## Shadow Docker recovery and report bounds
+
+The real Docker shadow suite now exercises lost native202 delivery with exact
+original/historical replay, actual coordinator SIGKILL followed by disabled
+shadow startup and exact candidate retirement, two-attempt reservation ceilings,
+actual oversized candidate responses, and oversized primary-response withdrawal
+before submission. Primary response bodies and later primary writes stay intact;
+reports contain transport aggregates rather than application payloads. Node22
+selected cases passed. Final complete per-runtime, full local and hosted delivery
+checks remain pending in `shadow-recovery-acceptance.json`; no additional feature
+credit is claimed. Browser acceptance remains pending.

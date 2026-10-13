@@ -1,0 +1,16 @@
+{
+  "base": "240f50ce2c75ba43b272ecefbf724d8e7fd138a6",
+  "feature": 9,
+  "accepted": false,
+  "inputManifest": "/var/tmp/clank-source-control-d29dee5-3jj3p5jo/shadow-recovery-runtime-257.json",
+  "selectedNative22": {
+    "lost202_and_SIGKILL": "/var/tmp/clank-source-control-d29dee5-3jj3p5jo/shadow-recovery-native22-252.log",
+    "candidate_bytes_and_attempts": "/var/tmp/clank-source-control-d29dee5-3jj3p5jo/shadow-ceilings-native22-256.log",
+    "primary_bytes": "/var/tmp/clank-source-control-d29dee5-3jj3p5jo/shadow-primary-bound-native22-260.log"
+  },
+  "qualification": "252 precedes the added ceiling cases but exercises unchanged recovery logic; complete final-file pair is pending.254 failed because its primary bound prevented any submission;260 proves that intended boundary.258 setup never started a test.259 preserved exact672 completed owned input files before removal; no other guest resources changed.",
+  "pendingNative26": {
+    "log": "/var/tmp/clank-source-control-d29dee5-3jj3p5jo/shadow-recovery-native26-261.log"
+  },
+  "fullFrozenAndHostedDelivery": "pending; no new PR yet"
+}

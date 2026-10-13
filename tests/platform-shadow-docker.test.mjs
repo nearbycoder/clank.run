@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
+import { request as httpRequest } from 'node:http';
 import { createHash, generateKeyPairSync, randomUUID, sign } from 'node:crypto';
 import { deploymentDigest } from '../dist/index.js';
 import { inspectLinuxHostCertification } from '../dist/host-certification.js';
@@ -26,7 +27,24 @@ async function fresh(f) {
   } };
   await f.json('/__clank/auth/reauthenticate/passkey/finish', { ...auth, body: { challengeId: started.challengeId, challenge: started.options.challenge, credential } });
 }
-async function setup(t) {
+async function loseAcceptedResponse(f, body) {
+  const bytes = Buffer.from(JSON.stringify(body));
+  return new Promise((resolve, reject) => {
+    const outgoing = httpRequest(f.origin + '/api/projects/' + f.project.id + '/shadow/start', {
+      method: 'POST', agent: false, headers: { origin: f.origin, cookie: f.cookie,
+        'x-clank-csrf': f.csrf, 'content-type': 'application/json', 'content-length': String(bytes.length) },
+    }, incoming => {
+      const status = incoming.statusCode;
+      // A genuine HTTP acknowledgment exists, but no response body or session
+      // identity reaches the caller. This does not cancel controller ownership.
+      incoming.destroy(); outgoing.destroy(); resolve({ status, dropped: true });
+    });
+    outgoing.setTimeout(20000, () => outgoing.destroy(new Error('Owned lost response request timed out.')));
+    outgoing.once('error', reject); outgoing.end(bytes);
+  });
+}
+
+async function setup(t, { dropStart = false, policy = {} } = {}) {
   const certificate = JSON.parse(await readFile(process.env.CLANK_SHADOW_CERTIFICATE_CONFIG, 'utf8'));
   const inspected = await inspectLinuxHostCertification(certificate);
   assert.equal(inspected.current, true, JSON.stringify(inspected)); assert.equal(inspected.report.status, 'passed');
@@ -42,8 +60,12 @@ async function setup(t) {
   const staged = await response.json(); assert.equal(response.status, 201, JSON.stringify(staged));
   f.shadow = async (path, body, expected = 200) => (await f.json('/api/projects/' + f.project.id + '/shadow/' + path,
     { method: 'POST', body, cookie: f.cookie, csrf: f.csrf }, expected)).value;
-  const review = await f.shadow('preview', { releaseId: staged.release.id, expectedEpoch: 0, policy: {} });
-  f.shadowSession = (await f.shadow('start', { reviewToken: review.reviewToken, idempotencyKey: 'docker-shadow-start-0001' }, 202)).session;
+  const review = await f.shadow('preview', { releaseId: staged.release.id, expectedEpoch: 0, policy });
+  f.startInput = { reviewToken: review.reviewToken, idempotencyKey: 'docker-shadow-start-0001' };
+  f.releaseId = staged.release.id;
+  if (dropStart) {
+    const lost = await loseAcceptedResponse(f, f.startInput); assert.equal(lost.status, 202); assert.equal(lost.dropped, true);
+  } else f.shadowSession = (await f.shadow('start', f.startInput, 202)).session;
   await until(() => f.raw()?.operation.phase === 'observing', 'Real Docker shadow candidate observation');
   f.candidateId = await f.candidate();
   t.diagnostic(JSON.stringify({ runtime: process.version, certificateId: inspected.report.id, candidateId: f.candidateId }));
@@ -125,4 +147,72 @@ test('actual browser-session revocation retires a real Docker shadow candidate a
   for (let i = 0; i < 3; i++) assert.equal((await (await f.traffic()).json()).label, 'primary');
   assert.equal(f.raw().epoch, complete.epoch); assert.equal(f.raw().operation.report.counters.reserved, 1);
   assert.equal((await ownedContainers(f.owner, f.project.id)).length, 1);
+});
+
+
+test('lost native202 shadow start replays one real Docker candidate and its historical receipt', settings, async t => {
+  const f = await setup(t, { dropStart: true }), admitted = f.raw();
+  const ids = await ownedContainers(f.owner, f.candidateId); assert.equal(ids.length, 1);
+  assert.equal(f.control.prepare('SELECT count(*) AS n FROM clank_platform_shadow_reports WHERE project_id=?').get(f.project.id).n, 1);
+  f.shadowSession = (await f.shadow('start', f.startInput, 202)).session;
+  assert.equal(f.shadowSession.sessionId, admitted.operation.sessionId);
+  assert.equal(f.shadowSession.operationId, admitted.operation.operationId);
+  assert.equal(f.shadowSession.controllerEpoch, admitted.operation.controllerEpoch);
+  assert.equal(f.raw().epoch, admitted.epoch); assert.deepEqual(await ownedContainers(f.owner, f.candidateId), ids);
+  const response = await f.traffic(); assert.equal((await response.json()).label, 'primary');
+  await until(() => f.raw().operation.report.counters.settled === 1, 'Original candidate comparison after lost response');
+  await stop(f); const complete = f.raw();
+  const replay = (await f.shadow('start', f.startInput, 202)).session;
+  assert.equal(replay.sessionId, f.shadowSession.sessionId); assert.equal(replay.phase, 'complete');
+  assert.equal(replay.report.counters.comparable, 1); assert.equal(f.raw().epoch, complete.epoch);
+  await f.absent(f.candidateId); assert.equal((await ownedContainers(f.owner, f.project.id)).length, 1);
+});
+
+test('actual coordinator SIGKILL retires the Docker shadow candidate under disabled policy before later primary writes', settings, async t => {
+  const f = await setup(t), before = f.raw();
+  const primary = f.control.prepare('SELECT active_release_id,active_generation FROM clank_platform_projects WHERE id=?').get(f.project.id);
+  assert.equal((await ownedContainers(f.owner, f.candidateId)).length, 1);
+  await f.restartDisabled();
+  await until(() => f.raw().operation.phase === 'complete', 'Disabled shadow startup completes exact native retirement');
+  const recovered = f.raw(); assert.equal(recovered.operation.sessionId, before.operation.sessionId);
+  assert.equal(recovered.operation.operationId, before.operation.operationId); assert.ok(recovered.epoch > before.epoch);
+  await f.absent(f.candidateId);
+  assert.deepEqual(f.control.prepare('SELECT active_release_id,active_generation FROM clank_platform_projects WHERE id=?').get(f.project.id), primary);
+  const state = (await f.json('/api/projects/' + f.project.id + '/shadow', { cookie: f.cookie })).value;
+  assert.equal(state.enabled, false);
+  const rejected = await f.shadow('preview', { releaseId: f.releaseId, expectedEpoch: recovered.epoch, policy: {} }, 409);
+  assert.equal(rejected.error.code, 'SHADOW_DISABLED');
+  const response = await f.traffic('POST', '/write'); assert.equal(response.status, 200);
+  const body = await response.json(); assert.equal(body.label, 'primary'); assert.equal(body.writer, true);
+  assert.ok(body.rows.some(row => row.kind === 'after-checkpoint')); assert.ok(body.rows.every(row => row.kind !== 'forbidden-candidate-write'));
+  assert.equal((await ownedContainers(f.owner, f.project.id)).length, 1); await f.absent(f.candidateId);
+});
+
+
+test('real Docker shadow traffic enforces attempt and response-byte ceilings without storing response payloads', settings, async t => {
+  const f = await setup(t, { policy: { maxAttempts: 2, maxConcurrent: 1, maxResponseBytes: 256 } });
+  const ids = await ownedContainers(f.owner, f.candidateId); assert.equal(ids.length, 1);
+  for (let n = 0; n < 6; n++) {
+    const response = await f.traffic(); assert.equal(response.status, 200); assert.equal((await response.json()).label, 'primary');
+    if (n < 2) await until(() => f.raw().operation.report.counters.settled === n + 1, 'Actual bounded response observation settled');
+  }
+  const report = f.raw().operation.report;
+  assert.equal(report.counters.reserved, 2); assert.equal(report.counters.settled, 2); assert.equal(report.counters.comparable, 0);
+  assert.equal(report.counters.unknown['candidate-oversized'], 2);
+  const requests = (await command('docker', ['container', 'logs', ids[0]])).stdout.trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
+  assert.equal(requests.filter(entry => entry.kind === 'candidate-request' && entry.path === '/').length, 2);
+  assert.equal(JSON.stringify(report).includes('rows'), false); assert.equal(JSON.stringify(report).includes('headers'), false);
+  await stop(f); assert.equal((await (await f.traffic()).json()).label, 'primary');
+});
+
+test('an oversized actual primary response remains intact and withdraws shadow submission before candidate traffic', settings, async t => {
+  const f = await setup(t, { policy: { maxAttempts: 2, maxResponseBytes: 32 } });
+  const ids = await ownedContainers(f.owner, f.candidateId); assert.equal(ids.length, 1);
+  const response = await f.traffic(); assert.equal(response.status, 200); assert.equal((await response.json()).label, 'primary');
+  await until(() => f.raw().operation.report.skips.withdrawn > 0, 'Primary body bound withdraws native handoff');
+  const report = f.raw().operation.report;
+  assert.equal(report.counters.reserved, 0); assert.equal(report.counters.settled, 0);
+  const requests = (await command('docker', ['container', 'logs', ids[0]])).stdout.trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
+  assert.equal(requests.filter(entry => entry.kind === 'candidate-request' && entry.path === '/').length, 0);
+  await stop(f); assert.equal((await (await f.traffic()).json()).label, 'primary');
 });
