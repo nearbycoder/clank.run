@@ -509,6 +509,7 @@ for (const stalled of [false, true]) {
     } });
     const policy = join(f.root, 'service-policy.json');
     const hold = join(f.root, 'request-hold'), admittedFile = join(f.root, 'request-admitted');
+    const cleanupHold = join(f.root, 'candidate-stop-hold'), cleanupEntered = join(f.root, 'candidate-stop-entered');
     // Observe the persisted phase directly: a public API request can spend
     // the entire drain interval waiting on other controller work.
     const sql = new DatabaseSync(join(f.root, 'platform/control.sqlite'), { readOnly: true });
@@ -535,7 +536,9 @@ for (const stalled of [false, true]) {
         CANARY_REQUEST_HOLD: hold, CANARY_REQUEST_ENTERED: admittedFile,
       } }, 200, 'PUT');
       let deploymentFinished = false, responseFinished = false;
-      deploy = f.upload(f.staging, await f.artifact('canary-candidate'), 'candidate_drain_upload_01', 409)
+      if (stalled) await writeFile(cleanupHold, 'hold native process cleanup');
+      const stopBarrier = stalled ? { hold: cleanupHold, entered: cleanupEntered, closeConnections: true } : null;
+      deploy = f.upload(f.staging, await f.artifact('canary-candidate', '', {}, '', stopBarrier), 'candidate_drain_upload_01', 409)
         .finally(() => { deploymentFinished = true; });
       deploy.catch(() => {});
       await waitFor(() => report()?.state === 'running' && report()?.trafficPercent === 100, 'Candidate must enter measured traffic.');
@@ -559,16 +562,25 @@ for (const stalled of [false, true]) {
       const result = await admitted;
       assert.equal(result.error, undefined, result.error?.stack);
       if (stalled) {
-        // Process cleanup releases the native project lease; an admitted
-        // request cannot retry the stopped candidate using that spent lease.
+        // Withdrawal refuses a fresh candidate attempt while native shutdown
+        // may still be pending. A failed request is not a cleanup receipt.
         assert.equal(result.value.error.code, 'CANARY_UNAVAILABLE');
         assert.ok(Date.now() - failedAt >= 1800, 'Termination must respect the two-second drain interval.');
-        assert.throws(() => process.kill(candidatePid, 0), { code: 'ESRCH' }, 'Authority failure follows actual candidate termination.');
+        // A refused fresh attempt is not a stop receipt. Keep the real process
+        // alive after its socket closes, then release its shutdown explicitly.
+        assert.equal(await readFile(cleanupEntered, 'utf8'), 'stopping');
+        assert.equal(deploymentFinished, false, 'Cleanup remains pending while the native stop is held.');
+        assert.ok(sql.prepare('SELECT 1 FROM clank_distributed_leases WHERE resource=? AND owner=? AND fence=? AND token_hash=?')
+          .get(`project:${f.staging.id}`, candidateLease.owner, candidateLease.fence, candidateLease.token_hash),
+        'The exact native lease remains charged until process cleanup completes.');
+        assert.doesNotThrow(() => process.kill(candidatePid, 0), 'Withdrawal refuses another request before native process exit.');
+        await rm(cleanupHold);
       } else {
         assert.equal(result.value.label, 'canary-candidate');
         assert.equal(result.value.value, 'retained-data');
       }
       await deploy;
+      if (stalled) assert.throws(() => process.kill(candidatePid, 0), { code: 'ESRCH' }, 'Acknowledged cleanup requires actual candidate termination.');
       // A terminated response can finish before deployment cleanup releases
       // its lease. Check that exact capability after cleanup; a later lease
       // acquired for the restored release is allowed to exist.
@@ -582,6 +594,7 @@ for (const stalled of [false, true]) {
       const logs = (await f.call(`/api/projects/${f.staging.id}/logs`)).logs;
       assert.equal(logs.some(row => row.message === 'Candidate drain reached its two-second limit; terminating remaining streams.'), stalled);
     } finally {
+      await rm(cleanupHold, { force: true });
       await rm(hold, { force: true });
       await Promise.allSettled([deploy, admitted].filter(Boolean));
       sql.close();

@@ -29,6 +29,7 @@ if (stopWrite) process.on('SIGTERM', () => {
 });
 if (stopBarrier) process.on('SIGTERM', async () => {
   writeFileSync(stopBarrier.entered, 'stopping');
+  if (stopBarrier.closeConnections === true) server.closeAllConnections();
   while (existsSync(stopBarrier.hold)) await new Promise(resolve => setTimeout(resolve, 10));
   server.close(() => process.exit(0));
 });

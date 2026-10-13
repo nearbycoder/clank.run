@@ -10,7 +10,15 @@
   ],
   "verification": {
     "focused": "Emitted console modal and adjacent controller/UI tests, including native HTTP cost retries.",
-    "browser": "Fresh actual navigation acceptance remains pending: Chrome reports ERR_BLOCKED_BY_CLIENT for new local and requested tailnet fixture navigation. Existing native modal browser evidence retains its narrower scope."
+    "browser": "Fresh actual navigation acceptance remains pending: Chrome reports ERR_BLOCKED_BY_CLIENT for new local and requested tailnet fixture navigation. Existing native modal browser evidence retains its narrower scope.",
+    "focusedPass": 89,
+    "nativeCanaryCleanupPass": 2,
+    "retainedFailures": [
+      "Initial local run: six obsolete native-confirm navigation fixture failures; fixtures migrated without relaxing history/focus assertions.",
+      "Corrected local run: one supervisor SIGKILL post-takeover HTTP502; cause unproven, all original assertions/timeouts retained. Both unchanged diagnostic-copy SIGKILL/SIGSTOP cases pass independently.",
+      "Node22 hosted: native stalled-canary case checked PID exit at request refusal, before cleanup acknowledgment. New native stop hold proves refusal/PIDalive/charged lease before cleanup and PIDabsent/spent lease after actual cleanup."
+    ],
+    "nativeCanaryFixtureCorrection": "Production behavior unchanged. Explicit native stop barrier closes connections, holds actual process exit, and retains the exact lease until the fixture releases shutdown; PID absence is checked after deployment cleanup acknowledgment. Drain/cleanup/test deadlines unchanged; no retry added."
   },
   "publicApiChange": false,
   "schemaChange": false,
