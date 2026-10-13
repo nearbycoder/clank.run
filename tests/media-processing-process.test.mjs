@@ -55,7 +55,27 @@ test('actual SIGKILL after bucket and receipt commit reclaims the lease and sett
     lease=inspection.prepare('SELECT lease_until FROM clank_jobs WHERE id=?').get(queued.jobId);
     assert.ok(before.result);assert.ok(before.output_generation);
   } finally { inspection.close(); }
+  // Observe a real renewal after the parent's sample so this crash test
+  // cannot accidentally recover using a lease the live worker superseded.
+  const sampledUntil=Number(lease.lease_until),renewal=new DatabaseSync(join(f.root,'catalog.sqlite'),{readOnly:true});
+  renewal.exec('PRAGMA busy_timeout=5000');
+  try{
+    const deadline=performance.now()+5000;
+    while(Number(renewal.prepare('SELECT lease_until FROM clank_jobs WHERE id=?').get(queued.jobId).lease_until)<sampledUntil+600){
+      assert.ok(performance.now()<deadline,'The held worker must publish an actual lease renewal.');
+      await new Promise(resolve=>setTimeout(resolve,25));
+    }
+  }finally{renewal.close();}
   child.kill('SIGKILL');assert.equal((await exited).signal,'SIGKILL');assert.equal(f.requests,1);assert.equal(ledgerCount(f),1);
+  // Native process death ends renewal. Read its final persisted lease before
+  // waiting for expiry; a pre-kill sample is not the dead attempt's deadline.
+  const finalInspection=new DatabaseSync(join(f.root,'catalog.sqlite'),{readOnly:true});
+  finalInspection.exec('PRAGMA busy_timeout=5000');
+  try{
+    const final=finalInspection.prepare('SELECT state,lease_until FROM clank_jobs WHERE id=?').get(queued.jobId);
+    assert.equal(final.state,'running');assert.ok(Number.isSafeInteger(final.lease_until));
+    assert.ok(Number(final.lease_until)>=sampledUntil+600);lease=final;
+  }finally{finalInspection.close();}
   await new Promise(resolve=>setTimeout(resolve,Math.max(0,Number(lease.lease_until)-Date.now()+50)));
   const reopened=await f.open(),fresh=await f.caller(reopened);
   // The native queue first reclaims an expired attempt and schedules its normal retry.

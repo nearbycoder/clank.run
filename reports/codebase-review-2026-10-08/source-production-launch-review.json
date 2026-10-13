@@ -146,15 +146,34 @@
       "qualification": "Controlled reproduction confirms the original assertion makes an invalid time-boundary assumption. Exact wall-clock crossing was not independently sampled in the original hosted failure.",
       "repair": "Pin Date.now only around synchronous runDue assertions and restore in finally before awaits. Keep accepted1/immediate0 assertions and assert actual next occurrence at fixedtime+1ms. Production schedule and auth/storage boundaries unchanged.",
       "validation": "retention-boundary-after22-37.log and retention-boundary-after24-37.log:18/18 each,zero failures/cancellations/skips; actual scratch-copy suites terminal0. Fresh repository/full/exact-head gates remain required."
+    },
+    {
+      "head": "e7eca99a19e346302d1a43bfcf18fbd1ed69bda7",
+      "jobId": 115055647805,
+      "jobConclusion": "failure",
+      "log": "hosted-node22-failure-59.json",
+      "returnedCounts": {
+        "tests": 3894,
+        "pass": 3856,
+        "fail": 1,
+        "cancelled": 0,
+        "skipped": 37
+      },
+      "returnedLogTruncated": true,
+      "failure": "MediaSIGKILLtest expectsretry butobservesrunning after waitingagainst lease sampletaken beforeworker death.",
+      "controlledReproduction": "media-lease-before22-60.log actual1/0/1 terminal1; heldactualchildrenewed deadlinefrom1791849682397 to1791849683077 beforeactualSIGKILL. Originalassertions failrunning!=retry. No productionlease/clockmutation.",
+      "qualification": "Native controlledtiming reproduces samefailure; exactheartbeat timingnot independentlysampledin originalCI. Other7hostedchecks PASS, includingactualpackage3894/3857/0/0/37.",
+      "repair": "ObservegenuineNativeheartbeat extension inexistingcrash test, waitactualSIGKILLexit, thenreadfinalpersisteddeadattemptlease before expirywait. Preserve originalretry/attempt2/provideronce/exactpublication assertions. No productionchange,extra recoveryattempt orretry wrapper.",
+      "validation": "All3actualprocess cases pass eachNode22/24 inreviewedscratchcopy (90050/63821terminal0). Freshrepository/full/exactnewhead gatesremainrequired."
     }
   ],
   "fullGate": {
-    "state": "Fresh full gate required after retention fixture correction",
-    "priorLocal": "68511terminal1, one unproven native observer lock failure retained",
-    "diagnosticGate": "68410 original6ca run continues for diagnostics only: retention timing fixture changed during run, so it cannot establish exact-head complete acceptance. All production unchanged. Fresh corrected-head full gate required after this samehandle terminal.",
-    "preparedFix": "retention-boundary-reviewed-change-37.json"
+    "state": "Freshcompletegate required on media-test-correctedcommit",
+    "priorDiagnostic": "68410terminal0,3894/3857/0/0/37, qualified54; notexactheadacceptance",
+    "olderCurrent": "70223 live e7-startedrun becomesdiagnosticONLYaftertest/notesedit62; waitactualterminal,thenfreshfinalgate",
+    "production": "All323outputs and452packageinputs unchanged byfixture/notesrepair"
   },
-  "delivery": "PR390 open and attached. Original6ca head has7/8 hostedPASS, packagefailure retained. AutoMergeRequest null; no queue or merge. Correction requires new reviewed head and fresh complete local/exact-head hosted gates.",
+  "delivery": "PR390 OPEN/attached; e7 headallhostedterminal7PASS/Node22FAIL59. No queue/autoMergeRequest. Media-testcorrection mustcommitnewhead,receivefreshcomplete local/eight exactheadhosted acceptance, thennormalprotectedmerge.",
   "originalFeatureScope": "All11 pending features and each original acceptance requirement remain. Source generation bootstrap does not complete online transfer.",
   "ownerPairingCorrection": {
     "before": "wrong-owner-before-07.log:1/0/1; session73601 terminal1",
