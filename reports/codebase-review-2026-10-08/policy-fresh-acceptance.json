@@ -1,0 +1,31 @@
+{
+  "feature": "13",
+  "freshStatus": "accepted",
+  "protectedMain": "3f05439e114044c9f0021f83563145e1d78d06b7",
+  "story": "Organization administrator previews and saves current factor/SSO/session/grace policy; current browser, CLI and delegated MCP authority gates tighten, and independent recovery preserves last-admin boundaries.",
+  "browser": [
+    "Actual earlier fresh Chrome preview names affected members, capable administrators, independent recovery and effective passkey/session/grace policy. Escape/focus and expired fresh-auth refusal preserve reviewed intent.",
+    "Actual controlled cryptographic UV enables reviewed policy save version1; viewer loses project access. Retained native SQLite has exact version1 requirements and one receipt."
+  ],
+  "nativeRequirementCases": [
+    "ok 71 - real native MCP consent, PKCE and refresh retain their human policy generation and reject tightening, relaxation and origin revocation",
+    "ok 74 - real signed OIDC code and PKCE prove authentication to the exact organization, rather than mere linked identity enrollment",
+    "ok 77 - enrollment grace cannot be extended by a repeated tightening or a leave/rejoin, and session age is independent of step-up",
+    "ok 78 - last-admin safeguards, real signed passkey recovery and current independent operator authority are transactional",
+    "ok 154 - native policy tightening gates actual browser/project CLI authority while preserving another organization and never reviving old grants",
+    "ok 155 - two actual native policy controllers serialize the same-version CAS and reject the retired CLI proof",
+    "ok 157 - native last-administrator recovery requires a current independent operator and enrolled passkey owner, and exact retries do not reverse later policy"
+  ],
+  "qualifications": [
+    "Earlier fresh-session browser evidence consolidated with the latest158+331focused native run; no claim an old browser fixture process remains live.",
+    "Native fixture verifies real signed WebAuthn/UV and real signed OIDC/PKCE; no physical authenticator or external production IdP claim.",
+    "Canonical acceptance remains32 until batched protected documentation delivery."
+  ],
+  "evidence": {
+    "work/policy-browser-retained-native.json": "79d31df7887fa565857d72b13e2919ab353cf71b96b32dcbd1adec3db0cd6434",
+    "outputs/organization-policy-review.jpg": "5ae1b1d96bd4d9a7debbc2d7cc965b2d2df0e537788b09af5def847926702734",
+    "outputs/policy-viewer-denied.jpg": "bc8b8fd965aae00365bd97cae8eadb3909373d6e347a70b32337b10517a6b61f",
+    "work/remaining-native-focused-results.json": "ecd098e44c9cb40d032d838ccf9079f36f7828a225814b4642d802d139f42b54"
+  },
+  "focusedLogSha256": "28c4bd60c798fc5b7a148e68074cf12e47edec9f6eef48a14df495420e9ea105"
+}
