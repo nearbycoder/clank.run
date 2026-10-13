@@ -1,0 +1,60 @@
+{
+  "feature": 38,
+  "date": "2026-10-13",
+  "status": "Fresh accepted evidence; canonical credit proposed by this documentation update",
+  "runtimeBase": "792cd7153e992c4254d75df41188ac7c5450087a",
+  "runtimeChanges": false,
+  "focused": {
+    "tests": 60,
+    "pass": 60,
+    "fail": 0,
+    "cancelled": 0,
+    "skip": 0
+  },
+  "browser": [
+    "Selected Chrome profile Josh; native sign-in and fixture UV cryptography",
+    "Reviewed budget5/known6, admission blocked; override/revoke, audited native reconciliation",
+    "Escape retains draft and restores focus; keyboard confirmation and actual390px iframe358px dialog/375px document",
+    "Native successful policy response body withheld after commit; uncertain status retains original UUID/input and disables editing; keyboard unchanged retry",
+    "Exact all3 SQLite receipts and policyversion2 identical before/after retry",
+    "Actual native membership deletion; subsequent automatic costGET404 disposes all private metadata/controls; no new cost receipt/version"
+  ],
+  "native": [
+    "Trusted cumulative collector pricing and versioned rate identity; unknown coverage distinct from zero",
+    "Native controller reopen retains one correction and exact historical operation",
+    "Actual native ingress block/override/revoke across restart",
+    "Collector await rechecks actual session revocation before commit",
+    "Current machine read scope and native CLI/MCP authorization; human-only mutation refusal",
+    "Ignored/altered audit and final readback failures roll back complete mutation/receipt"
+  ],
+  "protectedRuntime": {
+    "pr": 396,
+    "head": "80203802d82c7aa1578b40cd1c5bcd8ab158f6cd",
+    "main": "692bac8f3e7eea4c8b2bcb334663fa4aab97c0d1",
+    "tree": "364de25611d557dd4c912d1199e4c181d11ed187",
+    "hostedChecks": 8,
+    "localTests": 3924,
+    "pass": 3881,
+    "fail": 0,
+    "cancelled": 0,
+    "skip": 43
+  },
+  "qualifications": [
+    "Costs are measured estimates, not invoices or an atomic monetary spending ceiling.",
+    "Fixture native signed UV does not certify a physical authenticator.",
+    "390px iframe is an actual nested browser layout, not a physical-device or effective viewport override claim.",
+    "Membership removal is a subsequent automatic-read denial, not an inferred in-flight race.",
+    "Earlier full-gate failures remain retained; the final identical reviewed head passed.",
+    "This docs-only acceptance does not credit source07 or any other incomplete feature."
+  ],
+  "evidence": {
+    "/var/tmp/clank-fresh-evidence-20261013/cost-fresh-final-focused.log": "f517f2270dd9f5e428013106bd36c740432fd671627ac3d00a34fdf3b00696f6",
+    "/var/tmp/clank-fresh-evidence-20261013/cost-browser-uncertain-before-retry.json": "6d6301ddc85ef51da4af8d8f9c93c2cb814ca28649d5fae75c5b962a97a9dc9e",
+    "/var/tmp/clank-fresh-evidence-20261013/cost-browser-unchanged-retry.json": "9be40ba4925aa5a8297d3a7d752e8a812f16a6fe47b1cace0afd1ab7ff36a9c6",
+    "/var/tmp/clank-fresh-evidence-20261013/cost-browser-membership-removal.json": "84bccd2aad8eff3be118ac2146919027710dba6a8dfd52500a7f62fa78c6b9d1",
+    "/home/nearby/.vnc/codex-home/Documents/Codex/2026-10-13/clank-fresh-verification/outputs/cost-uncertain-acknowledgment.jpg": "6bf00c07a68e70b5ad470d508ba9bacd12fff48073090ab5a699f6032ec46f3e",
+    "/home/nearby/.vnc/codex-home/Documents/Codex/2026-10-13/clank-fresh-verification/outputs/cost-membership-removal.jpg": "951ab05b24eb40c1a035169e4831d7b46dc5cadcd6b57be072847f713a984500",
+    "/home/nearby/.vnc/codex-home/Documents/Codex/2026-10-13/clank-fresh-verification/outputs/budget-review-narrow.jpg": "96b69cdd5f8fa093e961007442daf6d8f32dda95e3fa81340a373a4247331450",
+    "/home/nearby/.vnc/codex-home/Documents/Codex/2026-10-13/clank-fresh-verification/work/cost-fresh-retry-server.mjs": "3191193f54dd6a5eaa546fcd1a3a8402bc39e2fea93bb3879e2d8f13253c3006"
+  }
+}
