@@ -1,0 +1,37 @@
+{
+  "date": "2026-10-13",
+  "scope": "Cost view confirmations only; Feature38 and the complete forty-feature acceptance remain under verification.",
+  "nativeBrowser": "Chrome extension profile Josh, browser3, fresh authorized session",
+  "implementation": [
+    "Budget policy, admission override/revocation and discard use real HTML dialogs.",
+    "Review retains the proposed values and version, requires explicit confirmation and current account/role, and keeps unchanged-operation retries.",
+    "Escape restores focus after controls are reenabled."
+  ],
+  "browserEvidence": [
+    "Native HTTP sign-in and fixture UV; physical authenticator certification is excluded.",
+    "Budget5 versus known measured cost6 returns exhausted/admission blocked.",
+    "A reviewed override returns overridden; immediate revocation returns blocked.",
+    "Native usage reconciliation retains revision2 with known6-unit measurement.",
+    "Escape preserves draft and restores focus to Save reviewed budget; Tab reaches Apply.",
+    "Real390px nested browsing context measures358px dialog and375px page width; device emulation and physical phone certification are excluded."
+  ],
+  "regressions": {
+    "pass": 24,
+    "fail": 0,
+    "includes": [
+      "Escape cancellation and focus",
+      "Pinned reviewed intent",
+      "Account/role loss before confirmation",
+      "Native HTTP exact retries and acknowledgment substitution refusal"
+    ]
+  },
+  "pending": [
+    "Fresh final implementation release and hosted checks",
+    "Cost permission revocation and real Chrome lost-response retry acceptance",
+    "Remaining original Feature38 requirements"
+  ],
+  "files": {
+    "src/project-costs.ts": "fa6e3d63506ad8688427dc9453c38a115f108d00a73b90f5ada5ccfdd8d42ddc",
+    "tests/project-costs-client.test.mjs": "f00cc664cfd948fe757ca8c51f803514e965bfe9e916bb70a5f9fd85ae21ce38"
+  }
+}

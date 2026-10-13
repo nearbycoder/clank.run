@@ -39,24 +39,45 @@ function dom(t){
     contains(value){return this===value||this.children.some(child=>child.contains(value));}
     querySelectorAll(selector){const tags=selector.split(',');return this.children.flatMap(child=>[...(tags.includes(child.tagName)?[child]:[]),...child.querySelectorAll(selector)]);}
     addEventListener(type,handler){this.events.set(type,handler);}
-    focus(){globalThis.document.activeElement=this;}
+    focus(){if(!this.disabled)globalThis.document.activeElement=this;}
+    showModal(){this.open=true;}
+    close(){this.open=false;}
     fire(type){this.events.get(type)?.({preventDefault(){}});}
   }
-  globalThis.document={createElement:tag=>new Element(tag),activeElement:null};globalThis.confirm=()=>true;t.after(()=>{globalThis.document=previous.document;globalThis.confirm=previous.confirm;});return new Element('root');
+  globalThis.document={createElement:tag=>new Element(tag),activeElement:null};globalThis.confirm=()=>{throw Error('Native confirmation must not be used');};t.after(()=>{globalThis.document=previous.document;globalThis.confirm=previous.confirm;});return new Element('root');
 }
 function state(version=2){return {protocol:'clank-project-costs/1',projectId:'project_exact_01',month:'2026-10',snapshot:null,policy:{version,currency:'USD',limitMinor:'100',warningPercent:80,admission:'observe',maxMeasurementAgeMs:60000,reason:'Reviewed',updatedAt:Date.now()},override:null,status:'unknown',admission:'allowed',asOf:Date.now()};}
 const label=(root,text)=>root.querySelectorAll('label').find(node=>node.textContent===text).children[0];
 const button=(root,text)=>root.querySelectorAll('button').find(node=>node.textContent===text);
+function acceptReview(root){const dialog=root.querySelectorAll('dialog').find(node=>node.open);if(dialog)dialog.querySelectorAll('button').at(-1).fire('click');}
 async function settled(){for(let n=0;n<4;n++)await tick();}
+test('budget review cancels with Escape, restores focus and submits only its reviewed intent',async t=>{
+  const root=dom(t),calls=[],report=state();
+  const client={read:async()=>report,history:async()=>[],policy:async(_id,input)=>{calls.push(structuredClone(input));return {...report.policy,...input,version:input.expectedVersion+1};}};
+  const view=createProjectCostView(root,{client,projectId:report.projectId,month:report.month,getAccountId:()=> 'human_exact_01',canManage:()=>true});t.after(()=>view.dispose());await settled();
+  const reason=label(root,'Budget change reason'),form=reason.parent.parent,opener=button(root,'Save reviewed budget');
+  reason.value='The reviewed reason';form.fire('input');opener.focus();form.fire('submit');
+  const dialog=root.querySelectorAll('dialog')[0];assert.equal(dialog.open,true);assert.equal(calls.length,0);assert.equal(reason.disabled,true);assert.equal(document.activeElement.textContent,'Keep editing');
+  assert.match(dialog.querySelectorAll('p').map(node=>node.textContent).join(' '),/USD 100.*The reviewed reason/);
+  dialog.fire('cancel');assert.equal(dialog.open,false);assert.equal(document.activeElement,opener);assert.equal(reason.disabled,false);assert.equal(reason.value,'The reviewed reason');assert.equal(calls.length,0);
+  form.fire('submit');reason.value='A later unreviewed value';acceptReview(root);await settled();assert.equal(calls.length,1);assert.equal(calls[0].reason,'The reviewed reason');assert.equal(calls[0].expectedVersion,2);
+});
+for(const loss of ['account','role'])test('open budget review refuses '+loss+' loss before confirmation and clears its details',async t=>{
+  const root=dom(t),calls=[],report=state();let account='human_exact_01',manage=true;
+  const view=createProjectCostView(root,{client:{read:async()=>report,history:async()=>[],policy:async(...input)=>calls.push(input)},projectId:report.projectId,month:report.month,getAccountId:()=>account,canManage:()=>manage});t.after(()=>view.dispose());await settled();
+  const reason=label(root,'Budget change reason');reason.value='Private proposal';reason.parent.parent.fire('input');reason.parent.parent.fire('submit');const dialog=root.querySelectorAll('dialog')[0];
+  assert.equal(dialog.open,true);if(loss==='account')account='human_other_02';else manage=false;acceptReview(root);await settled();
+  assert.equal(calls.length,0);assert.equal(dialog.open,false);assert.equal(dialog.querySelectorAll('p').length,0);if(loss==='account')assert.equal(root.children.length,0);
+});
 test('version-pinned budget drafts can explicitly recover from a stale rejection',async t=>{
   const root=dom(t),calls=[];let report=state();const client={read:async()=>report,history:async()=>[],policy:async(_id,input)=>{calls.push(input);if(calls.length===1)throw Object.assign(new Error('stale'),{status:409});report=state(4);report.policy.reason=input.reason;return report.policy;}};
   const view=createProjectCostView(root,{client,projectId:report.projectId,month:report.month,getAccountId:()=> 'human_exact_01',canManage:()=>true});t.after(()=>view.dispose());await settled();
-  const reason=label(root,'Budget change reason'),form=reason.parent.parent;reason.value='Review draft';form.fire('input');report=state(3);await view.refresh();form.fire('submit');await settled();assert.equal(calls[0].expectedVersion,2);assert.equal(reason.value,'Review draft');assert.equal(button(root,'Discard draft and refresh').disabled,false);
-  button(root,'Discard draft and refresh').fire('click');await settled();assert.equal(reason.value,'');reason.value='Reviewed current policy';form.fire('input');form.fire('submit');await settled();assert.equal(calls[1].expectedVersion,3);assert.equal(document.activeElement.tagName,'p');
+  const reason=label(root,'Budget change reason'),form=reason.parent.parent;reason.value='Review draft';form.fire('input');report=state(3);await view.refresh();form.fire('submit');acceptReview(root);await settled();assert.equal(calls[0].expectedVersion,2);assert.equal(reason.value,'Review draft');assert.equal(button(root,'Discard draft and refresh').disabled,false);
+  button(root,'Discard draft and refresh').fire('click');acceptReview(root);await settled();assert.equal(reason.value,'');reason.value='Reviewed current policy';form.fire('input');form.fire('submit');acceptReview(root);await settled();assert.equal(calls[1].expectedVersion,3);assert.equal(document.activeElement.tagName,'p');
 });
 test('uncertain mutation keeps exact intent through a failing read and disables draft replacement',async t=>{
   const root=dom(t),calls=[];let readError=false,report=state();const client={read:async()=>{if(readError)throw Object.assign(new Error('read failed'),{status:409});return report;},history:async()=>[],policy:async(_id,input)=>{calls.push(structuredClone(input));if(calls.length===1)throw new TypeError('lost acknowledgment');report=state(3);report.policy.reason=input.reason;return report.policy;}};
-  const view=createProjectCostView(root,{client,projectId:report.projectId,month:report.month,getAccountId:()=> 'human_exact_01',canManage:()=>true});t.after(()=>view.dispose());await settled();const reason=label(root,'Budget change reason'),form=reason.parent.parent;reason.value='Unchanged intent';form.fire('input');form.fire('submit');await settled();assert.equal(reason.disabled,true);assert.equal(button(root,'Retry unchanged operation').hidden,false);assert.equal(button(root,'Discard draft and refresh').disabled,true);
+  const view=createProjectCostView(root,{client,projectId:report.projectId,month:report.month,getAccountId:()=> 'human_exact_01',canManage:()=>true});t.after(()=>view.dispose());await settled();const reason=label(root,'Budget change reason'),form=reason.parent.parent;reason.value='Unchanged intent';form.fire('input');form.fire('submit');acceptReview(root);await settled();assert.equal(reason.disabled,true);assert.equal(button(root,'Retry unchanged operation').hidden,false);assert.equal(button(root,'Discard draft and refresh').disabled,true);
   readError=true;await view.refresh();assert.equal(button(root,'Retry unchanged operation').hidden,false);assert.equal(reason.disabled,true);readError=false;button(root,'Retry unchanged operation').fire('click');await settled();assert.deepEqual(calls[0],calls[1]);assert.equal(reason.disabled,false);
 });
 test('account change fences a late private read and clears form drafts',async t=>{
@@ -94,7 +115,7 @@ for(const kind of ['policy','reconcile','override'])test('Console '+kind+' prese
   const f=await nativeCosts(t);await f.invoke('policy',f.input.policy);const root=dom(t);let first=true;
   const host=await http(t,async call=>{if(call.method==='GET')return call.path.includes('/history')?{ok:true,snapshots:f.history()}:{ok:true,report:f.read()};const value=await f.invoke(kind,call.body);if(first){first=false;return '{';}return {ok:true,[receiptKey(kind)]:value};});
   const context=await mountConsole(t,root,host,f),input=label(root,kind==='policy'?'Budget change reason':kind==='reconcile'?'Reconciliation reason':'Override reason'),form=input.parent.parent;
-  input.value='  Keep exact reviewed intent  ';if(kind!=='reconcile')form.fire('input');form.fire('submit');await until(()=>root.querySelectorAll('p').some(node=>node.textContent.includes('uncertain')));
+  input.value='  Keep exact reviewed intent  ';if(kind!=='reconcile')form.fire('input');form.fire('submit');acceptReview(root);await until(()=>root.querySelectorAll('p').some(node=>node.textContent.includes('uncertain')));
   assert.equal(host.calls.filter(call=>call.method==='POST').length,1);assert.equal(input.disabled,true);assert.equal(button(root,'Retry unchanged operation').hidden,false);assert.equal(button(root,'Discard draft and refresh').disabled,true);
   context.initial.csrfToken='fresh-retry';button(root,'Retry unchanged operation').fire('click');await until(()=>host.calls.filter(call=>call.method==='POST').length===2&&!input.disabled);
   const posts=host.calls.filter(call=>call.method==='POST');assert.equal(posts[0].raw,posts[1].raw);assert.equal(posts[0].headers['x-clank-csrf'],'fresh-first');assert.equal(posts[1].headers['x-clank-csrf'],'fresh-retry');assert.equal(posts[0].body.reason,'  Keep exact reviewed intent  ');assert.equal(button(root,'Retry unchanged operation').hidden,true);
@@ -117,13 +138,13 @@ test('bounded client matches the serialized request even when caller input chang
 });
 for(const kind of ['policy','reconcile','override'])test('injected '+kind+' client cannot discard pending identity with malformed or substituted acknowledgment',async t=>{
   const f=await nativeCosts(t);await f.invoke('policy',f.input.policy);const root=dom(t),calls=[];const client={read:async()=>f.read(),history:async()=>f.history(),[kind]:async(_id,input)=>{calls.push(structuredClone(input));if(calls.length===1){const value=await f.invoke(kind,input);input.reason='Injected changed intent';return {...value,reason:input.reason};}return await f.invoke(kind,input);}};
-  const view=createProjectCostView(root,{client,projectId:f.project,month:f.month,getAccountId:()=> 'human_exact_01',canManage:()=>true});t.after(()=>view.dispose());await settled();const input=label(root,kind==='policy'?'Budget change reason':kind==='reconcile'?'Reconciliation reason':'Override reason'),form=input.parent.parent;input.value='Unchanged original';if(kind!=='reconcile')form.fire('input');form.fire('submit');await until(()=>button(root,'Retry unchanged operation').hidden===false&&!button(root,'Retry unchanged operation').disabled);
+  const view=createProjectCostView(root,{client,projectId:f.project,month:f.month,getAccountId:()=> 'human_exact_01',canManage:()=>true});t.after(()=>view.dispose());await settled();const input=label(root,kind==='policy'?'Budget change reason':kind==='reconcile'?'Reconciliation reason':'Override reason'),form=input.parent.parent;input.value='Unchanged original';if(kind!=='reconcile')form.fire('input');form.fire('submit');acceptReview(root);await until(()=>button(root,'Retry unchanged operation').hidden===false&&!button(root,'Retry unchanged operation').disabled);
   assert.equal(calls.length,1);assert.equal(input.disabled,true);button(root,'Retry unchanged operation').fire('click');await settled();assert.deepEqual(calls[0],calls[1]);assert.equal(calls.length,2);assert.equal(view.hasPendingChanges(),false);assert.equal(input.disabled,false);
 });
 test('Console fences a valid late native mutation receipt after the account changes',async t=>{
   const f=await nativeCosts(t);await f.invoke('policy',f.input.policy);const root=dom(t);let entered,release;const ready=new Promise(resolve=>entered=resolve),held=new Promise(resolve=>release=resolve);t.after(()=>release());
   const host=await http(t,async call=>{if(call.method==='GET')return call.path.includes('/history')?{ok:true,snapshots:f.history()}:{ok:true,report:f.read()};const policy=await f.invoke('policy',call.body);entered();await held;return {ok:true,policy};});
-  const context=await mountConsole(t,root,host,f),input=label(root,'Budget change reason');input.value='Private reviewed intent';input.parent.parent.fire('input');input.parent.parent.fire('submit');await ready;context.state.dashboard.account.id='human_other_02';release();await until(()=>root.children.length===0);assert.equal(input.value,'');assert.equal(host.calls.filter(call=>call.method==='POST').length,1);
+  const context=await mountConsole(t,root,host,f),input=label(root,'Budget change reason');input.value='Private reviewed intent';input.parent.parent.fire('input');input.parent.parent.fire('submit');acceptReview(root);await ready;context.state.dashboard.account.id='human_other_02';release();await until(()=>root.children.length===0);assert.equal(input.value,'');assert.equal(host.calls.filter(call=>call.method==='POST').length,1);
 });
 
 test('native HTTP acknowledgments bind every established reviewed identity field and reject altered snapshot arithmetic',async t=>{
