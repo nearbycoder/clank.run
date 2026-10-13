@@ -92,6 +92,7 @@ export function createTemporaryAccessView(root: HTMLElement, options: TemporaryA
   const owner={...identity};let disposed=false,busy=false,dirty=false,previewDirty=false,generation=0,latest:TemporaryAccessSnapshot|null=null;
   let pending:{kind:'create';input:TemporaryAccessCreate}|{kind:'revoke';input:TemporaryAccessRevoke}|null=null;
   let previewIntent:TemporaryAccessPreviewCreate|null=null;
+  let review:{run:(reason:string)=>void;manage:boolean;opener:HTMLElement|null;grantId?:string;reason:boolean}|null=null;
   const node=<T extends keyof HTMLElementTagNameMap>(tag:T,text?:string)=>{const value=doc.createElement(tag);if(text!==undefined)value.textContent=text;return value;};
   const heading=node('h3','Temporary preview access'),copy=node('p','Grant one member time to create a new isolated preview. This does not change their role. All active grants close when the control server restarts.'),status=node('p'),list=node('div'),form=node('form'),recipient=node('select'),duration=node('select'),why=node('input'),submit=node('button','Grant reviewed access'),retry=node('button','Retry unchanged request'),discard=node('button','Discard draft and refresh'),refreshButton=node('button','Refresh grants');
   copy.className='subtle';form.className='invite-form';
@@ -102,7 +103,8 @@ export function createTemporaryAccessView(root: HTMLElement, options: TemporaryA
   const label=(text:string,control:HTMLElement)=>{const wrapper=node('label',text);wrapper.className='field';wrapper.append(control);form.append(wrapper);};
   const blank=node('option','Select a current member');blank.value='';recipient.append(blank);
   for(const member of options.members){if(member.id===owner.userId)continue;const option=node('option',member.label.slice(0,200));option.value=member.id;recipient.append(option);}
-  for(const [value,text]of [['900000','15 minutes'],['1800000','30 minutes'],['3600000','1 hour']]){const option=node('option',text);option.value=value;duration.append(option);}
+  for(const [value,text]of [['60000','1 minute'],['300000','5 minutes'],['900000','15 minutes'],['1800000','30 minutes'],['3600000','1 hour']]){const option=node('option',text);option.value=value;duration.append(option);}
+  duration.value='900000';
   recipient.required=true;label('Member',recipient);label('Access duration',duration);label('Approval reason',why);submit.type='submit';form.append(submit);
   for(const button of [retry,discard,refreshButton])button.type='button';retry.hidden=true;
   const previewForm=node('form'),previewGrant=node('select'),previewName=node('input'),previewDuration=node('select'),previewSubmit=node('button','Create new preview'),previewClear=node('button','Clear after outcome review');
@@ -113,22 +115,33 @@ export function createTemporaryAccessView(root: HTMLElement, options: TemporaryA
   for(const [text,control]of [['Active grant',previewGrant],['New preview name',previewName],['Preview lifetime',previewDuration]] as const){const wrapper=node('label',text);wrapper.className='field';wrapper.append(control);previewForm.append(wrapper);}
   previewForm.append(previewSubmit,previewClear);
   root.replaceChildren(heading,copy,status,refreshButton,list,form,retry,discard,previewForm);
+  const dialog=node('dialog'),reviewTitle=node('h3'),reviewCopy=node('p'),reviewReasonLabel=node('label','Revocation reason'),reviewReason=node('input'),reviewError=node('p'),reviewCancel=node('button','Keep editing'),reviewAccept=node('button');
+  reviewTitle.id='clank-temporary-review-'+(win?.crypto.randomUUID()??crypto.randomUUID());dialog.setAttribute('aria-labelledby',reviewTitle.id);dialog.style.maxWidth='min(32rem, calc(100vw - 32px))';dialog.style.boxSizing='border-box';dialog.style.overflowWrap='anywhere';
+  reviewReason.name='temporary-revocation-reason';reviewReason.maxLength=200;reviewReason.autocomplete='off';reviewReason.style.width='100%';reviewReason.style.boxSizing='border-box';reviewReasonLabel.append(reviewReason);reviewError.setAttribute('role','alert');reviewCancel.type=reviewAccept.type='button';dialog.append(reviewTitle,reviewCopy,reviewReasonLabel,reviewError,reviewCancel,reviewAccept);root.append(dialog);
+  const closeReview=(restore=true)=>{const before=review;review=null;if(dialog.open)dialog.close();reviewTitle.textContent='';reviewCopy.textContent='';reviewReason.value='';reviewError.textContent='';reviewAccept.textContent='';if(disposed)return;controls();if(!restore)return;
+    const replacement=before?.grantId?Array.from(root.querySelectorAll<HTMLButtonElement>('button')).find(button=>button.dataset.temporaryGrant===before.grantId):undefined;
+    const opener=replacement??before?.opener;if(opener&&root.contains(opener)&&!(opener as HTMLButtonElement).disabled)opener.focus();else status.focus();};
+  const openReview=(title:string,copy:string,label:string,run:(reason:string)=>void,manage=false,reason=false,grantId?:string)=>{if(review||!current()||busy||pending||manage&&!options.canManage())return;
+    review={run,manage,reason,grantId,opener:doc.activeElement as HTMLElement|null};reviewTitle.textContent=title;reviewCopy.textContent=copy;reviewReasonLabel.hidden=!reason;reviewReason.required=reason;reviewAccept.textContent=label;dialog.showModal();reviewCancel.focus();controls();};
+  reviewCancel.addEventListener('click',()=>closeReview());dialog.addEventListener('cancel',event=>{event.preventDefault();closeReview();});
+  reviewAccept.addEventListener('click',()=>{if(!review)return;if(!current()){dispose();return;}if(busy||pending||review.manage&&!options.canManage()){closeReview(false);return;}const reason=reviewReason.value.trim();if(review.reason&&!reason){reviewError.textContent='Record a reason for revoking this access.';reviewReason.focus();return;}const run=review.run;closeReview(false);run(reason);});
   const current=()=>{const value=options.account();return !disposed&&value?.userId===owner.userId&&value.sessionId===owner.sessionId;};
-  const hasPendingChanges=()=>dirty||previewDirty||pending!==null||previewIntent!==null;
+  const hasPendingChanges=()=>dirty||previewDirty||pending!==null||previewIntent!==null||review!==null;
   const unload=(event:BeforeUnloadEvent)=>{if(current()&&hasPendingChanges()){event.preventDefault();event.returnValue='';}};
   win?.addEventListener('beforeunload',unload);
-  const dispose=()=>{if(disposed)return;disposed=true;generation++;clearInterval(timer);win?.removeEventListener('beforeunload',unload);pending=null;previewIntent=null;dirty=false;previewDirty=false;why.value='';recipient.value='';previewName.value='';previewGrant.value='';root.replaceChildren();};
-  const controls=()=>{const manage=options.canManage();form.hidden=!manage;for(const control of [recipient,duration,why])control.disabled=busy||pending!==null||!manage;submit.disabled=busy||pending!==null||!latest||!manage;retry.hidden=pending===null;retry.disabled=busy;discard.disabled=busy||pending!==null;refreshButton.disabled=busy;
+  const dispose=()=>{if(disposed)return;disposed=true;generation++;clearInterval(timer);win?.removeEventListener('beforeunload',unload);pending=null;previewIntent=null;closeReview(false);dirty=false;previewDirty=false;why.value='';recipient.value='';previewName.value='';previewGrant.value='';root.replaceChildren();};
+  const controls=()=>{const manage=options.canManage();if(review?.manage&&!manage)closeReview(false);form.hidden=!manage;for(const control of [recipient,duration,why])control.disabled=busy||pending!==null||review!==null||!manage;submit.disabled=busy||pending!==null||review!==null||!latest||!manage;retry.hidden=pending===null;retry.disabled=busy||review!==null;discard.disabled=busy||pending!==null||review!==null;refreshButton.disabled=busy||review!==null;
+    for(const button of root.querySelectorAll<HTMLButtonElement>('button'))if(button.dataset.temporaryGrant)button.disabled=busy||pending!==null||review!==null||!manage;
     const own=latest?.grants.filter(grant=>grant.active&&grant.recipientId===owner.userId&&grant.expiresAt>latest!.observedAt)??[];
     previewForm.hidden=!options.client.createPreview||(!own.length&&!previewIntent);
-    for(const control of [previewGrant,previewName,previewDuration])control.disabled=busy||pending!==null||previewIntent!==null;
-    previewSubmit.disabled=busy||pending!==null||previewIntent!==null||!own.length;previewClear.hidden=previewIntent===null;previewClear.disabled=busy;
+    for(const control of [previewGrant,previewName,previewDuration])control.disabled=busy||pending!==null||previewIntent!==null||review!==null;
+    previewSubmit.disabled=busy||pending!==null||previewIntent!==null||review!==null||!own.length;previewClear.hidden=previewIntent===null;previewClear.disabled=busy||review!==null;
   };
   const render=()=>{
     if(!latest)return;list.replaceChildren();
     for(const grant of latest.grants){const row=node('article'),title=node('h4',grant.action==='preview.create'?'Create a new preview':'Unavailable action');row.className='panel section-gap';
       const member=options.members.find(item=>item.id===grant.recipientId),details=node('p',(member?.label??'Current member')+' · '+grant.state+' · until '+new Date(grant.expiresAt).toLocaleString()),reason=node('p',grant.reason);row.append(title,details,reason);
-      if(grant.active&&options.canManage()){const revoke=node('button','Revoke access');revoke.type='button';revoke.disabled=busy||pending!==null;revoke.addEventListener('click',()=>{if(!current()||busy||pending||!latest)return;const value=win?.prompt('Reason for revoking this access:');if(!value)return;pending={kind:'revoke',input:{grantId:grant.id,reason:value.trim(),expectedVersion:latest.version,operationId:win?.crypto.randomUUID()??crypto.randomUUID()}};void run();});row.append(revoke);}
+      if(grant.active&&options.canManage()){const revoke=node('button','Revoke access');revoke.type='button';revoke.dataset.temporaryGrant=grant.id;revoke.disabled=busy||pending!==null||review!==null;revoke.addEventListener('click',()=>{if(!current()||busy||pending||!latest||!options.canManage())return;const expectedVersion=latest.version,operationId=win?.crypto.randomUUID()??crypto.randomUUID();openReview('Revoke temporary access',(member?.label??'Current member')+' · '+grant.reason+' · grant inventory version '+expectedVersion,'Revoke reviewed access',reason=>{pending={kind:'revoke',input:{grantId:grant.id,reason,expectedVersion,operationId}};void run();},true,true,grant.id);});row.append(revoke);}
       if(grant.active&&grant.recipientId===owner.userId)row.append(node('p','Recent native authentication is required to use this grant. It permits creation only; existing previews cannot be refreshed.'));
       list.append(row);
     }
@@ -156,7 +169,7 @@ export function createTemporaryAccessView(root: HTMLElement, options: TemporaryA
   };
   for(const control of [recipient,duration,why])control.addEventListener('input',()=>{if(!busy&&!pending)dirty=true;});
   form.addEventListener('submit',event=>{event.preventDefault();if(!current()||busy||pending||!latest||!options.canManage())return;const approval=why.value.trim();if(!recipient.value||!approval){status.textContent='Choose a member and record an approval reason.';status.focus();return;}pending={kind:'create',input:{recipientId:recipient.value,action:'preview.create',durationMs:Number(duration.value),reason:approval,expectedVersion:latest.version,operationId:win?.crypto.randomUUID()??crypto.randomUUID()}};void run();});
-  retry.addEventListener('click',()=>{void run();});refreshButton.addEventListener('click',()=>{void refresh();});discard.addEventListener('click',()=>{if(busy||pending||!current())return;if(dirty&&!win?.confirm('Discard this temporary-access draft?'))return;dirty=false;why.value='';recipient.value='';status.focus();void refresh();});
+  retry.addEventListener('click',()=>{void run();});refreshButton.addEventListener('click',()=>{void refresh();});discard.addEventListener('click',()=>{if(busy||pending||!current())return;const clear=()=>{dirty=false;why.value='';recipient.value='';status.focus();void refresh();};if(dirty)openReview('Discard temporary-access draft','Discard the unsaved member and approval reason. Accepted grants remain unchanged.','Discard reviewed draft',clear);else clear();});
   for(const control of [previewGrant,previewName,previewDuration])control.addEventListener('input',()=>{if(!busy&&!previewIntent)previewDirty=true;});
   previewForm.addEventListener('submit',event=>{event.preventDefault();if(!current()||busy||pending||previewIntent||!latest||!options.client.createPreview)return;
     const selected=latest.grants.find(grant=>grant.id===previewGrant.value&&grant.active&&grant.recipientId===owner.userId&&grant.expiresAt>latest!.observedAt),name=previewName.value.trim();
@@ -166,7 +179,7 @@ export function createTemporaryAccessView(root: HTMLElement, options: TemporaryA
       catch(error){if(!current()){dispose();return;}const code=(error as {status?:number}).status;if([401,403,404].includes(code??0)){dispose();return;}if(code&&code>=400&&code<500){previewIntent=null;status.textContent='Creation was refused. Review current grants, authentication, quotas and whether that name already exists.';}else status.textContent='Preview outcome unknown for '+intent.name+'. Ask an authorized operator to check this exact name before another creation. This form will not retry.';status.focus();}
       finally{busy=false;if(current())controls();}})();
   });
-  previewClear.addEventListener('click',()=>{if(!current()||busy||!previewIntent)return;if(!win?.confirm('Have you reviewed the outcome for '+previewIntent.name+' with an authorized operator? Clear only after that review.'))return;previewIntent=null;previewDirty=false;previewName.value='';previewGrant.value='';status.textContent='Reviewed outcome cleared. Choose an active grant before another creation.';status.focus();controls();});
+  previewClear.addEventListener('click',()=>{if(!current()||busy||!previewIntent)return;const intent=previewIntent;openReview('Clear reviewed preview outcome','Confirm that an authorized operator checked the outcome for '+intent.name+'. Clearing this form does not undo or retry the unknown creation.','Clear reviewed outcome',()=>{if(previewIntent!==intent)return;previewIntent=null;previewDirty=false;previewName.value='';previewGrant.value='';status.textContent='Reviewed outcome cleared. Choose an active grant before another creation.';status.focus();controls();});});
   const timer=setInterval(()=>{if(!current())dispose();else if(!busy)void refresh();},5000);controls();void refresh();
   return {get disposed(){return disposed;},refresh,hasPendingChanges,dispose};
 }

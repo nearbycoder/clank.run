@@ -1,0 +1,32 @@
+{
+  "date": "2026-10-13",
+  "scope": "Feature14 current native console and in-page reviews; remaining40-feature scope is unchanged.",
+  "changes": [
+    "Revocation reason, draft discard and reviewed unknown-preview outcome use native HTML dialogs rather than browser prompt/confirm.",
+    "Revocation retains its exact grant/inventory version and requires a reason/current account/session/role.",
+    "Escape restores even a replacement grant-row action after refresh; controls reenable before focus.",
+    "One/five-minute durations remain within established server bounds; default15-minute duration is unchanged."
+  ],
+  "browser": [
+    "Fresh native owner/client session plus cryptographic fixture UV, not physical authenticator certification.",
+    "Native one-minute grant expires; attempted later creation returns403 without a preview.",
+    "Native five-minute grant permits creation of native-scope-success; recipient role remainsviewer.",
+    "Reasonless revocation stays in modal with alert; Escape restores Revoke access; confirmed reason revokes native inventory3\u21924.",
+    "Expired issuer freshness refuses subsequent revocation and clears private view; native reauthentication allows reviewed revocation5\u21926.",
+    "Current recipient console shows revoked/expired history and no Create new preview control.",
+    "Independent SQLite records one preview, unchanged viewer role, one expired/two revoked grants and exact receipts."
+  ],
+  "tests": {
+    "focusedPass": 44,
+    "focusedFail": 0
+  },
+  "pending": [
+    "Final immutable local/hosted gates and protected delivery",
+    "Narrow current modal/role revocation acceptance consolidation"
+  ],
+  "files": {
+    "src/temporary-access.ts": "17203185db992476531e5b8aae1ee1b18e5246fc2c269852a239d6b4886db3c9",
+    "tests/temporary-access-client.test.mjs": "9e561d376b6a5250c6555b68718bfee6e3934fdd92a5babcfae20f61532f68f5",
+    "tests/fixtures/fresh-console-browser-server.mjs": "de54bebcb5fafa084dab6acef1eed6a90a02a2f7b7be47f7a985ec026bdbc7b5"
+  }
+}
