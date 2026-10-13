@@ -184,6 +184,28 @@ export function mountOfflineAttachmentQueue(container: HTMLElement, queue: Offli
   const document = container.ownerDocument, section = document.createElement("section"), heading=document.createElement("h2"), status = document.createElement("p"), list = document.createElement("ol"), synchronize=document.createElement("button");
   section.setAttribute("aria-label","Pending attachments");section.style.minWidth="0";heading.textContent="Pending attachments";status.setAttribute("role","status");status.tabIndex=-1;synchronize.type="button";synchronize.textContent="Synchronize attachments";section.append(heading,status,synchronize,list);container.append(section);
   let closed = false, synchronizing = false, generation = 0, previous: string | undefined;
+  let dismissDiscardReview: (() => void) | undefined;
+  const reviewDiscard = (item: OfflineAttachment, opener: HTMLButtonElement): Promise<boolean> => {
+    if (dismissDiscardReview) return Promise.resolve(false);
+    return new Promise(resolve => {
+      const dialog = document.createElement("dialog"), title = document.createElement("h3"), details = document.createElement("p"), warning = document.createElement("p"), keep = document.createElement("button"), discard = document.createElement("button");
+      title.id = "clank-attachment-discard-" + crypto.randomUUID(); title.textContent = "Discard pending attachment"; dialog.setAttribute("aria-labelledby", title.id);
+      details.textContent = `${item.path} · ${item.size} bytes · ${item.status}`;
+      warning.textContent = "Discard this device’s pending copy? An uploaded file or an unknown attachment acknowledgment may already exist on the server. This does not remove a server file or undo an attachment.";
+      keep.type = discard.type = "button"; keep.textContent = "Keep local copy"; discard.textContent = "Discard local copy";
+      dialog.style.maxWidth = "min(32rem, calc(100vw - 32px))"; dialog.style.boxSizing = "border-box"; dialog.style.overflowWrap = "anywhere";
+      let settled = false;
+      const finish = (accepted: boolean) => {
+        if (settled) return; settled = true; dismissDiscardReview = undefined;
+        if (dialog.open) dialog.close(); dialog.replaceChildren(); dialog.remove();
+        if (!closed) { if (opener.isConnected && !opener.disabled) opener.focus(); else status.focus(); }
+        resolve(accepted);
+      };
+      dismissDiscardReview = () => finish(false); keep.onclick = () => finish(false); discard.onclick = () => finish(true);
+      dialog.oncancel = event => { event.preventDefault(); finish(false); }; dialog.onclose = () => finish(false);
+      dialog.append(title, details, warning, keep, discard); section.append(dialog); dialog.showModal(); keep.focus();
+    });
+  };
   const pending = new Set<string>(), controls = new Map<string, HTMLButtonElement[]>();
   const updatePending = (id: string) => { for (const button of controls.get(id) ?? []) button.setAttribute("aria-disabled", String(button.disabled || pending.has(id))); };
   synchronize.onclick=async()=>{
@@ -204,7 +226,7 @@ export function mountOfflineAttachmentQueue(container: HTMLElement, queue: Offli
       for (const [label,action] of [["Retry",() => queue.retry(item.id)],["Discard local copy",() => queue.discard(item.id)]] as const) { const button=document.createElement("button");button.type="button";button.textContent=label;button.setAttribute("aria-label",`${label} for attachment ${item.key}`);button.style.touchAction="manipulation";button.dataset.attachmentAction=label;button.dataset.attachmentId=item.id;button.disabled=item.status==="uploading"||item.status==="attaching";if(identity===item.id&&tag===label)restored=button;
         button.onclick=async()=>{
           if(closed||!button.isConnected||button.disabled||pending.has(item.id))return;
-          if(label==="Discard local copy"&&!document.defaultView?.confirm("Discard this device’s pending copy? An uploaded file or an unknown attachment acknowledgment may already exist on the server."))return;
+          if(label==="Discard local copy"&&!await reviewDiscard(item,button))return;
           if(closed||!button.isConnected||pending.has(item.id))return;
           // Native disabling blurs a focused button before an awaited queue update can preserve it.
           // Keep it focusable, with a row-wide guard that survives replacement controls on redraw.
@@ -222,7 +244,7 @@ export function mountOfflineAttachmentQueue(container: HTMLElement, queue: Offli
     }
     if(identity&&tag){if(restored&&!restored.disabled)restored.focus();else status.focus();}
   };
-  const refresh = async () => {const expected=++generation;try{const items=await queue.snapshot();if(!closed&&expected===generation){synchronize.disabled=false;synchronize.setAttribute("aria-disabled",String(synchronizing));render(items);}}catch{if(!closed&&expected===generation){const stillFocused=document.activeElement===synchronize||list.contains(document.activeElement);generation++;previous=undefined;list.replaceChildren();synchronize.disabled=true;synchronize.setAttribute("aria-disabled","true");status.textContent="Attachments unavailable for this account.";if(stillFocused)status.focus();}}};
+  const refresh = async () => {const expected=++generation;try{const items=await queue.snapshot();if(!closed&&expected===generation){synchronize.disabled=false;synchronize.setAttribute("aria-disabled",String(synchronizing));render(items);}}catch{if(!closed&&expected===generation){const stillFocused=document.activeElement===synchronize||list.contains(document.activeElement)||!!dismissDiscardReview;dismissDiscardReview?.();generation++;previous=undefined;list.replaceChildren();synchronize.disabled=true;synchronize.setAttribute("aria-disabled","true");status.textContent="Attachments unavailable for this account.";if(stillFocused)status.focus();}}};
   const unsubscribe = queue.subscribe(render), timer=setInterval(()=>{void refresh();},1000); void refresh();
-  return () => {closed=true;generation++;clearInterval(timer);unsubscribe();section.remove();};
+  return () => {closed=true;generation++;clearInterval(timer);unsubscribe();dismissDiscardReview?.();section.remove();};
 }

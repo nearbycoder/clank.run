@@ -1,0 +1,39 @@
+{
+  "date": "2026-10-13",
+  "scope": "Feature30 fresh interactive acceptance and local-copy discard modal; physical phone certification is excluded.",
+  "browser": "Fresh authorized Chrome extension session, profile Josh, browser3",
+  "productionChange": [
+    "HTML dialog replaces native discard popup.",
+    "Escape cancels and returns focus; disposal/account snapshot loss closes the review.",
+    "A replaced row cannot dispatch a stale discard action.",
+    "Unknown upload or attachment acknowledgments never imply server deletion or undo."
+  ],
+  "freshEvidence": [
+    "Native IndexedDB/Web Locks, native HTTP registration/authentication, resumable3-byte chunks, private download and SQLite mutation receipts.",
+    "Keyboard Synchronize changes one retained local20-byte intent into one expected native record.",
+    "Local discard cancel preserves copy/focus; explicit confirmation removes only device-local intent and restores status focus.",
+    "Actual native mutation response lost at fixture client boundary; explicit Retry/Synchronize returns one record with unchanged receipt and object generation.",
+    "Other-account native query returns zero original records; original queue becomes unavailable. Returning to the original account reopens the same intent identity.",
+    "Original native session expired in SQLite; next upload refuses with BUCKET_AUTH_REQUIRED, retains the same20-byte intent and accepts only after ordinary reauthentication/retry.",
+    "Real connection refusal retains pending intent. Initial fixture listener-close allowed Node to exit naturally; guarded reopen of the original native root restores the same session/database, then retry creates only the expected second record.",
+    "Corrected fixture remains alive while its listener is paused, and resumes that same listener/runtime.",
+    "Two actual accepted chunks retain6bytes; withheld offset acknowledgment causes UPLOAD_OFFSET_MISMATCH, no completed object and no attachment. After real1-second capability expiry and native sweep, original-intent retry yields exactly2objects/2records/2receipts including baseline.",
+    "Real390px nested viewport measures358px modal/375px document; keyboard cancellation, native synchronize/lost-response retry and discard pass. Viewport override had no observable effect and was reset."
+  ],
+  "tests": {
+    "focusedPass": 37,
+    "focusedFail": 0
+  },
+  "pending": [
+    "Final exact implementation release/types/security/package gates and hosted checks",
+    "Protected delivery before updating canonical acceptance count"
+  ],
+  "retainedFailure": "First owned listener pause process exited; original root retained and recovered. No silent success or production failure claim.",
+  "files": {
+    "src/offline-attachments.ts": "bfbd2e65d680465c0115d486393430c1e31bc3c94b6fed2c1d6f99d83055913f",
+    "tests/offline-attachments-ui.test.mjs": "ce56d391af2548b57ce949927dc428e750a2b8b9b7b892ebca50ba6df2c6b90d",
+    "tests/fixtures/offline-attachments-network-server.mjs": "95189100e1f24c8a9725a48937bd7ddd0185463e5b344f70421b9569e740b467",
+    "tests/fixtures/offline-attachments-network-client.mjs": "cc3a41aa933584371b6e05480ac13fa2b771765e0c37e9d458663d2d110e9b15",
+    "tests/fixtures/fresh-narrow-browser-server.mjs": "d3aa9cb0fce64ebf65b26e7c0cb6befb6a72cfa78acc62b415b069720c5408b3"
+  }
+}
