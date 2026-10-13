@@ -33,16 +33,38 @@ test('transport rejects another project, unsupported privilege and unbounded inv
 });
 
 class Element {
-  constructor(tag,doc){this.tagName=tag.toUpperCase();this.ownerDocument=doc;this.children=[];this.listeners=new Map();this.attributes=new Map();this.value='';this.textContent='';this.hidden=false;this.disabled=false;}
+  constructor(tag,doc){this.tagName=tag.toUpperCase();this.ownerDocument=doc;this.children=[];this.style={};this.dataset={};this.listeners=new Map();this.attributes=new Map();this.value='';this.textContent='';this.hidden=false;this.disabled=false;}
   append(...values){this.children.push(...values);if(this.tagName==='SELECT'&&!this.value&&this.children.length===values.length)this.value=values[0]?.value??'';}
   replaceChildren(...values){this.children=[];this.append(...values);}
   setAttribute(name,value){this.attributes.set(name,value);}
   addEventListener(type,listener){this.listeners.set(type,listener);}
-  focus(){this.ownerDocument.activeElement=this;}
+  contains(node){return this===node||this.children.some(child=>child.contains(node));}
+  querySelectorAll(selector){return descendants(this).filter(node=>selector.split(',').includes(node.tagName.toLowerCase()));}
+  showModal(){this.open=true;}
+  close(){this.open=false;}
+  focus(){if(!this.disabled)this.ownerDocument.activeElement=this;}
   fire(type){this.listeners.get(type)?.({preventDefault(){}});}
 }
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
-function dom(){const events=new Map(),doc={activeElement:null,defaultView:{crypto:globalThis.crypto,confirm:()=>true,prompt:()=> 'Reviewed revocation.',addEventListener(type,fn){events.set(type,fn);},removeEventListener(type){events.delete(type);}},createElement(tag){return new Element(tag,doc);}};return {root:new Element('div',doc),doc,events};}
+test('revocation modal requires a reason, preserves the reviewed version and restores replaced action focus',async t=>{
+ const d=dom(),calls=[];let currentSnapshot=snapshot;
+ const client={read:async()=>currentSnapshot,create:async()=>({grant,acceptedVersion:1}),revoke:async(_id,input)=>{calls.push(structuredClone(input));return {grant:{...grant,state:'revoked',active:false},acceptedVersion:2};}};
+ const view=createTemporaryAccessView(d.root,{projectId:project,client,account:()=>account,canManage:()=>true,members:[{id:grant.recipientId,label:'Fixture recipient'}]});t.after(()=>view.dispose());await settle();
+ let revoke=descendants(d.root).find(node=>node.textContent==='Revoke access');revoke.focus();revoke.fire('click');assert.equal(calls.length,0);assert.equal(d.doc.activeElement.textContent,'Keep editing');
+ descendants(d.root).find(node=>node.textContent==='Revoke reviewed access').fire('click');assert.equal(calls.length,0);assert.equal(d.doc.activeElement.name,'temporary-revocation-reason');
+ await view.refresh();const replacement=descendants(d.root).find(node=>node.textContent==='Revoke access');assert.notEqual(replacement,revoke);
+ descendants(d.root).find(node=>node.tagName==='DIALOG').fire('cancel');assert.equal(d.doc.activeElement,replacement);assert.equal(view.hasPendingChanges(),false);
+ replacement.fire('click');descendants(d.root).find(node=>node.name==='temporary-revocation-reason').value='A recorded native review';currentSnapshot={...snapshot,version:2};await view.refresh();
+ descendants(d.root).find(node=>node.textContent==='Revoke reviewed access').fire('click');await settle();assert.equal(calls.length,1);assert.equal(calls[0].expectedVersion,1);assert.equal(calls[0].grantId,grant.id);assert.equal(calls[0].reason,'A recorded native review');
+});
+for(const loss of ['role','account','session'])test('open temporary-access review refuses '+loss+' loss before dispatch',async t=>{
+ const d=dom(),calls=[];let current=account,manage=true;
+ const view=createTemporaryAccessView(d.root,{projectId:project,client:{read:async()=>snapshot,create:async()=>({grant,acceptedVersion:1}),revoke:async(...args)=>calls.push(args)},account:()=>current,canManage:()=>manage,members:[]});t.after(()=>view.dispose());await settle();
+ descendants(d.root).find(node=>node.textContent==='Revoke access').fire('click');descendants(d.root).find(node=>node.name==='temporary-revocation-reason').value='Private reason';
+ if(loss==='role')manage=false;else current={...account,[loss==='account'?'userId':'sessionId']:'another_native_identity'};
+ descendants(d.root).find(node=>node.textContent==='Revoke reviewed access').fire('click');await settle();assert.equal(calls.length,0);assert.equal(descendants(d.root).some(node=>node.tagName==='DIALOG'&&node.open),false);
+});
+function dom(){const events=new Map(),doc={activeElement:null,defaultView:{crypto:globalThis.crypto,confirm:()=>{throw Error('Native confirmation must not be used');},prompt:()=>{throw Error('Native prompt must not be used');},addEventListener(type,fn){events.set(type,fn);},removeEventListener(type){events.delete(type);}},createElement(tag){return new Element(tag,doc);}};return {root:new Element('div',doc),doc,events};}
 function descendants(root){return [root,...root.children.flatMap(descendants)];}
 test('native-form fixture retains uncertain mutation intent across a failed read and explicitly retries without changing it',async t=>{
   const d=dom(),calls=[];let failRead=false;const client={read:async()=>{if(failRead)throw Object.assign(new Error('Read conflict'),{status:409});return snapshot;},create:async(_id,body)=>{calls.push({...body});if(calls.length===1)throw new Error('Lost acknowledgment.');return {grant,acceptedVersion:1};},revoke:async()=>({grant,acceptedVersion:1})};
@@ -74,7 +96,7 @@ test('recipient form retains unknown preview outcome, forbids retries and clears
   const d=dom(),calls=[];const own={...grant,recipientId:account.userId},inventory={...snapshot,grants:[own]};const client={read:async()=>inventory,create:async()=>({grant,acceptedVersion:1}),revoke:async()=>({grant,acceptedVersion:1}),createPreview:async(_id,input)=>{calls.push({...input});throw new Error('Actual outcome is unknown.');}};
   const view=createTemporaryAccessView(d.root,{projectId:project,client,account:()=>account,canManage:()=>false,members:[]});t.after(()=>view.dispose());await settle();
   const form=descendants(d.root).find(node=>node.name==='temporary-preview-form');assert.ok(form);const select=descendants(form).find(node=>node.name==='temporary-preview-grant'),name=descendants(form).find(node=>node.name==='temporary-preview-name');select.value=own.id;name.value='review-one';name.fire('input');form.fire('submit');await settle();assert.equal(calls.length,1);assert.equal(view.hasPendingChanges(),true);assert.equal(name.disabled,true);assert.equal(name.value,'review-one');await view.refresh();form.fire('submit');await settle();assert.equal(calls.length,1);
-  const clear=descendants(d.root).find(node=>node.textContent==='Clear after outcome review');d.doc.defaultView.confirm=()=>false;clear.fire('click');assert.equal(view.hasPendingChanges(),true);d.doc.defaultView.confirm=()=>true;clear.fire('click');await settle();assert.equal(view.hasPendingChanges(),false);assert.equal(name.value,'');
+  const clear=descendants(d.root).find(node=>node.textContent==='Clear after outcome review');clear.fire('click');descendants(d.root).find(node=>node.textContent==='Keep editing').fire('click');assert.equal(view.hasPendingChanges(),true);clear.fire('click');descendants(d.root).find(node=>node.textContent==='Clear reviewed outcome').fire('click');await settle();assert.equal(view.hasPendingChanges(),false);assert.equal(name.value,'');
 });
 test('recipient preview drafts and held outcomes are removed after native access denial or account change',async t=>{
   for(const mode of ['denial','account']){const d=dom();let current=account,deny=false,release;const held=new Promise(resolve=>{release=resolve;});const own={...grant,recipientId:account.userId};const client={read:async()=>{if(deny)throw Object.assign(new Error('Native denial'),{status:403});return {...snapshot,grants:[own]};},create:async()=>({grant,acceptedVersion:1}),revoke:async()=>({grant,acceptedVersion:1}),createPreview:async()=>{await held;return preview;}};
