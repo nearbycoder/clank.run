@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { linuxProcessBirth } from '../dist/platform-supervisor.js';
 import { createServer } from 'node:net';
 import { request as httpRequest } from 'node:http';
 import { createHash, generateKeyPairSync, randomUUID, sign } from 'node:crypto';
@@ -71,6 +73,39 @@ async function setup(t, { dropStart = false, policy = {} } = {}) {
   t.diagnostic(JSON.stringify({ runtime: process.version, certificateId: inspected.report.id, candidateId: f.candidateId }));
   return f;
 }
+async function observeContainerRequests(t, id) {
+  const child = spawn('/usr/bin/docker', ['container', 'logs', '--follow', id], { stdio: ['ignore', 'pipe', 'ignore'] });
+  const exited = new Promise(resolve => child.once('close', resolve));
+  const birth = await linuxProcessBirth(child.pid);
+  const requests = []; let pending = '', failure;
+  child.once('error', error => { failure = error; });
+  child.stdout.on('data', bytes => {
+    try {
+      pending += bytes.toString('utf8');
+      assert.ok(Buffer.byteLength(pending) <= 65536, 'Bounded native Docker log observer');
+      let end;
+      while ((end = pending.indexOf('\n')) !== -1) {
+        const text = pending.slice(0, end); pending = pending.slice(end + 1);
+        if (!text.trim()) continue;
+        const entry = JSON.parse(text);
+        assert.equal(entry.kind, 'candidate-request'); assert.equal(typeof entry.path, 'string');
+        assert.ok(requests.length < 64, 'Bounded native request observations');
+        // Retain only independent method/path evidence, never ingress headers.
+        requests.push({ kind: entry.kind, method: entry.method, path: entry.path });
+      }
+    } catch (error) { failure = error; }
+  });
+  t.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) {
+      const current = await linuxProcessBirth(child.pid).catch(error => { if (['ENOENT', 'ESRCH'].includes(error.code)) return null; throw error; });
+      if (current !== null) { assert.equal(current, birth); child.kill('SIGTERM'); }
+    }
+    await exited;
+  });
+  await until(() => { if (failure) throw failure; assert.equal(child.exitCode, null, 'Native observer remains attached'); return requests.some(entry => entry.path === '/healthz'); }, 'Native Docker log observer attached before budgeted traffic');
+  return () => { if (failure) throw failure; return requests; };
+}
+
 async function stop(f) {
   const s = f.shadowSession;
   await f.shadow(s.sessionId + '/stop', { operationId: s.operationId, controllerEpoch: s.controllerEpoch }, 202);
@@ -192,6 +227,7 @@ test('actual coordinator SIGKILL retires the Docker shadow candidate under disab
 test('real Docker shadow traffic enforces attempt and response-byte ceilings without storing response payloads', settings, async t => {
   const f = await setup(t, { policy: { maxAttempts: 2, maxConcurrent: 1, maxResponseBytes: 256 } });
   const ids = await ownedContainers(f.owner, f.candidateId); assert.equal(ids.length, 1);
+  const observedRequests = await observeContainerRequests(t, ids[0]);
   for (let n = 0; n < 6; n++) {
     const response = await f.traffic(); assert.equal(response.status, 200); assert.equal((await response.json()).label, 'primary');
     if (n < 2) await until(() => f.raw().operation.report.counters.settled === n + 1, 'Actual bounded response observation settled');
@@ -199,10 +235,19 @@ test('real Docker shadow traffic enforces attempt and response-byte ceilings wit
   const report = f.raw().operation.report;
   assert.equal(report.counters.reserved, 2); assert.equal(report.counters.settled, 2); assert.equal(report.counters.comparable, 0);
   assert.equal(report.counters.unknown['candidate-oversized'], 2);
-  const requests = (await command('docker', ['container', 'logs', ids[0]])).stdout.trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
+  await until(() => observedRequests().filter(entry => entry.kind === 'candidate-request' && entry.path === '/').length === 2, 'Two independently streamed native candidate requests');
+  const requests = observedRequests();
   assert.equal(requests.filter(entry => entry.kind === 'candidate-request' && entry.path === '/').length, 2);
   assert.equal(JSON.stringify(report).includes('rows'), false); assert.equal(JSON.stringify(report).includes('headers'), false);
-  await stop(f); assert.equal((await (await f.traffic()).json()).label, 'primary');
+  // Exhausting the native attempt budget retires the candidate automatically.
+  // An explicit stop here can race that retirement's newer catalog frame.
+  await until(() => f.raw()?.operation.phase === 'complete', 'Attempt limit automatically completes native Docker retirement');
+  const complete = f.raw().operation;
+  assert.equal(complete.outcome, 'attempt-limit'); assert.equal(complete.stopRequested, false);
+  assert.equal(complete.report.counters.reserved, 2); assert.equal(complete.report.counters.settled, 2);
+  assert.equal(complete.report.counters.unknown['candidate-oversized'], 2);
+  await f.absent(f.candidateId);
+  assert.equal((await (await f.traffic()).json()).label, 'primary');
 });
 
 test('an oversized actual primary response remains intact and withdraws shadow submission before candidate traffic', settings, async t => {
