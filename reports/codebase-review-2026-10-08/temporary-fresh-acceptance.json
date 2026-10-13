@@ -1,0 +1,77 @@
+{
+  "feature": 14,
+  "date": "2026-10-13",
+  "status": "Fresh accepted evidence; canonical credit proposed by this docs-only update",
+  "runtimeBase": "6f50df5ab861f56ccd40945a1d190c06302e55e1",
+  "runtimeChanges": false,
+  "focused": {
+    "tests": 44,
+    "pass": 44,
+    "fail": 0,
+    "cancelled": 0,
+    "skip": 0
+  },
+  "browserFullConsole": [
+    "One-minute native grant expires and later preview creation403",
+    "Five-minute narrow native scope creates exactlyone expected preview; recipient role remainsviewer",
+    "Reason required; Escape restores action even after row refresh; native revokeinventory3to4",
+    "Expired issuer freshness refuses and wipesprivateview; native fixture reauthentication enablesrevocation5to6",
+    "Recipient sees expired/revoked grants with noCreatepreview; independentnativeDBexpectedpreview/granthistory/receipts"
+  ],
+  "narrowComponent": {
+    "iframeWidth": 390,
+    "dialogWidth": 358.4,
+    "documentWidth": 375,
+    "horizontalOverflow": false,
+    "cases": [
+      "Keyboard grant with nativeHTTP acknowledgment",
+      "Requiredreason focusesalert; Escape restoresRevoke",
+      "Keyboard reasoned revoke inventory1to2; one revokedgrant/tworeceipts,viewerroleunchanged",
+      "DiscardEscape retains exactdraft/focus; confirmation clearsdraft withoutchanging grants"
+    ],
+    "qualification": "Public component harness uses native API/authentication; full console framing protections unchanged. No hardware phone/passkey certification."
+  },
+  "nativeCoverage": [
+    "Actual streamed HTTP grant expiry/revocation/membership/policy decisions revalidate beforeeffects",
+    "Actual native controller SIGKILL and restart retiregrants withoutrevival",
+    "Bounded exact retries,current actor/session/project fences,readback andretainedcatalogfail-closed"
+  ],
+  "protectedRuntime": {
+    "pr": 395,
+    "head": "3ac20732db1b017fad9ba4bdb8f26b11eebeb085",
+    "main": "a20d69ee8ab8ec7d04a3dfabe404a08581494862",
+    "tree": "fe02a39d02a55960a713ccf79a9877684cc1415e",
+    "tests": 3911,
+    "pass": 3868,
+    "fail": 0,
+    "skip": 43,
+    "hostedChecks": 8
+  },
+  "navigationDelivery": {
+    "pr": 396,
+    "head": "80203802d82c7aa1578b40cd1c5bcd8ab158f6cd",
+    "tests": 3924,
+    "pass": 3881,
+    "fail": 0,
+    "skip": 43,
+    "hostedChecks": 8,
+    "focused": 89,
+    "browserVerified": true
+  },
+  "qualifications": [
+    "Native signed fixtureUV doesnotcertify a physical authenticator",
+    "Narrowfixture doesnot createpreview; the actual recipient use/expiry/revoke proof is retained from thefullconsole",
+    "Earlier navigation-gate failures remain retained in settings-navigation-modal.json",
+    "No Source07/all40 or production deployment completion is claimed"
+  ],
+  "evidence": {
+    "/var/tmp/clank-fresh-evidence-20261013/temporary-fresh-final-focused.log": "a18705fda9493bfd96402498d66b474a7019b3e07ee2a6f41fbbdb87dc92c64f",
+    "/var/tmp/clank-fresh-evidence-20261013/temporary-narrow-native.json": "1ada30a48dc0c757bd0f136f3a125ef54f03934475748a9e34f0d6f21cf4101e",
+    "/var/tmp/clank-fresh-evidence-20261013/settings-navigation-chrome.json": "0e09b8c439e3ef159da2a4f7e3108f7c045a6b4499f17cccd35eae3d4fa0e9d0",
+    "/home/nearby/.vnc/codex-home/Documents/Codex/2026-10-13/clank-fresh-verification/outputs/temporary-access-narrow-modal.jpg": "2d699ccdd124261d6e011a0dd0e322a9e1fd72fd3f40f7366ebbc3ad3a8edc87",
+    "/home/nearby/.vnc/codex-home/Documents/Codex/2026-10-13/clank-fresh-verification/outputs/temporary-access-revocation-modal.jpg": "64016dda4ab01b7553eefd5179f3976bfa134bf116aab40de355eb75dc268058",
+    "/home/nearby/.vnc/codex-home/Documents/Codex/2026-10-13/clank-fresh-verification/outputs/temporary-access-used-native.jpg": "a1a1ae4fd00417c0a9483c813c1cc7d8e53d2d32bca5ce45ec092df78c19d153",
+    "/home/nearby/.vnc/codex-home/Documents/Codex/2026-10-13/clank-fresh-verification/work/temporary-component-server.mjs": "150d11f47f35cb556f002b1bab1c30e83e20f8a49ef610fb3217784cd23ab9eb",
+    "/home/nearby/.vnc/codex-home/Documents/Codex/2026-10-13/clank-fresh-verification/work/temporary-component-client.mjs": "2eb3882b112108b4c8cc293f3e7e191f77352f2a841c339d86f9c91cca5fa4e9"
+  }
+}
