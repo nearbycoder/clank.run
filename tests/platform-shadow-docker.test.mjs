@@ -202,7 +202,15 @@ test('real Docker shadow traffic enforces attempt and response-byte ceilings wit
   const requests = (await command('docker', ['container', 'logs', ids[0]])).stdout.trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
   assert.equal(requests.filter(entry => entry.kind === 'candidate-request' && entry.path === '/').length, 2);
   assert.equal(JSON.stringify(report).includes('rows'), false); assert.equal(JSON.stringify(report).includes('headers'), false);
-  await stop(f); assert.equal((await (await f.traffic()).json()).label, 'primary');
+  // Exhausting the native attempt budget retires the candidate automatically.
+  // An explicit stop here can race that retirement's newer catalog frame.
+  await until(() => f.raw()?.operation.phase === 'complete', 'Attempt limit automatically completes native Docker retirement');
+  const complete = f.raw().operation;
+  assert.equal(complete.outcome, 'attempt-limit'); assert.equal(complete.stopRequested, false);
+  assert.equal(complete.report.counters.reserved, 2); assert.equal(complete.report.counters.settled, 2);
+  assert.equal(complete.report.counters.unknown['candidate-oversized'], 2);
+  await f.absent(f.candidateId);
+  assert.equal((await (await f.traffic()).json()).label, 'primary');
 });
 
 test('an oversized actual primary response remains intact and withdraws shadow submission before candidate traffic', settings, async t => {

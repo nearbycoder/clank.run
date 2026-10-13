@@ -1,0 +1,41 @@
+{
+  "date": "2026-10-13",
+  "scope": "Fixture-only automatic attempt-limit retirement proof; no runtime, quota, timeout, deadline, retry or source-handoff change",
+  "initial": {
+    "node": "26.10.0",
+    "tests": 6,
+    "pass": 5,
+    "fail": 1,
+    "skip": 0,
+    "failure": "Final manual stop received409 SHADOW_SUPERSEDED"
+  },
+  "independentNativeDiagnostic": {
+    "originalAssertionsUnchanged": true,
+    "nativePhase": "retiring",
+    "outcome": "attempt-limit",
+    "catalogEpoch": 10,
+    "controllerEpoch": 1,
+    "reserved": 2,
+    "settled": 2,
+    "stopRequested": false,
+    "failure": "Original202 assertion againfails on exactfenced409"
+  },
+  "correction": [
+    "Await native automatic retirement with the existing until deadline",
+    "Require complete phase, attempt-limit outcome,stopRequestedfalse,exact2reserved/settled/oversized counters",
+    "Require actualcandidateabsence andcontinuedprimary response",
+    "Other actualexplicit-stop cases retain202 assertion"
+  ],
+  "qualifications": [
+    "Initial/diagnostic native module graph is current owned source snapshot with unfinishedSource07 changes; nofinal frozen release credit inferred",
+    "Final native proof must use this protected-base fixture branch and newly certified exact modules",
+    "Full Feature09 console acceptance and completeSource07remainpending"
+  ],
+  "diagnosticEvidence": {
+    "/home/nearby/.vnc/codex-home/Documents/Codex/2026-10-13/clank-fresh-verification/work/native-host-d323669b-8ac5-4b17-a541-be8676cf3578/shadow-fresh-26.log": "6fc2056a522b01186258282b5c360f712f5033406508a3178ae63dad1803feec",
+    "/home/nearby/.vnc/codex-home/Documents/Codex/2026-10-13/clank-fresh-verification/work/native-host-d323669b-8ac5-4b17-a541-be8676cf3578/shadow-stop-diagnostic-26.log": "c32c88389ddfcfec10b1d7724a522bd8a47cbb56bfc321ae125c66241da44dc7"
+  },
+  "finalNative": "pending",
+  "localRelease": "pending",
+  "hostedChecks": "pending"
+}
