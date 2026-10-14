@@ -1,0 +1,87 @@
+{
+  "feature": "37",
+  "freshStatus": "accepted",
+  "protectedMain": "573f2784b699d2a7afa77c28d471786cde44ca80",
+  "story": "Operator configures request-success and completion-latency objectives, inspects actual ingress arithmetic and burn state, and never receives a compliance claim from low traffic or incomplete/restarted collection.",
+  "runtimeProvenance": {
+    "trackedRuntimeSourcesIdenticalToProtectedMain": 322,
+    "differentRuntimeSources": 0,
+    "fixtureSdkCommit": "5ac9d4d7b694c03d36070ee5398256a787169035"
+  },
+  "browser": [
+    "Actual connected Chrome creates and edits both policies through ordinary console forms. Both use real five-minute windows and minimum 50 observations. Success targets 99%; latency targets 95% within 250 ms; burn threshold 2.",
+    "An independent managed-ingress HTTP ledger contains 45 fast200s,3 interleaved 503s and2 slow 200s. Native SQLite records 50 completed requests, 47 successful and 48 completed within 250 ms; fast outer durations stay below 70 ms and slow outer durations exceed 321 ms.",
+    "At 5/5 complete minutes the browser shows success50/47/3, allowed0.5, remaining-2.5, burn6 and an open retained alert. Latency shows 50/48/2, allowed2.5, remaining0.5 and burn0.8 within budget.",
+    "Actual same-parent controller close/open changes collector epoch, retains exact version2 policies and the known 50-request bucket unchanged. The following4/5 window renders unavailable budget/burn and unknown retained alert, not recovery.",
+    "After the gap leaves the rolling window,5/5 complete minutes with 0 requests still render insufficient data and unavailable budget/burn; the alert remains unknown."
+  ],
+  "requirements": {
+    "rollingWindows": "Real wall/monotonic clocks and completed five-minute windows; no fabricated time or metric-row writes.",
+    "arithmeticAndCoverage": {
+      "requests": 50,
+      "completed": 50,
+      "requestSuccess": {
+        "good": 47,
+        "bad": 3,
+        "targetPercent": 99,
+        "allowedBad": 0.5,
+        "remainingBudget": -2.5,
+        "burnRate": 6,
+        "alert": "open"
+      },
+      "latency": {
+        "good": 48,
+        "bad": 2,
+        "maximumMs": 250,
+        "targetPercent": 95,
+        "allowedBad": 2.5,
+        "remainingBudget": 0.5,
+        "burnRate": 0.8,
+        "status": "within-budget"
+      }
+    },
+    "lowTraffic": "Actual complete five-minute zero-request window remains insufficient.",
+    "missingBucketsAndRestart": "Actual restart creates incomplete coverage, preserves the known bucket and marks retained burn unknown; native cases separately cover missed/overlapping collectors, clock reversal and missing buckets."
+  },
+  "focusedChecks": {
+    "tests": 78,
+    "pass": 78,
+    "fail": 0,
+    "skip": 0,
+    "runtime": "Node26.10.0",
+    "logSha256": "a9867eb00b4b9fa5038865e88cee75c25901ab47c73f8342a7c9541b8a0be055"
+  },
+  "nativeRequirementCases": [
+    "sole persistent SLO collector seals known-zero minutes and records real terminal fractions",
+    "restart, overlapping collectors, missed heartbeats and wall-clock reversal cannot certify a window",
+    "actual native ingress completion, server failure and cancelled body reach the SLO histogram",
+    "two real SQLite policy controllers preserve one exact creation and one accepted stale-version contender",
+    "native SLO policies retain exact actor receipts and current versions across restart",
+    "SLO viewers can inspect coverage while writes require a current explicit project grant",
+    "native SLO body intake revalidates exact tokens, membership, session, permission and storage protocol",
+    "missing, partial, empty and low-traffic minutes never establish compliance or resolve a burn"
+  ],
+  "qualifications": [
+    "Focused 78 combines native API/SQLite/ingress cases and client/console/evaluation contracts; actual Chrome and real-clock HTTP evidence is separate. No physical authenticator or production host certification is claimed.",
+    "The initial planned run tripped the existing circuit breaker after consecutive503s. The interleaved run completed all 50 HTTP status/body checks, then its stale scheduled-minute assertion failed. Acceptance uses independently retained actual request timestamps, native histogram and browser full-window values; both unsuccessful harness records remain preserved. No production assertion, timeout, policy safeguard, metric value or clock was weakened.",
+    "Controller reopen is same-parent close/open. Known counts are compared before/after that actual restart; later normal rolling-window expiry is not data loss.",
+    "This accepts 37 only. Features 07/17/40 and broader fresh verification remain open; canonical 36/40 becomes 37/40 only after protected acceptance-record delivery. The unfinished Source07 work is excluded."
+  ],
+  "evidence": {
+    "work/slo-fresh-browser-results.json": "33a4daa8004901dd523987be00aa504543ce0cacd36507593253a23d7c31c50d",
+    "work/slo-known-v2-observed-proof.json": "5b3a00ef98db348b93e90aee4bca1f523a639dfa813457b2c49679be64fc99ec",
+    "work/slo-known-controller-reopened.json": "1ee072cb7ec23122bc8d5b51eaf83a52b7ab031b35267d8d784db88e040c2099",
+    "work/slo-runtime-provenance.json": "be4706c67800055cc9753b98aca7242a3280996ee85a2a0f10728bf31e935912",
+    "work/slo-known-v1-failure.json": "e63a60307b62dfccecbde48402a208d657c0a352428c47d84f208b487838c557",
+    "work/run-slo-known-traffic-v2.mjs": "c23f866a1d9b17f9b0ce5c09f1a76f9053966390c898d7877185c2ba224670d6",
+    "work/slo-traffic-native-receipts.jsonl": "2f14f3385f7ce274a6050f6b7aca57642494d727eeaaf07fa1677f16ec2b73dd",
+    "work/slo-known-success-window.dom.txt": "e764d326504208ce14d795bd9ceab570858ae395d9557e11394021345d50dc96",
+    "work/slo-known-latency-window.dom.txt": "5547c7b282ac3988112c1b8d9f4048da009b84308f23b0200bb65b4a0cbaec5e",
+    "work/slo-known-restart-gap.dom.txt": "c8b07c1854ed1601db89c51b28c130ee2c09f7191232ec305af56d5a74a80e8e",
+    "work/slo-known-complete-low-traffic.dom.txt": "f46085e768f94e09eef052c18a53353a02ced80401b2b4171d08623eb13c2b6c",
+    "outputs/slo-known-success-window.png": "9b363a7500b1dbe5f4a485b690a7fb904dc74a5c0cad51f9f8a85551c6003a83",
+    "outputs/slo-known-latency-window.png": "29a21ac71047e50132690761ec0678855a3c98fe7466fc8b23dabbe6aa7e5f9a",
+    "outputs/slo-known-restart-gap.png": "577d418698c16b40b43e9b451ca07eb24469b0ff4d3202ba46d67ba520009dad",
+    "outputs/slo-known-complete-low-traffic.png": "aeab0cc3048b07fe388fde310a654aa501c7f843e900b954418b2814b75d2459"
+  }
+}
