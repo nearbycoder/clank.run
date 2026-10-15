@@ -16,7 +16,9 @@ fs.writeFileSync(counter,String(count+1));
 fs.appendFileSync(log,JSON.stringify({pid:process.pid,kind,count,args})+'\n');
 const reply=config[kind+'Replies']?.[count]??{};
 if(reply.hold){
- fs.writeFileSync(reply.hold,JSON.stringify({pid:process.pid,kind,count}));
+ const holdTemporary=reply.hold+'.'+process.pid+'.tmp';
+ fs.writeFileSync(holdTemporary,JSON.stringify({pid:process.pid,kind,count}));
+ fs.renameSync(holdTemporary,reply.hold);
  const deadline=Date.now()+5000;
  while(!fs.existsSync(reply.release)){if(Date.now()>deadline)process.exit(75);await delay(10);}
 }
