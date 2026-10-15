@@ -7,6 +7,11 @@ export interface EvacuationProject {
   readonly backupId: string | null;
   readonly targetNodeId: string | null;
   readonly targetGeneration: number | null;
+  /** Native handoff progress is committed with its exact platform generation. */
+  readonly fallbackOperationId?: string;
+  /** Signed predecessor-to-successor transfer attempt for this exact plan project. */
+  readonly fallbackAttemptId?: string;
+  readonly fallbackState?: "stopped" | "running";
 }
 export interface NodeEvacuationPlan {
   readonly id: string;
@@ -95,6 +100,13 @@ export function openNodeEvacuations(sql: SQLiteInternal): NodeEvacuations {
         if (plan.phase === "planned") { hooks.drain(plan); update(id, lease, { phase: "quiescing" }); }
         assertCurrent();
         if (plan.phase === "quiescing") {
+          // Native metadata commitment may precede its fresh writer publication.
+          // Keep the original source node credential until every such target is running.
+          for (const project of plan.projects) if (project.fallbackState === "stopped") {
+            assertCurrent();const result=await hooks.relocate(project,plan,assertCurrent);identifier(result.nodeId);assertCurrent();
+            if(result.nodeId===plan.nodeId||result.generation<=project.generation||plan.projects.find(item=>item.projectId===project.projectId)?.fallbackState!=="running")throw new Error("Native evacuation target remains stopped; fresh writer publication is required.");
+            update(id,lease,{projects:plan.projects.map(item=>item.projectId===project.projectId?{...item,targetNodeId:result.nodeId,targetGeneration:result.generation}:item)});
+          }
           for (const project of plan.projects) if (!project.backupId) {
             assertCurrent(); const backupId = await hooks.snapshot(project, plan, assertCurrent); identifier(backupId); assertCurrent();
             update(id, lease, { projects: plan.projects.map(item => item.projectId === project.projectId ? { ...item, backupId } : item) });
@@ -107,12 +119,12 @@ export function openNodeEvacuations(sql: SQLiteInternal): NodeEvacuations {
         assertCurrent();
         if (plan.phase === "fenced") { hooks.fence(plan); update(id, lease, { phase: "relocating" }); }
         assertCurrent();
-        for (const project of plan.projects) if (!project.targetNodeId) {
+        for (const project of plan.projects) if (!project.targetNodeId || project.fallbackState === "stopped") {
           assertCurrent(); const result = await hooks.relocate(project, plan, assertCurrent); identifier(result.nodeId);
           if (result.nodeId === plan.nodeId || !Number.isSafeInteger(result.generation) || result.generation <= project.generation) throw new Error("Evacuation target identity is invalid.");
           assertCurrent(); update(id, lease, { projects: plan.projects.map(item => item.projectId === project.projectId ? { ...item, targetNodeId: result.nodeId, targetGeneration: result.generation } : item) });
         }
-        assertCurrent(); update(id, lease, { state: "completed", phase: "completed" }); return get(id);
+        assertCurrent(); if(plan.projects.some(project=>project.fallbackState==="stopped"))throw new Error("Native evacuation target remains stopped; fresh writer publication is required."); update(id, lease, { state: "completed", phase: "completed" }); return get(id);
       } catch (error) {
         try { update(id, lease, { state: "paused", error: "Evacuation paused. Inspect provider and recovery status, then resume this exact plan." }); } catch { /* A successor owns recovery. */ }
         throw error;

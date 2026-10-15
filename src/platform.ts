@@ -1,4 +1,6 @@
+import { providerFallbackJournalContext, assertProviderFallbackCommit, assertProviderFallbackSettlement, assertProviderFallbackCompletion, providerFallbackSourceCompletionContext, providerFallbackResumeJournalContext, providerFallbackResumeCompletionJournal, providerFallbackResumeSettlementJournal } from "./provider-fallback-coordinator.ts";
 import { openNodeEvacuations, type NodeEvacuationPlan, type EvacuationProject, type NodeEvacuationHooks } from "./node-evacuation.ts";
+import { closePlatformOwnedLocalProviders, drainPlatformLocalFallbackOperations, PlatformLocalProviderCloseError } from "./platform-local-provider-close.ts";
 import { openProjectIncidents, ProjectIncidentError, type PlatformIncidentOptions, type IncidentAuthority } from "./platform-incidents.ts";
 import {openPlatformStatusPages,type PlatformStatusPagesOptions,type StatusPageAuthority} from "./platform-status-pages.ts";
 import {CustomerStatusError,type CustomerStatusSnapshot} from "./customer-status.ts";
@@ -35,7 +37,7 @@ import {
   type AuthUserId,
   type DefaultAuthProfile,
 } from "./auth.ts";
-import { BackendActionError, defineDatabase, openSQLite, type SQLiteDatabase } from "./backend.ts";
+import { BackendActionError, defineDatabase, openSQLite, nativeSQLiteIdentityContext, type SQLiteDatabase } from "./backend.ts";
 import {
   decodeDeploymentBundle,
   deploymentDigest,
@@ -61,6 +63,7 @@ import {
   DeploymentCapacityError,
   DeploymentRelocationError,
   openDeploymentOrchestrator,
+  providerFallbackOrchestrationContext,
   type DeploymentOrchestrator,
 } from "./orchestration.ts";
 import {
@@ -689,6 +692,8 @@ export interface ClankPlatformOptions {
    * Omit it to keep every runner endpoint closed.
    */
   deploymentAgents?: {
+    /** Opt in to bounded same-process native evacuation through the existing administrator evacuation API. */
+    localFallback?: boolean;
     /** Legacy shared enrollment secret. Prefer managedEnrollment for new installations. */
     registrationToken?: string;
     /**
@@ -810,6 +815,10 @@ export interface ClankPlatformOptions {
 export type PlatformRuntimePolicy = "always_on" | "on_demand" | "suspended";
 
 export interface PlatformRuntime {
+  /** Bind an original local Docker service to its authenticated node. Requires deploymentAgents.localFallback. */
+  bindLocalProvider(nodeId: string, nodeToken: string, service: import("./provider-service.ts").DeploymentProviderService): Promise<void>;
+  /** Bind platform-owned lazy Docker service options for authenticated cold native recovery. */
+  bindLocalProviderFactory(nodeId: string, nodeToken: string, options: import("./provider-service.ts").DockerDeploymentProviderServiceOptions): Promise<void>;
   /** Local status contains no lease token or process authority. Present only for the opt-in coordinator topology. */
   readonly supervisor?: () => PlatformSupervisorStatus;
   readonly handle: (request: Request) => Promise<Response>;
@@ -820,6 +829,73 @@ export interface PlatformRuntime {
   readonly hostingProfile: PlatformHostingProfile;
   readonly runnerKind: "process" | "docker";
   close(): Promise<void>;
+}
+
+/** Private original-platform participant. No serialized route or caller callback supplies authority. */
+export interface PlatformProviderHandoffParticipant {
+ readonly orchestrator: DeploymentOrchestrator;
+ readonly identity: Readonly<Record<string,unknown>>;
+ check():void;
+ prepareConditional(active:import("./provider-target-stage.ts").ProviderActivatedTarget,now:number):Promise<Readonly<{journal:string;authentication:string}>>;
+ commit(active:import("./provider-target-stage.ts").ProviderActivatedTarget):void;
+ accept():void;
+}
+type PlatformProviderHandoffContext={recovery(journal:string,authentication:string):object;readonly orchestrator:DeploymentOrchestrator;prepare(source:import("./provider-handoff.ts").ProviderSourceTransferLease,bytes:Uint8Array):Promise<{capsule:import("./runtime-placement.ts").DeploymentRuntimeCapsule;participant:PlatformProviderHandoffParticipant}>};
+const platformProviderHandoffs=new WeakMap<object,PlatformProviderHandoffContext>();
+export function platformProviderHandoffContext(runtime:object):PlatformProviderHandoffContext{
+ const held=platformProviderHandoffs.get(runtime);if(!held)throw new Error("A genuine original platform runtime is required for provider handoff.");return held;
+}
+
+type ConditionalPlatformAuthority={journal:string;authentication:string;check():void;settle(native:object):Promise<void>};
+const conditionalPlatformAuthorities=new WeakMap<object,ConditionalPlatformAuthority>();
+export function platformConditionalRecoveryAuthority(value:object,journal:string,authentication:string):ConditionalPlatformAuthority{const held=conditionalPlatformAuthorities.get(value);if(!held||held.journal!==journal||held.authentication!==authentication)throw new Error("A genuine original platform conditional recovery authority is required.");held.check();return held;}
+
+export interface PlatformFallbackParticipant {
+  readonly orchestrator: DeploymentOrchestrator;
+  readonly identity: Readonly<Record<string, any>>;
+  readonly controlIdentity: unknown;
+  check(): void;
+  authorizeServices(source: object, target: object): void;
+  snapshot(): Promise<import("./runtime-placement.ts").DeploymentRuntimeCapsule>;
+  images(): Record<string, any>;
+  sign(permit: object): string;
+  apply(permit: object): void;
+  accept(): void;
+  complete(permit: object): void;
+  api(request: Request): Promise<Response>;
+}
+type PlatformFallbackContext = {
+  prepare(source: import("./provider-service.ts").ProviderFallbackSource, bytes: Uint8Array, targetNodeId: string, deadline: bigint): Promise<PlatformFallbackParticipant>;
+  recovery(journal: string, authentication: string): { readonly orchestrator: DeploymentOrchestrator; check(): void; cleanupCheck(): void; recordResume(permit: object): import("./provider-fallback-coordinator.ts").ProviderFallbackResumeRecord; resumeTerminal(permit: object): import("./provider-fallback-coordinator.ts").ProviderFallbackResumeRecord; checkResumeTerminal(permit: object, cleanup?: boolean): void; apply(permit: object): import("./provider-fallback-coordinator.ts").ProviderFallbackResumeRecord | undefined; api(request: Request): Promise<Response>; complete(permit: object): void };
+  coldStoppedResume(journal: string, authentication: string): object;
+  coldStoppedResumeCounterpart(token: object, owner: string, root: string): object;
+};
+const platformFallbacks = new WeakMap<object, PlatformFallbackContext>();
+const fallbackParticipants = new WeakSet<object>();
+type PlatformColdFallbackResumeSelection = Readonly<{ predecessorJournal: string; predecessorAuthentication: string; resumeJournal: string; resumeAuthentication: string; resumeId: string; revision: number; projectId: string; operationId: string; attempt: number; runtime: object; check(): void }>;
+const platformColdFallbackResumeSelections = new WeakMap<object, PlatformColdFallbackResumeSelection>();
+type PlatformColdFallbackNoSweepSelection = Readonly<{ protocol: "clank-platform-cold-fallback-counterpart/1"; owner: string; root: string; projectId: string; operationId: string; resumeId: string; revision: number; side: "source" | "target"; daemonId: string; endpointIdentity: string; check(): void }>;
+const platformColdFallbackNoSweepSelections = new WeakMap<object, PlatformColdFallbackNoSweepSelection>();
+/** @internal Read-only data is available only for a token issued by coldStoppedResume. */
+export function platformColdFallbackResumeSelection(value: object): PlatformColdFallbackResumeSelection {
+  const selection = platformColdFallbackResumeSelections.get(value);
+  if (!selection) throw new Error("A genuine original platform cold STOPPED resume selection is required.");
+  return selection;
+}
+/** @internal Read-only counterpart admission suppresses only its exact ordinary startup sweep. */
+export function platformColdFallbackNoSweepSelection(value: object): PlatformColdFallbackNoSweepSelection {
+  const selection = platformColdFallbackNoSweepSelections.get(value);
+  if (!selection) throw new Error("A genuine original platform cold fallback counterpart admission is required.");
+  selection.check();
+  return selection;
+}
+export function platformProviderFallbackContext(runtime: object): PlatformFallbackContext {
+  const value = platformFallbacks.get(runtime);
+  if (!value) throw new Error("A genuine original platform runtime is required for fallback.");
+  return value;
+}
+export function assertPlatformFallbackParticipant(participant: object): void {
+  if (!fallbackParticipants.has(participant)) throw new Error("A genuine original platform fallback participant is required.");
 }
 
 interface NativeChild {
@@ -1138,10 +1214,15 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   // Startup/recovery timers inherit this instance's policy. Requests and close
   // re-enter it explicitly so another platform or caller cannot change it.
   const runtime = await scope.run(() => options.supervisor ? openClusterPlatformScoped(options) : openPlatformScoped(options));
-  return { ...runtime,
+  const scoped:PlatformRuntime={ ...runtime,
     handle: request => scope.run(() => runtime.handle(request)),
     close: () => scope.run(() => runtime.close()),
   };
+  const handoff=platformProviderHandoffs.get(runtime);
+  if(handoff)platformProviderHandoffs.set(scoped,{recovery:(journal,authentication)=>scope.run(()=>handoff.recovery(journal,authentication)),get orchestrator(){return handoff.orchestrator;},prepare:(source,bytes)=>scope.run(()=>handoff.prepare(source,bytes))});
+  const fallback = platformFallbacks.get(runtime);
+  if (fallback) platformFallbacks.set(scoped, { prepare: (...args) => scope.run(() => fallback.prepare(...args)), recovery: (...args) => scope.run(() => fallback.recovery(...args)), coldStoppedResume: (...args) => scope.run(() => fallback.coldStoppedResume(...args)), coldStoppedResumeCounterpart: (...args) => scope.run(() => fallback.coldStoppedResumeCounterpart(...args)) });
+  return scoped;
 }
 
 function captureSupervisorPlatformOptions(input:ClankPlatformOptions):ClankPlatformOptions {
@@ -1208,7 +1289,7 @@ async function openClusterPlatformScoped(options:ClankPlatformOptions):Promise<P
     flight=tick().catch(report).finally(()=>{flight=undefined;});
   },configuration.pollIntervalMs);poll.unref?.();
   try{flight=tick();await flight;}catch(error){clearInterval(poll);clearInterval(renewal);lease.close();processSupervisorActive=false;throw error;}finally{flight=undefined;}
-  return {
+  const cluster:PlatformRuntime={
     publicUrl,dataDirectory:paths.root,hostingProfile,runnerKind,
     supervisor(){if(state==="closed")return lastStatus;if(owned){try{lease.assertCurrent();}catch(error){fence(error);throw error;}}lastStatus=lease.status(state);return lastStatus;},
     async handle(request){
@@ -1216,6 +1297,8 @@ async function openClusterPlatformScoped(options:ClankPlatformOptions):Promise<P
       try{lease.assertCurrent();const response=await runtime.handle(request);lease.assertCurrent();return response;}
       catch(error){if(error instanceof PlatformSupervisorError){fence(error);return unavailable();}throw error;}
     },
+    async bindLocalProvider(nodeId,nodeToken,service){if(state!=="leader"||!runtime)throw new PlatformSupervisorError("SUPERVISOR_UNAVAILABLE","An authoritative supervisor is not ready.");lease.assertCurrent();await runtime.bindLocalProvider(nodeId,nodeToken,service);lease.assertCurrent();},
+    async bindLocalProviderFactory(nodeId,nodeToken,options){if(state!=="leader"||!runtime)throw new PlatformSupervisorError("SUPERVISOR_UNAVAILABLE","An authoritative supervisor is not ready.");lease.assertCurrent();await runtime.bindLocalProviderFactory(nodeId,nodeToken,options);lease.assertCurrent();},
     authenticateServiceAccount(request){if(state!=="leader"||!runtime)throw new PlatformSupervisorError("SUPERVISOR_UNAVAILABLE","An authoritative supervisor is not ready.");lease.assertCurrent();return runtime.authenticateServiceAccount(request);},
     close(){if(closeFlight)return closeFlight;closed=true;state="closing";clearInterval(poll);
       closeFlight=(async()=>{
@@ -1232,6 +1315,32 @@ async function openClusterPlatformScoped(options:ClankPlatformOptions):Promise<P
       })().catch(error=>{fence(error);throw error;});return closeFlight;
     },
   };
+  platformProviderHandoffs.set(cluster,{recovery(journal,authentication){if(state!=="leader"||!runtime)throw new PlatformSupervisorError("SUPERVISOR_UNAVAILABLE","An authoritative supervisor is not ready.");lease.assertCurrent();return platformProviderHandoffContext(runtime).recovery(journal,authentication);},get orchestrator(){if(state!=="leader"||!runtime)throw new PlatformSupervisorError("SUPERVISOR_UNAVAILABLE","An authoritative supervisor is not ready.");lease.assertCurrent();return platformProviderHandoffContext(runtime).orchestrator;},async prepare(source,bytes){
+    if(state!=="leader"||!runtime)throw new PlatformSupervisorError("SUPERVISOR_UNAVAILABLE","An authoritative supervisor is not ready.");
+    lease.assertCurrent();const original=runtime,result=await platformProviderHandoffContext(original).prepare(source,bytes);
+    lease.assertCurrent();if(runtime!==original||state!=="leader")throw new PlatformSupervisorError("SUPERVISOR_UNAVAILABLE","The original supervisor changed during handoff preparation.");return result;
+  }});
+  platformFallbacks.set(cluster, {
+    async prepare(...args) {
+      if (state !== "leader" || !runtime) throw new PlatformSupervisorError("SUPERVISOR_UNAVAILABLE", "An authoritative supervisor is not ready.");
+      lease.assertCurrent(); const original = runtime, value = await platformProviderFallbackContext(original).prepare(...args);
+      lease.assertCurrent(); if (state !== "leader" || runtime !== original) throw new Error("Original fallback supervisor changed."); return value;
+    },
+    recovery(...args) {
+      if (state !== "leader" || !runtime) throw new PlatformSupervisorError("SUPERVISOR_UNAVAILABLE", "An authoritative supervisor is not ready.");
+      lease.assertCurrent(); return platformProviderFallbackContext(runtime).recovery(...args);
+    },
+    coldStoppedResume(...args) {
+      if (state !== "leader" || !runtime) throw new PlatformSupervisorError("SUPERVISOR_UNAVAILABLE", "An authoritative supervisor is not ready.");
+      lease.assertCurrent(); return platformProviderFallbackContext(runtime).coldStoppedResume(...args);
+    },
+    coldStoppedResumeCounterpart(token, owner, root) {
+      if (state !== "leader" || !runtime) throw new PlatformSupervisorError("SUPERVISOR_UNAVAILABLE", "An authoritative supervisor is not ready.");
+      lease.assertCurrent(); const original = runtime, admitted = platformProviderFallbackContext(original).coldStoppedResumeCounterpart(token, owner, root);
+      lease.assertCurrent(); if (state !== "leader" || runtime !== original) throw new PlatformSupervisorError("SUPERVISOR_UNAVAILABLE", "The original fallback supervisor changed."); return admitted;
+    },
+  });
+  return cluster;
 }
 
 async function openPlatformScoped(options: ClankPlatformOptions,leadership?:SupervisorLease): Promise<PlatformRuntime> {
@@ -1527,6 +1636,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
   if (providerPlacement && !ingressEnabled) {
     throw new TypeError("deploymentAgents.placement requires managed ingress.");
   }
+  if(options.deploymentAgents?.localFallback!==undefined && typeof options.deploymentAgents.localFallback!=="boolean")throw new TypeError("deploymentAgents.localFallback must be a boolean.");
+  if(options.deploymentAgents?.localFallback && !providerPlacement)throw new TypeError("deploymentAgents.localFallback requires provider placement.");
   if(shadowPolicy && !providerPlacement)throw new TypeError("Provider shadow traffic requires provider placement.");
   if (canaryOptions?.provider && !providerPlacement) throw new TypeError("Provider canaries require provider placement.");
   const runnerArtifactLimit = options.deploymentAgents
@@ -1569,6 +1680,11 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       : "bootstrap";
   const ProviderWriterScope = (globalThis as any).process.getBuiltinModule("node:async_hooks").AsyncLocalStorage;
   const providerWriterScope = new ProviderWriterScope();
+  const localFallbackScope = new ProviderWriterScope();
+  type LocalProviderBinding = { nodeId:string; service?: import("./provider-service.ts").DeploymentProviderService; token: string; factoryOptions?: import("./provider-service.ts").DockerDeploymentProviderServiceOptions; owned: boolean; ownership?: import("./provider-handoff.ts").ProviderServiceOwnership; check(): void };
+  type LocalFallbackScope = { identity: Readonly<Record<string, string | number>>; source: LocalProviderBinding & {service?: import("./provider-service.ts").DeploymentProviderService}; target: LocalProviderBinding & {service?: import("./provider-service.ts").DeploymentProviderService}; projectsBefore: string; check(): void };
+  const localProviders = new Map<string, LocalProviderBinding>();
+  const factoryNativeChecks = new WeakMap<LocalProviderBinding,()=>void>();
   const storage = await openPlatformDatabase(paths.controlDatabase, masterKey, authentication, leadership, () => providerWriterScope.getStore()?.());
   try {
     if (leadership && storage.internal.prepare("SELECT protocol FROM clank_platform_supervisor_state WHERE singleton=1").get()?.protocol === 2
@@ -1619,6 +1735,16 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
   const shadowMcpResponseGuards = new WeakMap<Request, () => void>();
   const evacuations = openNodeEvacuations(storage.internal);
   const requireNoEvacuation = (projectId: string) => { if (evacuations.activeForProject(projectId)) throw new PlatformError(409, "PROJECT_EVACUATING", "Resume or cancel the node evacuation before changing this project."); };
+  const checkFallbackEvacuation = (bound: Record<string, any> | undefined, projectId: string, cleanup = false) => {
+    if(!bound){requireNoEvacuation(projectId);return;}
+    const scope=localFallbackScope.getStore() as LocalFallbackScope|undefined;
+    if(!cleanup&&(!scope || scope.identity.projectId!==projectId))throw new PlatformError(409,"EVACUATION_AUTHORITY_REQUIRED","Resume the exact native evacuation through its administrator run operation.");
+    if(!cleanup)scope!.check();
+    for(const key of ["protocol","planId","sourceNodeId","projectId","releaseId","generation","requestedBy","createdAt"])if(!cleanup&&scope!.identity[key]!==bound.identity[key])throw new Error("Native fallback evacuation identity changed.");
+    const row=storage.internal.prepare("SELECT id,node_id,requested_by,created_at,projects,state,phase FROM clank_platform_evacuations WHERE id=?").get(bound.identity.planId);
+    const other=storage.internal.prepare("SELECT p.id FROM clank_platform_evacuations p,json_each(p.projects) item WHERE p.state NOT IN ('completed','cancelled') AND json_extract(item.value,'$.projectId')=? AND p.id!=?").get(projectId,bound.identity.planId);
+    if(!row||other||row.node_id!==bound.identity.sourceNodeId||row.requested_by!==bound.identity.requestedBy||row.created_at!==bound.identity.createdAt||!["running","paused"].includes(String(row.state))||!["quiescing","fenced","relocating"].includes(String(row.phase))||![bound.projectsBefore,bound.projectsStopped,bound.projectsRunning].includes(row.projects))throw new Error("Native fallback evacuation progress changed.");
+  };
   storage.internal.exec("CREATE TABLE IF NOT EXISTS clank_platform_release_attestations (release_id TEXT PRIMARY KEY REFERENCES clank_platform_releases(id) ON DELETE CASCADE, attestation TEXT NOT NULL, verified_at INTEGER NOT NULL)");
   const freshAuthenticationAge = integerInRange(options.freshAuthentication?.maxAgeMs ?? 300_000, "freshAuthentication.maxAgeMs", 1000, 3_600_000);
   const requireFreshPlatformAuthentication = (principal: TokenPrincipal) => {
@@ -1848,6 +1974,137 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     relocateStateful: input => providerWriter(input.projectId, () => nativeOrchestrator.relocateStateful(input)),
     enqueue: input => providerWriter(input.projectId, () => nativeOrchestrator.enqueue(input)),
   };
+  const loadProviderRuntimeCapsule = async (projectId: string, desired: ReturnType<typeof providerDesiredPayload>, signal: AbortSignal, guard: () => void = () => {}): Promise<import("./runner.ts").DeploymentRuntimeArtifact | null> => {
+    if (signal.aborted || !providerPlacement) return null;
+    const current = () => { guard(); leadership?.assertCurrent(); requireNoProviderCanary(projectId); if (signal.aborted) throw new Error("Provider capsule request was aborted."); };
+    current();
+    if (
+      desired.state !== "running"
+      || desired.releaseId === null
+      || desired.runtimeProtocol !== DEPLOYMENT_RUNTIME_PROTOCOL
+    ) return null;
+    const project = projectById(storage.internal, projectId);
+    const release = releaseById(storage.internal, desired.releaseId);
+    const generation = providerGeneration(
+      storage.internal,
+      projectId,
+      desired.generation,
+      desired.releaseId,
+    );
+    if (
+      !project
+      || project.placement !== "provider"
+      || !release
+      || release.projectId !== project.id
+      || release.purpose !== "deployment"
+      || release.providerGeneration !== desired.generation
+      || !generation
+    ) return null;
+    const artifact = await readRunnerReleaseArtifact(
+      paths.projects,
+      release,
+      signal,
+      runnerArtifactObjects,
+    );
+    current();
+    if (!artifact || signal.aborted) return null;
+    const environment = decryptProviderEnvironment(
+      generation.encryptedEnvironment,
+      masterKey,
+    );
+    let databaseSnapshot: Uint8Array | null = null;
+    if (generation.databaseMode === "replace") {
+      if (
+        !generation.restoreBackupId
+        || !generation.restoreDatabaseSha256
+        || generation.restoreDatabaseBytes === null
+        || generation.restoreDatabaseBytes
+          > providerPlacement.maxDatabaseBytes
+      ) {
+        throw new Error("Stored provider recovery generation is invalid.");
+      }
+      const effective = projectQuotas(
+        storage.internal,
+        project,
+        quotaDefaults,
+      );
+      const manager = await projectBackupManager(
+        paths.projects,
+        project,
+        masterKey,
+        {
+          ...backupPolicy,
+          maxBackups: effective.backupsPerProject,
+        },
+        backupObjects,
+      );
+      try {
+        current();
+        const restored = await manager.read(
+          generation.restoreBackupId,
+        );
+        current();
+        if (
+          restored.verification.databaseSha256
+            !== generation.restoreDatabaseSha256
+          || restored.verification.databaseBytes
+            !== generation.restoreDatabaseBytes
+        ) {
+          throw new Error(
+            "Provider restore point changed after generation allocation.",
+          );
+        }
+        databaseSnapshot = restored.bytes;
+      } finally {
+        manager.close();
+      }
+      const confirmedGeneration = providerGeneration(
+        storage.internal,
+        projectId,
+        desired.generation,
+        desired.releaseId,
+      );
+      if (
+        !confirmedGeneration
+        || !sameProviderGeneration(
+          generation,
+          confirmedGeneration,
+        )
+      ) {
+        throw new Error(
+          "Provider restore generation changed during recovery read.",
+        );
+      }
+    }
+    current();
+    const capsule = await createDeploymentRuntimeCapsule({
+      projectId: project.id,
+      releaseId: release.id,
+      generation: desired.generation,
+      environment,
+      database: {
+        path: release.config.database.path,
+        mode: generation.databaseMode,
+        snapshot: databaseSnapshot,
+      },
+      ingress: {
+        route: providerRuntimePath(project.id),
+        token: providerIngressToken(masterKey, project.id, desired.generation),
+        controlToken: providerControlToken(
+          masterKey,
+          project.id,
+          desired.generation,
+        ),
+      },
+      artifact: artifact.bytes,
+    }, {
+      maxArtifactBytes: runnerArtifactLimit,
+      maxDatabaseBytes: providerPlacement.maxDatabaseBytes,
+      maxCapsuleBytes: providerPlacement.maxRuntimeBytes,
+    });
+    current();
+    return { bytes: capsule.bytes, sha256: capsule.sha256 };
+  };
   const deploymentCoordinator = options.deploymentAgents
     ? createDeploymentCoordinatorHandler(orchestrator, {
         ...(options.deploymentAgents.registrationToken === undefined
@@ -1897,136 +2154,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           ? {
               runtime: {
                 async load({ operation, signal }) {
-                  if (signal.aborted || operation.action !== "reconcile") return null;
-                  const current = () => { leadership?.assertCurrent(); requireNoProviderCanary(operation.projectId); if (signal.aborted) throw new Error("Provider capsule request was aborted."); };
-                  current();
-                  const desired = providerDesiredPayload(operation.payload);
-                  if (
-                    desired.state !== "running"
-                    || desired.releaseId === null
-                    || desired.runtimeProtocol !== DEPLOYMENT_RUNTIME_PROTOCOL
-                  ) return null;
-                  const project = projectById(storage.internal, operation.projectId);
-                  const release = releaseById(storage.internal, desired.releaseId);
-                  const generation = providerGeneration(
-                    storage.internal,
-                    operation.projectId,
-                    desired.generation,
-                    desired.releaseId,
-                  );
-                  if (
-                    !project
-                    || project.placement !== "provider"
-                    || !release
-                    || release.projectId !== project.id
-                    || release.purpose !== "deployment"
-                    || release.providerGeneration !== desired.generation
-                    || !generation
-                  ) return null;
-                  const artifact = await readRunnerReleaseArtifact(
-                    paths.projects,
-                    release,
-                    signal,
-                    runnerArtifactObjects,
-                  );
-                  current();
-                  if (!artifact || signal.aborted) return null;
-                  const environment = decryptProviderEnvironment(
-                    generation.encryptedEnvironment,
-                    masterKey,
-                  );
-                  let databaseSnapshot: Uint8Array | null = null;
-                  if (generation.databaseMode === "replace") {
-                    if (
-                      !generation.restoreBackupId
-                      || !generation.restoreDatabaseSha256
-                      || generation.restoreDatabaseBytes === null
-                      || generation.restoreDatabaseBytes
-                        > providerPlacement.maxDatabaseBytes
-                    ) {
-                      throw new Error("Stored provider recovery generation is invalid.");
-                    }
-                    const effective = projectQuotas(
-                      storage.internal,
-                      project,
-                      quotaDefaults,
-                    );
-                    const manager = await projectBackupManager(
-                      paths.projects,
-                      project,
-                      masterKey,
-                      {
-                        ...backupPolicy,
-                        maxBackups: effective.backupsPerProject,
-                      },
-                      backupObjects,
-                    );
-                    try {
-                      current();
-                      const restored = await manager.read(
-                        generation.restoreBackupId,
-                      );
-                      current();
-                      if (
-                        restored.verification.databaseSha256
-                          !== generation.restoreDatabaseSha256
-                        || restored.verification.databaseBytes
-                          !== generation.restoreDatabaseBytes
-                      ) {
-                        throw new Error(
-                          "Provider restore point changed after generation allocation.",
-                        );
-                      }
-                      databaseSnapshot = restored.bytes;
-                    } finally {
-                      manager.close();
-                    }
-                    const confirmedGeneration = providerGeneration(
-                      storage.internal,
-                      operation.projectId,
-                      desired.generation,
-                      desired.releaseId,
-                    );
-                    if (
-                      !confirmedGeneration
-                      || !sameProviderGeneration(
-                        generation,
-                        confirmedGeneration,
-                      )
-                    ) {
-                      throw new Error(
-                        "Provider restore generation changed during recovery read.",
-                      );
-                    }
-                  }
-                  current();
-                  const capsule = await createDeploymentRuntimeCapsule({
-                    projectId: project.id,
-                    releaseId: release.id,
-                    generation: desired.generation,
-                    environment,
-                    database: {
-                      path: release.config.database.path,
-                      mode: generation.databaseMode,
-                      snapshot: databaseSnapshot,
-                    },
-                    ingress: {
-                      route: providerRuntimePath(project.id),
-                      token: providerIngressToken(masterKey, project.id, desired.generation),
-                      controlToken: providerControlToken(
-                        masterKey,
-                        project.id,
-                        desired.generation,
-                      ),
-                    },
-                    artifact: artifact.bytes,
-                  }, {
-                    maxArtifactBytes: runnerArtifactLimit,
-                    maxDatabaseBytes: providerPlacement.maxDatabaseBytes,
-                    maxCapsuleBytes: providerPlacement.maxRuntimeBytes,
-                  });
-                  current();
-                  return { bytes: capsule.bytes, sha256: capsule.sha256 };
+                  if(operation.action!=="reconcile")return null;
+                  return loadProviderRuntimeCapsule(operation.projectId,providerDesiredPayload(operation.payload),signal);
                 },
               },
               maxRuntimeBytes: providerPlacement.maxRuntimeBytes,
@@ -2061,6 +2190,9 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
   }>();
   let bootstrapRegistrationActive = false;
   let closed = false;
+  let closing = false;
+  let closeFlight:Promise<void>|undefined;
+  const activeLocalFallbackOperations = new Set<Promise<unknown>>();
 
   const storageDiagnostics = async (): Promise<Record<string, unknown>> => {
     const now = Date.now();
@@ -4791,7 +4923,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     organizationId: null, projectId: null, permissions: [], previewName: null, impersonation: null,
   });
   const assertEvacuationCapacity = (projects: readonly ProjectRow[], nodeId: string) => {
-    const candidates = orchestrator.listNodes().filter(node => node.id !== nodeId && node.status === "active" && node.expiresAt > Date.now() && node.endpoint);
+    if(options.deploymentAgents?.localFallback){const source=localProviders.get(nodeId);if(!source)throw new PlatformError(409,"LOCAL_PROVIDER_REQUIRED","Bind the original local source provider before planning native evacuation.");source.check();}
+    const candidates = orchestrator.listNodes().filter(node => node.id !== nodeId && node.status === "active" && node.expiresAt > Date.now() && node.endpoint && (!options.deploymentAgents?.localFallback||localProviders.has(node.id)));
     const available = new Map(candidates.map(node => [node.id, node.capacity - Number(storage.internal.prepare("SELECT COALESCE(SUM(capacity_units),0) AS units FROM clank_deployment_placements WHERE assigned_node_id=? AND desired_state='running'").get(node.id)!.units)]));
     for (const project of projects) {
       const desired = orchestrator.desired(project.id), placement = storage.internal.prepare("SELECT region FROM clank_deployment_placements WHERE project_id=?").get(project.id);
@@ -4800,6 +4933,117 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       if (!target) throw new PlatformError(409, "EVACUATION_CAPACITY", "Healthy compatible provider capacity is required for every source project before evacuation.");
       available.set(target.id, available.get(target.id)! - desired.capacityUnits);
     }
+  };
+  const withLocalFallbackScope = async <T>(item: EvacuationProject, plan: NodeEvacuationPlan, targetNodeId: string, assertCurrent: () => void, callback: (scope: LocalFallbackScope) => Promise<T>, coldResume?: {journal:string;authentication:string}): Promise<T> => {
+    if(closing||closed)throw new Error("Original platform is closing and cannot admit a new fallback operation.");
+    const source=localProviders.get(plan.nodeId),target=localProviders.get(targetNodeId);
+    if(!source||!target||target===source)throw new PlatformError(409,"LOCAL_PROVIDER_REQUIRED","Native evacuation requires its exact bound source and target providers.");
+    const row=storage.internal.prepare("SELECT projects,lease_id,lease_until FROM clank_platform_evacuations WHERE id=?").get(plan.id),projectLease=projectLeaseAssertions.get(item.projectId);
+    if(!row||typeof row.lease_id!=="string"||!projectLease)throw new Error("Native evacuation execution authority is missing.");
+    const identity=Object.freeze({protocol:"clank-platform-evacuation-fallback/1",planId:plan.id,sourceNodeId:plan.nodeId,projectId:item.projectId,releaseId:item.releaseId,generation:item.generation,requestedBy:plan.requestedBy,createdAt:plan.createdAt,executionLeaseId:row.lease_id});
+    const scope:LocalFallbackScope={identity,source,target,projectsBefore:String(row.projects),check(){
+      assertCurrent();projectLease();source.check();target.check();
+      if(localProviders.get(plan.nodeId)!==source||localProviders.get(targetNodeId)!==target||projectLeaseAssertions.get(item.projectId)!==projectLease||!storage.internal.prepare("SELECT 1 FROM clank_platform_evacuations WHERE id=? AND lease_id=? AND lease_until>?").get(plan.id,identity.executionLeaseId,Date.now()))throw new Error("Native evacuation original execution lease or provider binding changed.");
+    }};
+    const operation=localFallbackScope.run(scope,async()=>{scope.check();if(coldResume)await openColdFallbackFactoryServices(scope,coldResume.journal,coldResume.authentication);if(!scope.source.service||!scope.target.service)throw new Error("Native fallback provider services are not open inside the authenticated scope.");const result=await callback(scope);scope.check();return result;});
+    activeLocalFallbackOperations.add(operation);
+    try{return await operation;}finally{activeLocalFallbackOperations.delete(operation);}
+  };
+  const openColdFallbackFactoryServices = async(scope:LocalFallbackScope,journal:string,authentication:string) => {
+    const source=scope.source,target=scope.target;
+    if(source.service&&target.service)return;
+    if(!source.factoryOptions||!target.factoryOptions)throw new Error("Cold fallback requires both original provider services or two platform-owned provider factories.");
+    const context=platformFallbacks.get(runtime);if(!context)throw new Error("Original platform cold recovery context is unavailable.");
+    const token=context.coldStoppedResume(journal,authentication),selection=platformColdFallbackResumeSelection(token),predecessor=JSON.parse(selection.predecessorJournal),resume=JSON.parse(selection.resumeJournal);
+    if(resume.phase!=="stopped"||!predecessor.endpointBindings||!['source','target'].includes(resume.selected))throw new Error("Cold fallback factory admission requires an authenticated selected STOPPED endpoint pair.");
+    const selectedSide=resume.selected as "source"|"target",otherSide=selectedSide==="source"?"target":"source",noSweep=context.coldStoppedResumeCounterpart(token,predecessor.endpointBindings[otherSide]?.owner,predecessor.endpointBindings[otherSide]?.root);
+    const expected={source:predecessor.endpointBindings.source,target:predecessor.endpointBindings.target};
+    for(const [side,binding] of [["source",source],["target",target]] as const){
+      const endpoint=expected[side],options=binding.factoryOptions!;
+      if(!endpoint||endpoint.protocol!=="clank-provider-fallback-endpoint/1"||options.owner!==endpoint.owner||options.rootDirectory!==endpoint.root||(side===selectedSide&&options.owner!==resume.intent?.owner)||(side!==selectedSide&&options.owner===resume.intent?.owner))
+        throw new Error("Cold fallback factory options differ from the exact signed endpoint owner/root.");
+      if(binding.service)throw new Error("Cold fallback factory cannot be mixed with a pre-opened counterpart service.");
+    }
+    const opened:{binding:LocalProviderBinding;service:import("./provider-service.ts").DeploymentProviderService}[]=[];
+    const open=async(side:"source"|"target",binding:LocalProviderBinding)=>{
+      binding.check();const endpoint=expected[side],options=binding.factoryOptions!;
+      const {acquireProviderServiceOwnership}=await import("./provider-handoff.ts"),{openDockerDeploymentProviderService,providerFallbackServiceContext}=await import("./provider-service.ts");
+      const ownership=binding.ownership??await acquireProviderServiceOwnership(options.rootDirectory,true);binding.ownership=ownership;
+      const docker={...(options.docker??{}),...(side===selectedSide?{coldFallbackResumeSelection:token}:{coldFallbackNoSweepSelection:noSweep})};
+      let service:import("./provider-service.ts").DeploymentProviderService|undefined;
+      try {
+        scope.check();
+        service=await openDockerDeploymentProviderService({...options,docker},ownership);scope.check();
+        const native=providerFallbackServiceContext(service);
+        if(native.ownerLabel!==endpoint.owner||native.owner.root!==endpoint.root||native.owner.serviceDirectory!==endpoint.serviceDirectory)
+          throw new Error("Cold fallback factory opened a service with a different signed native endpoint.");
+        const fs=(globalThis as any).process.getBuiltinModule("node:fs");
+        for(const pin of endpoint.paths){const stat=fs.lstatSync(pin.path);if(!stat.isDirectory()||stat.isSymbolicLink()||stat.dev!==pin.dev||stat.ino!==pin.ino||stat.uid!==pin.uid||stat.mode!==pin.mode||fs.realpathSync(pin.path)!==pin.path)throw new Error("Cold fallback factory endpoint path identity changed.");}
+        native.check();binding.service=service;binding.ownership=undefined;factoryNativeChecks.set(binding,()=>native.check());opened.push({binding,service});return service;
+      } catch(error) {
+        if(service){try{await service.close();binding.service=undefined;binding.ownership=undefined;factoryNativeChecks.delete(binding);}catch(closeError){binding.service=service;binding.ownership=undefined;throw new AggregateError([error,closeError],"Cold fallback service validation failed and native ownership remains held by the service.");}}
+        else {binding.ownership=ownership;}
+        throw error;
+      }
+    };
+    const results=await Promise.allSettled([open("source",source),open("target",target)]);
+    const rejected=results.find((result):result is PromiseRejectedResult=>result.status==="rejected");
+    if(rejected){const cleanup=await Promise.allSettled(opened.map(async({binding,service})=>{await service.close();if(binding.service===service)binding.service=undefined;binding.ownership=undefined;factoryNativeChecks.delete(binding);}));const cleanupError=cleanup.find((result):result is PromiseRejectedResult=>result.status==="rejected");if(cleanupError)throw new AggregateError([rejected.reason,cleanupError.reason],"Cold fallback factory admission failed and an opened service could not be retired.");throw rejected.reason;}
+    scope.check();
+  };
+  const resumeLocalProvider = async (item: EvacuationProject, plan: NodeEvacuationPlan, operationId: string, assertCurrent: () => void) => {
+    const stored=storage.internal.prepare("SELECT journal,authentication FROM clank_deployment_fallback_journals WHERE operation_id=?").get(operationId);
+    if(!stored||typeof stored.journal!=="string"||typeof stored.authentication!=="string")throw new Error("Native evacuation signed journal is missing.");
+    // This selector grants no authority: platform.recovery authenticates the original bytes and plan inside the private scope before native work.
+    const locator=JSON.parse(stored.journal),targetNodeId=locator?.identity?.targetNodeId;
+    if(typeof targetNodeId!=="string")throw new Error("Native evacuation target locator is missing.");
+    return withLocalFallbackScope(item,plan,targetNodeId,assertCurrent,async scope=>{
+      const coordinator=await import("./provider-fallback-coordinator.ts"),module=await import("./provider-service.ts");scope.check();
+      platformProviderFallbackContext(runtime).recovery(stored.journal as string,stored.authentication as string);
+      const source=module.providerFallbackServiceContext(scope.source.service),target=module.providerFallbackServiceContext(scope.target.service);
+      const early=["reserved","stopping","stopped"].includes(locator.phase),selected=early?scope.source:scope.target;
+      if(locator.phase==="reserved"||!coordinator.providerFallbackResumeReady(runtime,selected.service,operationId))await coordinator.recoverProviderFallback(runtime,stored.journal as string,stored.authentication as string,source.owner,target.owner,source.client,{sourceService:scope.source.service,targetService:scope.target.service});scope.check();
+      if(locator.phase==="reserved")return {nodeId:plan.nodeId,generation:item.generation,sourceRestored:true};
+      const result=await coordinator.resumeDockerProviderFallback(runtime,selected.service,operationId,selected.token);scope.check();
+      return result;
+    },{journal:stored.journal as string,authentication:stored.authentication as string});
+  };
+  const evacuateLocalProvider = async (item: EvacuationProject, plan: NodeEvacuationPlan, assertCurrent: () => void): Promise<string> => {
+    const currentItem=evacuations.get(plan.id).projects.find(value=>value.projectId===item.projectId);
+    if(!currentItem)throw new Error("Original evacuation project disappeared.");
+    const operationId=currentItem.fallbackAttemptId??("evac_"+syncHash(JSON.stringify([plan.id,item.projectId,item.releaseId,item.generation])));
+    if(storage.internal.prepare("SELECT 1 FROM clank_deployment_fallback_journals WHERE operation_id=?").get(operationId)){
+      const recovered=await resumeLocalProvider(currentItem,plan,operationId,assertCurrent);
+      const current=evacuations.get(plan.id).projects.find(value=>value.projectId===item.projectId);
+      if(recovered.nodeId===plan.nodeId){
+        if(!current?.fallbackAttemptId||current.fallbackAttemptId===operationId||current.backupId)throw new Error("Recovered source did not commit its distinct signed successor.");
+        assertCurrent();return evacuateLocalProvider(current,plan,assertCurrent);
+      }
+      if(!current?.backupId||current.fallbackState!=="running")throw new Error("Recovered native evacuation did not publish its exact running progress.");return current.backupId;
+    }
+    const placement=storage.internal.prepare("SELECT * FROM clank_deployment_placements WHERE project_id=?").get(item.projectId);
+    if(!placement)throw new Error("Native evacuation placement is missing.");
+    const catalog=providerFallbackOrchestrationContext(nativeOrchestrator);let targetNodeId:string|undefined;
+    const predecessor=storage.internal.prepare("SELECT predecessor_id FROM clank_platform_fallback_successors WHERE successor_id=?").get(operationId);
+    const old=predecessor?storage.internal.prepare("SELECT journal FROM clank_deployment_fallback_journals WHERE operation_id=?").get(predecessor.predecessor_id):undefined;
+    const retainedTarget=old?JSON.parse(String(old.journal)).identity?.targetNodeId:undefined;
+    for(const node of nativeOrchestrator.listNodes()){
+      const binding=localProviders.get(node.id);if(!binding||node.id===plan.nodeId||retainedTarget&&node.id!==retainedTarget)continue;
+      try{binding.check();catalog.targetNode(node.id,placement);targetNodeId=node.id;break;}catch{/* An incompatible node cannot authorize this project. */}
+    }
+    if(!targetNodeId)throw new PlatformError(409,"EVACUATION_CAPACITY","Native evacuation requires healthy bound target capacity.");
+    return withLocalFallbackScope(currentItem,plan,targetNodeId,assertCurrent,async scope=>{
+      const expectedTarget=assertFallbackAttempt(scope,operationId);if(expectedTarget&&expectedTarget!==targetNodeId)throw new Error("Fallback successor target differs from its original binding.");
+      const wire=await loadProviderRuntimeCapsule(item.projectId,{releaseId:item.releaseId,state:"running",generation:item.generation,runtimeProtocol:DEPLOYMENT_RUNTIME_PROTOCOL},AbortSignal.timeout(30000),scope.check);
+      if(!wire)throw new Error("Native evacuation original source capsule is unavailable.");
+      try{
+        scope.check();const {transferDockerProviderFallback}=await import("./provider-fallback-coordinator.ts");scope.check();
+        await transferDockerProviderFallback(runtime,scope.source.service,scope.target.service,wire.bytes,{projectId:item.projectId,operationId,targetNodeId:targetNodeId!,targetNodeToken:scope.target.token,maximumDowntimeMs:30000});scope.check();
+        const current=evacuations.get(plan.id).projects.find(value=>value.projectId===item.projectId);
+        if(!current?.backupId||current.targetNodeId!==targetNodeId||current.targetGeneration!==item.generation+1||current.fallbackOperationId!==operationId||current.fallbackState!=="running")throw new Error("Native evacuation publication did not commit its exact plan progress.");
+        return current.backupId;
+      }finally{wire.bytes.fill(0);}
+    });
   };
   const evacuationHooks = (auth: AuthRequest<DefaultAuthProfile>): NodeEvacuationHooks => {
     const principal = evacuationPrincipal(auth);
@@ -4833,6 +5077,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       async snapshot(item, plan, assertCurrent) {
         return withProjectLock(item.projectId, async () => {
           assertCurrent(); projectLeaseAssertions.get(item.projectId)?.();
+          if(options.deploymentAgents?.localFallback)return evacuateLocalProvider(item,plan,assertCurrent);
           const project = projectById(storage.internal, item.projectId)!, release = releaseById(storage.internal, item.releaseId)!;
           exactProviderRuntime(project, release);
           const backup = await createEncryptedProjectBackup(project, `planned evacuation ${plan.id}`, [], plan.id);
@@ -4853,6 +5098,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       async relocate(item, plan, assertCurrent) {
         return withProjectLock(item.projectId, async () => {
           assertCurrent(); projectLeaseAssertions.get(item.projectId)?.();
+          if(item.fallbackState==="stopped"){if(!options.deploymentAgents?.localFallback||!item.fallbackOperationId)throw new Error("Native stopped progress requires its original local fallback binding.");return resumeLocalProvider(item,plan,item.fallbackOperationId,assertCurrent);}
           const project = projectById(storage.internal, item.projectId)!, release = releaseById(storage.internal, item.releaseId)!;
           if (project.providerNodeId !== plan.nodeId && project.activeGeneration! > item.generation) return { nodeId: project.providerNodeId!, generation: project.activeGeneration! };
           const result = await queueProviderFailover(principal, project, release, item.backupId!, plan.nodeId, () => {
@@ -12484,8 +12730,28 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
   operationsMonitor?.start();
   projectSlos.start();
 
-  return {
+  const runtime:PlatformRuntime={
     handle,
+    async bindLocalProvider(nodeId,nodeToken,service){
+      if(closing||closed||!options.deploymentAgents?.localFallback||!providerPlacement)throw new Error("Local native provider evacuation is not enabled.");
+      const {providerFallbackServiceContext}=await import("./provider-service.ts"),native=providerFallbackServiceContext(service);
+      const node=await nativeOrchestrator.authenticateNode(nodeId,nodeToken);native.check();
+      if(closing||closed)throw new Error("Original platform is closing and cannot accept a local provider binding.");
+      if(!node.endpoint)throw new Error("Local native provider binding requires a registered endpoint.");providerIngressOrigin(node.endpoint,providerPlacement.allowedProviderHosts);
+      const image=()=>JSON.stringify(storage.internal.prepare("SELECT id,region,endpoint,capacity,labels,token_hash FROM clank_deployment_nodes WHERE id=?").get(nodeId)),expected=image();
+      const binding:LocalProviderBinding={nodeId,service,token:nodeToken,owned:false,check(){if(closed||image()!==expected)throw new Error("Original local provider node identity changed.");native.check();}};binding.check();localProviders.set(nodeId,binding);
+    },
+    async bindLocalProviderFactory(nodeId,nodeToken,factoryOptions){
+      if(closing||closed||!options.deploymentAgents?.localFallback||!providerPlacement)throw new Error("Local native provider evacuation is not enabled.");
+      if(!factoryOptions||typeof factoryOptions!=="object"||typeof factoryOptions.rootDirectory!=="string"||typeof factoryOptions.owner!=="string"||typeof factoryOptions.image!=="string")throw new TypeError("A complete local Docker provider factory configuration is required.");
+      const node=await nativeOrchestrator.authenticateNode(nodeId,nodeToken);
+      if(closing||closed)throw new Error("Original platform is closing and cannot accept a local provider factory.");
+      if(!node.endpoint)throw new Error("Local native provider factory requires a registered endpoint.");providerIngressOrigin(node.endpoint,providerPlacement.allowedProviderHosts);
+      const freezeConfig=(value:any):any=>{if(Array.isArray(value))return Object.freeze(value.map(freezeConfig));if(value&&typeof value==="object"&&(Object.getPrototypeOf(value)===Object.prototype||Object.getPrototypeOf(value)===null)){const clone=Object.create(Object.getPrototypeOf(value));for(const [key,child] of Object.entries(value))clone[key]=freezeConfig(child);return Object.freeze(clone);}return value;};
+      const captured=freezeConfig(factoryOptions);
+      const image=()=>JSON.stringify(storage.internal.prepare("SELECT id,region,endpoint,capacity,labels,token_hash FROM clank_deployment_nodes WHERE id=?").get(nodeId)),expected=image();
+      const binding:LocalProviderBinding={nodeId,token:nodeToken,factoryOptions:captured,owned:true,check(){if(closed||image()!==expected||localProviders.get(nodeId)!==binding)throw new Error("Original local provider factory node identity changed.");factoryNativeChecks.get(binding)?.();}};localProviders.set(nodeId,binding);binding.check();
+    },
     authenticateServiceAccount(request) {
       assertOrganizationSecurityProtocol(storage.internal);
       if(!serviceAccounts) throw new PlatformError(401,"INVALID_TOKEN","Service account credentials are unavailable.");
@@ -12498,10 +12764,15 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     hostingProfile,
     runnerKind: runner.kind ?? "process",
     async close() {
+      if(closeFlight)return closeFlight;
+      closeFlight=(async()=>{
+      if(closed)return;
+      closing=true;
+      try{await drainPlatformLocalFallbackOperations(activeLocalFallbackOperations,()=>closePlatformOwnedLocalProviders(localProviders, nodeId=>{localProviders.delete(nodeId);}));}
+      catch(error){if(error instanceof PlatformLocalProviderCloseError&&error.kind==="unresolved-root"){closing=false;closeFlight=undefined;}else closeFlight=undefined;throw error;}
       statusPages?.close();
       projectSlos.close();
       projectIncidents.close();
-      if (closed) return;
       closed = true;
       for (const intake of stagingIntakes) intake.abort();
       if (stagingIntakes.size) await Promise.all([...locks.values()].map(pending => pending.catch(() => undefined)));
@@ -12543,8 +12814,478 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       storage.auth.close();
       orchestrator.close();
       storage.database.close();
+      })();
+      return closeFlight;
     },
   };
+  const conditionalControl=()=>nativeSQLiteIdentityContext(storage.database);
+  const conditionalSign=(body:string)=>(globalThis as any).process.getBuiltinModule("node:crypto").createHmac("sha256",masterKey).update("clank-provider-conditional-recovery/1\n").update(body).digest("hex");
+  const conditionalCurrent=()=>{if(closed||!providerPlacement)throw new Error("Original platform conditional recovery is unavailable.");leadership?.assertCurrent();conditionalControl().check();};
+  platformProviderHandoffs.set(runtime,{orchestrator:nativeOrchestrator,recovery(journal,authentication){
+    conditionalCurrent();if(typeof journal!=="string"||Buffer.byteLength(journal)>524288||typeof authentication!=="string"||!/^[a-f0-9]{64}$/.test(authentication)||conditionalSign(journal)!==authentication)throw new Error("Conditional coordinator authentication differs.");
+    const input=JSON.parse(journal);if(input.protocol!=="clank-provider-conditional-recovery/1"||JSON.stringify(input.controlIdentity)!==JSON.stringify(conditionalControl().identity))throw new Error("Conditional coordinator native database identity differs.");
+    const p=input.platform,id=p.identity.projectId,release=p.identity.releaseId;
+    const project=()=>JSON.stringify(storage.internal.prepare("SELECT placement,active_release_id,active_generation,provider_origin,provider_node_id,provider_canary_epoch,runtime_policy,database_path,organization_id,owner_id FROM clank_platform_projects WHERE id=?").get(id));
+    const releaseImage=()=>JSON.stringify(storage.internal.prepare("SELECT project_id,status,purpose,digest,provider_generation,config,artifact_available,directory,runner_artifact_store,runner_artifact_key FROM clank_platform_releases WHERE id=?").get(release));
+    const generation=(n:number)=>JSON.stringify(storage.internal.prepare("SELECT * FROM clank_platform_provider_generations WHERE project_id=? AND generation=?").get(id,n));
+    const image=(table:string,key:string,value:string)=>JSON.stringify(storage.internal.prepare("SELECT * FROM "+table+" WHERE "+key+"=?").get(value));
+    const check=()=>{
+      conditionalCurrent();requireNoProviderCanary(id);requireNoEvacuation(id);requireNoInterruptedPromotion(id);
+      const actual=image("clank_deployment_handoffs","handoff_id",input.reservation.handoff_id),reserved=actual===JSON.stringify(input.reservation),committed=actual===JSON.stringify(input.committedHandoff),placement=image("clank_deployment_placements","project_id",id);
+      if(!reserved&&!committed||Number(storage.internal.prepare("SELECT fence FROM clank_deployment_project_fences WHERE project_id=?").get(id)?.fence)!==input.fence||generation(p.identity.sourceGeneration)!==p.sourceGeneration||project()!==(reserved?p.projectBefore:p.projectAfter)||releaseImage()!==(reserved?p.releaseBefore:p.releaseAfter)||generation(p.identity.targetGeneration)!==(reserved?undefined:p.targetGeneration)||reserved&&placement!==JSON.stringify(input.placement)||committed&&placement!==JSON.stringify(input.committedPlacement)&&placement!==JSON.stringify(input.stoppedPlacement))throw new Error("Conditional coordinator row, metadata or fence differs.");
+      for(const [node,expected] of [[input.reservation.source_node_id,input.reservation.source_node_json],[input.reservation.target_node_id,input.reservation.target_node_json]])if(JSON.stringify(storage.internal.prepare("SELECT id,region,endpoint,capacity,labels,token_hash FROM clank_deployment_nodes WHERE id=?").get(node))!==expected)throw new Error("Conditional coordinator node identity differs.");
+      if(reserved){const destination=storage.internal.prepare("SELECT * FROM clank_deployment_nodes WHERE id=?").get(p.identity.targetNodeId),placement=input.placement,used=storage.internal.prepare("SELECT (SELECT coalesce(sum(capacity_units),0) FROM clank_deployment_placements WHERE assigned_node_id=? AND project_id!=?)+(SELECT coalesce(sum(capacity_units),0) FROM clank_deployment_handoffs WHERE target_node_id=? AND state='reserved' AND project_id!=?) used").get(p.identity.targetNodeId,id,p.identity.targetNodeId,id),labels=JSON.parse(String(destination?.labels??"{}"));if(!destination||destination.status!=="active"||Number(destination.expires_at)<=Date.now()||placement.region!==null&&destination.region!==placement.region||placement.requires_endpoint===1&&destination.endpoint===null||Object.entries(JSON.parse(placement.required_labels)).some(([name,value])=>labels[name]!==value)||Number(used?.used??0)+Number(placement.capacity_units)>Number(destination.capacity))throw new Error("Conditional target node or capacity is unavailable.");}
+    };
+    const settle=async(native:object)=>{const handoff=await import("./provider-handoff.ts"),physical=()=>handoff.assertProviderConditionalNativeRecovery(native,authority,journal,authentication);physical();check();storage.internal.transaction(changes=>{physical();check();const reserved=image("clank_deployment_handoffs","handoff_id",input.reservation.handoff_id)===JSON.stringify(input.reservation);
+      if(reserved){const g=JSON.parse(p.targetGeneration);if(storage.internal.prepare("INSERT INTO clank_platform_provider_generations(project_id,generation,release_id,encrypted_environment,database_mode,created_at) VALUES(?,?,?,?,'preserve',?)").run(id,g.generation,release,g.encrypted_environment,g.created_at).changes!==1||storage.internal.prepare("UPDATE clank_platform_releases SET provider_generation=? WHERE id=? AND provider_generation=?").run(p.identity.targetGeneration,release,p.identity.sourceGeneration).changes!==1||storage.internal.prepare("UPDATE clank_platform_projects SET active_generation=?,provider_node_id=?,provider_origin=?,updated_at=? WHERE id=? AND active_generation=?").run(p.identity.targetGeneration,p.identity.targetNodeId,p.identity.targetOrigin,input.now,id,p.identity.sourceGeneration).changes!==1||storage.internal.prepare("UPDATE clank_deployment_handoffs SET state='committed',version=?,result_json=?,updated_at=? WHERE handoff_id=? AND state='reserved' AND version=? AND input_sha256=?").run(input.committedHandoff.version,input.committedHandoff.result_json,input.now,input.reservation.handoff_id,input.reservation.version,input.reservation.input_sha256).changes!==1)throw new Error("Conditional coordinator reserved publication failed.");}
+      if(image("clank_deployment_placements","project_id",id)!==JSON.stringify(input.stoppedPlacement)&&storage.internal.prepare("UPDATE clank_deployment_placements SET assigned_node_id=?,generation=?,observed_release_id=NULL,observed_state='stopped',observed_generation=?,updated_at=? WHERE project_id=?").run(p.identity.targetNodeId,p.identity.targetGeneration,p.identity.targetGeneration,input.now,id).changes!==1)throw new Error("Conditional coordinator stopped observation failed.");
+      storage.internal.prepare("UPDATE clank_deployment_operations SET state='cancelled',lease_token_hash=NULL,lease_expires_at=NULL,updated_at=? WHERE project_id=? AND state IN ('queued','retry','leased')").run(input.now,id);check();
+      if(image("clank_deployment_placements","project_id",id)!==JSON.stringify(input.stoppedPlacement)||storage.internal.prepare("SELECT id FROM clank_deployment_operations WHERE project_id=? AND state IN ('queued','retry','leased') LIMIT 1").get(id))throw new Error("Conditional coordinator stopped readback differs.");changes.record("__orchestration",id);changes.record("__platform",id);
+    });physical();check();if(image("clank_deployment_placements","project_id",id)!==JSON.stringify(input.stoppedPlacement))throw new Error("Conditional coordinator stopped commit readback differs.");};
+    check();const authority=Object.freeze({});conditionalPlatformAuthorities.set(authority,{journal,authentication,check,settle});return authority;
+  },async prepare(source,bytes){
+    if(closed||!providerPlacement)throw new Error("The original platform provider placement is unavailable.");
+    leadership?.assertCurrent();
+    const [handoff,placement,targetModule]=await Promise.all([import("./provider-handoff.ts"),import("./runtime-placement.ts"),import("./provider-target-stage.ts")]);
+    const native=handoff.providerSourceTransferContext(source),binding=native.binding.identity;
+    native.check();
+    const sourceCapsule=await placement.decodeDeploymentRuntimeCapsule(bytes);
+    try{
+      native.check();
+      const projectId=binding.source.projectId,sourceGeneration=binding.source.generation,targetGeneration=binding.targetGeneration;
+      const sourceProject=projectById(storage.internal,projectId),release=releaseById(storage.internal,binding.source.releaseId);
+      const generation=providerGeneration(storage.internal,projectId,sourceGeneration,binding.source.releaseId);
+      const sourceNode=orchestrator.listNodes().find(n=>n.id===binding.source.nodeId),targetNode=orchestrator.listNodes().find(n=>n.id===binding.targetNodeId);
+      if(!sourceProject||!sourceProject.organizationId||sourceProject.placement!=="provider"||sourceProject.activeReleaseId!==binding.source.releaseId||sourceProject.activeGeneration!==sourceGeneration||sourceProject.providerNodeId!==binding.source.nodeId
+        ||sourceProject.runtimePolicy==="suspended"||!release||sourceProject.databasePath!==release.config.database.path||!release.artifactAvailable||release.projectId!==projectId||release.status!=="active"||release.purpose!=="deployment"||release.providerGeneration!==sourceGeneration||!generation
+        ||!sourceNode?.endpoint||!targetNode?.endpoint||!['active','draining'].includes(sourceNode.status)||targetNode.status!=="active"||targetGeneration!==sourceGeneration+1)throw new Error("Native handoff does not match the platform's active provider source and target.");
+      const sourceOrigin=providerIngressOrigin(sourceNode.endpoint,providerPlacement.allowedProviderHosts),targetOrigin=providerIngressOrigin(targetNode.endpoint,providerPlacement.allowedProviderHosts);
+      if(sourceProject.providerOrigin!==sourceOrigin)throw new Error("Original platform source route differs from its native node.");
+      const environment=decryptProviderEnvironment(generation.encryptedEnvironment,masterKey),environmentImage=(v:Readonly<Record<string,string>>)=>JSON.stringify(Object.entries(v).sort(([a],[b])=>a<b?-1:a>b?1:0));
+      if(sourceCapsule.sha256!==native.grant.capsuleSha256||sourceCapsule.sha256!==binding.artifactSha256||sourceCapsule.manifest.projectId!==projectId||sourceCapsule.manifest.releaseId!==release.id||sourceCapsule.manifest.generation!==sourceGeneration
+        ||sourceCapsule.artifact.sha256!==release.digest||sourceCapsule.manifest.database.path!==release.config.database.path||environmentImage(sourceCapsule.manifest.environment)!==environmentImage(environment)
+        ||sourceCapsule.manifest.ingress.route!==providerRuntimePath(projectId)||sourceCapsule.manifest.ingress.token!==providerIngressToken(masterKey,projectId,sourceGeneration)||sourceCapsule.manifest.ingress.controlToken!==providerControlToken(masterKey,projectId,sourceGeneration))throw new Error("Original native source capsule differs from its platform approval.");
+      const projectImage=()=>JSON.stringify(storage.internal.prepare("SELECT placement,active_release_id,active_generation,provider_origin,provider_node_id,provider_canary_epoch,runtime_policy,database_path,organization_id,owner_id FROM clank_platform_projects WHERE id=?").get(projectId));
+      const releaseImage=()=>JSON.stringify(storage.internal.prepare("SELECT project_id,status,purpose,digest,provider_generation,config,artifact_available,directory,runner_artifact_store,runner_artifact_key FROM clank_platform_releases WHERE id=?").get(release.id));
+      let conditionalTime:number|undefined;let expectedProject=projectImage(),expectedRelease=releaseImage(),committed=false,pending:undefined|{project:string;release:string;generation:string};
+      const generationImage=(n:number)=>JSON.stringify(storage.internal.prepare("SELECT * FROM clank_platform_provider_generations WHERE project_id=? AND generation=?").get(projectId,n));
+      const expectedSource=generationImage(sourceGeneration),nodeImage=(id:string)=>JSON.stringify(storage.internal.prepare("SELECT id,region,endpoint,capacity,labels,token_hash FROM clank_deployment_nodes WHERE id=?").get(id));
+      const sourceNodeImage=nodeImage(sourceNode.id),targetNodeImage=nodeImage(targetNode.id);
+      const check=()=>{
+        if(closed)throw new Error("Original platform handoff owner is closed.");leadership?.assertCurrent();native.check();requireNoProviderCanary(projectId);requireNoEvacuation(projectId);requireNoInterruptedPromotion(projectId);
+        if(projectImage()!==expectedProject||releaseImage()!==expectedRelease||generationImage(sourceGeneration)!==expectedSource||nodeImage(sourceNode.id)!==sourceNodeImage||nodeImage(targetNode.id)!==targetNodeImage)throw new Error("Original platform handoff approval changed.");
+        const desired=nativeOrchestrator.desired(projectId),node=orchestrator.listNodes().find(n=>n.id===targetNode.id);
+        if(!desired||desired.assignedNodeId!==(committed?targetNode.id:sourceNode.id)||desired.generation!==(committed?targetGeneration:sourceGeneration)||desired.desiredReleaseId!==release.id||desired.desiredState!=="running"||desired.observedState!=="running"||desired.observedGeneration!==desired.generation||desired.observedReleaseId!==release.id||node?.status!=="active")throw new Error("Original platform handoff placement changed.");
+        if(committed){if(generationImage(targetGeneration)!==pending?.generation)throw new Error("Original committed target generation changed.");}
+        else if(generationImage(targetGeneration)!==undefined)throw new Error("Original target generation is already allocated.");
+      };
+      check();
+      const capsule=await placement.createDeploymentRuntimeCapsule({projectId,releaseId:release.id,generation:targetGeneration,environment,database:{path:release.config.database.path,mode:"preserve"},ingress:{route:providerRuntimePath(projectId),token:providerIngressToken(masterKey,projectId,targetGeneration),controlToken:providerControlToken(masterKey,projectId,targetGeneration)},artifact:sourceCapsule.artifact.bytes},{maxArtifactBytes:runnerArtifactLimit,maxDatabaseBytes:providerPlacement.maxDatabaseBytes,maxCapsuleBytes:providerPlacement.maxRuntimeBytes});
+      check();
+      const participant:PlatformProviderHandoffParticipant=Object.freeze({orchestrator:nativeOrchestrator,identity:Object.freeze({protocol:"clank-platform-native-handoff/1",projectId,releaseId:release.id,sourceGeneration,targetGeneration,sourceNodeId:sourceNode.id,targetNodeId:targetNode.id,sourceOrigin,targetOrigin,targetCapsuleSha256:capsule.sha256}),check,
+        async prepareConditional(active:import("./provider-target-stage.ts").ProviderActivatedTarget,now:number){
+          check();conditionalCurrent();targetModule.assertProviderActivatedTarget(active);if(committed||!Number.isSafeInteger(now)||Math.abs(Date.now()-now)>30000||conditionalTime!==undefined&&conditionalTime!==now)throw new Error("Original conditional publication time differs.");
+          if(active.projectId!==projectId||active.releaseId!==release.id||active.nodeId!==targetNode.id||active.generation!==targetGeneration||active.capsuleSha256!==capsule.sha256)throw new Error("Conditional publication requires its approved native target.");
+          const native=targetModule.providerActivatedTargetConditionalContext(active),evidence=handoff.providerConditionalTargetEvidence(active,native),reservation=storage.internal.prepare("SELECT * FROM clank_deployment_handoffs WHERE handoff_id=?").get(binding.handoffId),placement=storage.internal.prepare("SELECT * FROM clank_deployment_placements WHERE project_id=?").get(projectId);
+          if(!reservation||reservation.state!=="reserved"||JSON.stringify(placement)!==reservation.placement_json||JSON.parse(String(reservation.input_json)).platform?.targetCapsuleSha256!==capsule.sha256)throw new Error("Conditional publication requires its exact original reservation.");
+          const fence=JSON.parse(String(reservation.input_json)).targetFence;if(Number(storage.internal.prepare("SELECT fence FROM clank_deployment_project_fences WHERE project_id=?").get(projectId)?.fence)!==fence)throw new Error("Conditional publication fence differs.");
+          const result=JSON.stringify({protocol:"clank-provider-handoff-placement-committed/1",handoffId:binding.handoffId,targetId:active.targetId,containerId:active.containerId,capsuleSha256:active.capsuleSha256,nodeId:active.nodeId,releaseId:active.releaseId,generation:active.generation,pid:active.pid,birth:active.birth});
+          const committedHandoff={...reservation,state:"committed",version:Number(reservation.version)+1,result_json:result,updated_at:now},committedPlacement={...placement,assigned_node_id:targetNode.id,generation:targetGeneration,observed_release_id:release.id,observed_state:"running",observed_generation:targetGeneration,updated_at:now};
+          const journal=JSON.stringify({protocol:"clank-provider-conditional-recovery/1",controlIdentity:conditionalControl().identity,reservation,placement,committedHandoff,committedPlacement,stoppedPlacement:{...committedPlacement,observed_release_id:null,observed_state:"stopped"},fence,now,platform:{identity:{projectId,releaseId:release.id,sourceGeneration,targetGeneration,sourceNodeId:sourceNode.id,targetNodeId:targetNode.id,sourceOrigin,targetOrigin,targetCapsuleSha256:capsule.sha256},projectBefore:expectedProject,releaseBefore:expectedRelease,sourceGeneration:expectedSource,projectAfter:JSON.stringify({...JSON.parse(expectedProject),active_generation:targetGeneration,provider_node_id:targetNode.id,provider_origin:targetOrigin}),releaseAfter:JSON.stringify({...JSON.parse(expectedRelease),provider_generation:targetGeneration}),targetGeneration:JSON.stringify({...JSON.parse(expectedSource),generation:targetGeneration,database_mode:"preserve",restore_backup_id:null,restore_database_sha256:null,restore_database_bytes:null,safety_backup_id:null,recovery_kind:null,recovery_source_node_id:null,created_at:now})},native:evidence});
+          if(Buffer.byteLength(journal)>524288)throw new Error("Conditional publication journal exceeds its bound.");conditionalTime=now;return Object.freeze({journal,authentication:conditionalSign(journal)});
+        },
+        commit(active:import("./provider-target-stage.ts").ProviderActivatedTarget){
+          check();targetModule.assertProviderActivatedTarget(active);
+          if(active.projectId!==projectId||active.releaseId!==release.id||active.nodeId!==targetNode.id||active.generation!==targetGeneration||active.capsuleSha256!==capsule.sha256)throw new Error("Original platform commit requires its approved native target.");
+          if(committed)return;
+          const now=conditionalTime??Date.now();
+          if(storage.internal.prepare("INSERT INTO clank_platform_provider_generations(project_id,generation,release_id,encrypted_environment,database_mode,created_at) VALUES(?,?,?,?,'preserve',?)").run(projectId,targetGeneration,release.id,generation.encryptedEnvironment,now).changes!==1)throw new Error("Original platform target generation was not retained.");
+          if(storage.internal.prepare("UPDATE clank_platform_releases SET provider_generation=? WHERE id=? AND project_id=? AND provider_generation=? AND status='active'").run(targetGeneration,release.id,projectId,sourceGeneration).changes!==1)throw new Error("Original platform release generation compare-and-set failed.");
+          if(storage.internal.prepare("UPDATE clank_platform_projects SET active_generation=?,provider_node_id=?,provider_origin=?,updated_at=? WHERE id=? AND placement='provider' AND active_release_id=? AND active_generation=? AND provider_node_id=? AND provider_origin=?").run(targetGeneration,targetNode.id,targetOrigin,now,projectId,release.id,sourceGeneration,sourceNode.id,sourceOrigin).changes!==1)throw new Error("Original platform route compare-and-set failed.");
+          const wantedProject=JSON.stringify({...JSON.parse(expectedProject),active_generation:targetGeneration,provider_node_id:targetNode.id,provider_origin:targetOrigin});
+          const wantedRelease=JSON.stringify({...JSON.parse(expectedRelease),provider_generation:targetGeneration});
+          const wantedGeneration=JSON.stringify({...JSON.parse(expectedSource),generation:targetGeneration,database_mode:"preserve",restore_backup_id:null,restore_database_sha256:null,restore_database_bytes:null,safety_backup_id:null,recovery_kind:null,recovery_source_node_id:null,created_at:now});
+          if(projectImage()!==wantedProject||releaseImage()!==wantedRelease||generationImage(targetGeneration)!==wantedGeneration)throw new Error("Original platform handoff route readback differs.");
+          pending={project:wantedProject,release:wantedRelease,generation:wantedGeneration};
+        },
+        accept(){if(committed){check();return;}if(!pending||projectImage()!==pending.project||releaseImage()!==pending.release||generationImage(targetGeneration)!==pending.generation)throw new Error("Original platform handoff commit was not confirmed.");expectedProject=pending.project;expectedRelease=pending.release;committed=true;check();},
+      });
+      return {capsule,participant};
+    }finally{sourceCapsule.bytes.fill(0);}
+  }});
+  const fallbackSign = (journal: string) => (globalThis as any).process.getBuiltinModule("node:crypto").createHmac("sha256", masterKey).update("clank-provider-fallback/1\n").update(journal).digest("hex");
+  storage.internal.exec("CREATE TABLE IF NOT EXISTS clank_platform_fallback_successors (predecessor_id TEXT PRIMARY KEY, successor_id TEXT NOT NULL UNIQUE, project_id TEXT NOT NULL, journal TEXT NOT NULL, authentication TEXT NOT NULL)");
+  storage.internal.exec("CREATE TABLE IF NOT EXISTS clank_platform_fallback_resume_records (resume_id TEXT NOT NULL, predecessor_id TEXT NOT NULL, project_id TEXT NOT NULL, attempt INTEGER NOT NULL, revision INTEGER NOT NULL, phase TEXT NOT NULL, journal TEXT NOT NULL, authentication TEXT NOT NULL, PRIMARY KEY(resume_id,revision), UNIQUE(predecessor_id,attempt,revision))");
+  storage.internal.exec("CREATE TABLE IF NOT EXISTS clank_platform_fallback_resume_heads (resume_id TEXT PRIMARY KEY, predecessor_id TEXT NOT NULL, project_id TEXT NOT NULL, attempt INTEGER NOT NULL, revision INTEGER NOT NULL, phase TEXT NOT NULL, authentication TEXT NOT NULL, UNIQUE(predecessor_id,attempt))");
+  const fallbackResumeSign = (journal: string) => (globalThis as any).process.getBuiltinModule("node:crypto").createHmac("sha256", masterKey).update("clank-provider-fallback-resume-attempt/1\n").update(journal).digest("hex");
+  const fallbackSuccessorSign = (journal: string) => (globalThis as any).process.getBuiltinModule("node:crypto").createHmac("sha256", masterKey).update("clank-provider-fallback-successor/1\n").update(journal).digest("hex");
+  const fallbackInitialAttempt = (identity: Readonly<Record<string, string | number>>) => "evac_"+syncHash(JSON.stringify([identity.planId,identity.projectId,identity.releaseId,identity.generation]));
+  const fallbackNextAttempt = (operationId: string) => "evac_"+syncHash(JSON.stringify(["clank-provider-fallback-successor/1",operationId]));
+  const assertFallbackAttempt = (scope: LocalFallbackScope, operationId: string) => {
+    scope.check();
+    const plan=storage.internal.prepare("SELECT projects FROM clank_platform_evacuations WHERE id=?").get(scope.identity.planId),projects=JSON.parse(String(plan?.projects)),item=projects.find((row:EvacuationProject)=>row.projectId===scope.identity.projectId);
+    const first=fallbackInitialAttempt(scope.identity),head=item?.fallbackAttemptId??first;
+    if(!item||item.releaseId!==scope.identity.releaseId||item.generation!==scope.identity.generation||head!==operationId)throw new Error("Fallback attempt differs from the exact current plan head.");
+    const seen=new Set<string>();let current=first,expectedTarget:string|undefined;
+    for(let count=0;current!==head;count++){
+      if(count>=31||seen.has(current))throw new Error("Fallback successor history is cyclic or exhausted.");seen.add(current);
+      const row=storage.internal.prepare("SELECT * FROM clank_platform_fallback_successors WHERE predecessor_id=?").get(current);
+      if(!row||typeof row.journal!=="string"||Buffer.byteLength(row.journal)>1048576||fallbackSuccessorSign(row.journal)!==row.authentication)throw new Error("Fallback successor authentication differs.");
+      const link=JSON.parse(row.journal),old=storage.internal.prepare("SELECT journal,authentication FROM clank_deployment_fallback_journals WHERE operation_id=?").get(current);
+      if(link.protocol!=="clank-provider-fallback-successor/1"||JSON.stringify(link.controlIdentity)!==JSON.stringify(conditionalControl().identity)||link.predecessorId!==current||link.successorId!==row.successor_id||row.successor_id!==fallbackNextAttempt(current)||row.project_id!==scope.identity.projectId
+        ||!old||typeof old.journal!=="string"||fallbackSign(old.journal)!==old.authentication||syncHash(old.journal)!==link.predecessorJournalSha256||old.authentication!==link.predecessorAuthentication
+        ||JSON.stringify(storage.internal.prepare("SELECT * FROM clank_deployment_handoffs WHERE handoff_id=?").get(current))!==link.cancelledReservation)throw new Error("Fallback successor predecessor identity changed.");
+      for(const key of ["protocol","planId","sourceNodeId","projectId","releaseId","generation","requestedBy","createdAt"])if(link.identity?.[key]!==scope.identity[key])throw new Error("Fallback successor original plan identity changed.");
+      const previous=JSON.parse(old.journal),bound=previous.platform?.evacuation;
+      if(!["reserved","stopping","stopped"].includes(previous.phase)||previous.identity.operationId!==current||previous.identity.sourceNodeId!==scope.identity.sourceNodeId||previous.identity.projectId!==scope.identity.projectId||previous.identity.releaseId!==scope.identity.releaseId||previous.identity.sourceGeneration!==scope.identity.generation
+        ||JSON.stringify(previous.cancelledReservation)!==link.cancelledReservation||syncHash(JSON.stringify(previous.source))!==link.originalSourceSha256||JSON.stringify(previous.endpointBindings)!==link.endpointBindings||bound?.projectsBefore!==link.projectsBefore)throw new Error("Fallback successor original native predecessor differs.");
+      const expected=JSON.stringify((JSON.parse(link.projectsBefore) as EvacuationProject[]).map(project=>project.projectId===scope.identity.projectId?{...project,fallbackAttemptId:link.successorId}:project));
+      if(link.projectsAfter!==expected)throw new Error("Fallback successor plan afterimage differs.");
+      if(expectedTarget&&expectedTarget!==previous.identity.targetNodeId)throw new Error("Fallback successor target identity changed within its chain.");expectedTarget=previous.identity.targetNodeId;
+      current=String(row.successor_id);
+    }
+    if(storage.internal.prepare("SELECT predecessor_id FROM clank_platform_fallback_successors WHERE predecessor_id=?").get(head))throw new Error("Fallback plan head is behind its signed successor.");
+    scope.check();return expectedTarget;
+  };
+  const fallbackProject = (id: string) => JSON.stringify(storage.internal.prepare("SELECT placement,active_release_id,active_generation,provider_origin,provider_node_id,provider_canary_epoch,runtime_policy,database_path,organization_id,owner_id FROM clank_platform_projects WHERE id=?").get(id));
+  const fallbackRelease = (id: string) => JSON.stringify(storage.internal.prepare("SELECT project_id,status,purpose,digest,provider_generation,config,artifact_available,directory,runner_artifact_store,runner_artifact_key FROM clank_platform_releases WHERE id=?").get(id));
+  const fallbackGeneration = (id: string, n: number) => JSON.stringify(storage.internal.prepare("SELECT * FROM clank_platform_provider_generations WHERE project_id=? AND generation=?").get(id, n));
+  const applyFallbackImages = (p: Record<string, any>) => {
+    const id = p.identity.projectId, release = p.identity.releaseId, g = JSON.parse(p.targetGeneration);
+    if (fallbackProject(id) !== p.projectBefore || fallbackRelease(release) !== p.releaseBefore || fallbackGeneration(id, p.identity.sourceGeneration) !== p.sourceGeneration || fallbackGeneration(id, p.identity.targetGeneration) !== undefined) throw new Error("Fallback platform preimage changed.");
+    if (storage.internal.prepare("INSERT INTO clank_platform_provider_generations(project_id,generation,release_id,encrypted_environment,database_mode,restore_backup_id,restore_database_sha256,restore_database_bytes,safety_backup_id,recovery_kind,recovery_source_node_id,created_at) VALUES(?,?,?,?,'replace',?,?,?,NULL,'failover',?,?)")
+      .run(id,g.generation,release,g.encrypted_environment,g.restore_backup_id,g.restore_database_sha256,g.restore_database_bytes,g.recovery_source_node_id,g.created_at).changes !== 1
+      || storage.internal.prepare("UPDATE clank_platform_releases SET provider_generation=? WHERE id=? AND provider_generation=?").run(g.generation,release,p.identity.sourceGeneration).changes !== 1
+      || storage.internal.prepare("UPDATE clank_platform_projects SET active_generation=?,provider_node_id=?,provider_origin=?,updated_at=? WHERE id=? AND active_generation=?").run(g.generation,p.identity.targetNodeId,p.identity.targetOrigin,g.created_at,id,p.identity.sourceGeneration).changes !== 1) throw new Error("Fallback platform publication failed.");
+    if (fallbackProject(id) !== p.projectAfter || fallbackRelease(release) !== p.releaseAfter || fallbackGeneration(id,g.generation) !== p.targetGeneration) throw new Error("Fallback platform publication readback differs.");
+    if(p.evacuation){
+      const bound=p.evacuation;
+      if(typeof bound.projectsStopped!=="string"||storage.internal.prepare("UPDATE clank_platform_evacuations SET projects=? WHERE id=? AND projects=? AND state='running' AND lease_id=? AND lease_until>?").run(bound.projectsStopped,bound.identity.planId,bound.projectsBefore,(localFallbackScope.getStore() as LocalFallbackScope).identity.executionLeaseId,Date.now()).changes!==1)throw new Error("Fallback plan progress compare-and-set failed.");
+    }
+  };
+  platformFallbacks.set(runtime, {
+    coldStoppedResume(journal, authentication) {
+      // This selector intentionally yields no platform write/API capability. It
+      // proves a durable STOPPED attempt against the current control catalog so
+      // a later recovery-only coordinator can decide whether native cleanup is
+      // safe before ordinary startup.
+      if (typeof journal !== "string" || Buffer.byteLength(journal) > 524288 || typeof authentication !== "string" || !/^[a-f0-9]{64}$/u.test(authentication) || fallbackSign(journal) !== authentication)
+        throw new Error("Cold fallback resume predecessor authentication differs.");
+      const input = JSON.parse(journal), p = input.platform, operationId = input.identity.operationId, projectId = p.identity.projectId;
+      if (input.protocol !== "clank-provider-fallback/1" || JSON.stringify(input.controlIdentity) !== JSON.stringify(conditionalControl().identity))
+        throw new Error("Cold fallback resume control identity differs.");
+      const retained = storage.internal.prepare("SELECT journal,authentication FROM clank_deployment_fallback_journals WHERE operation_id=?").get(operationId);
+      if (!retained || retained.journal !== journal || retained.authentication !== authentication || fallbackSign(journal) !== authentication)
+        throw new Error("Cold fallback resume predecessor journal is not the retained authenticated operation.");
+      const bound = p.evacuation;
+      let authority: ReturnType<PlatformFallbackContext["recovery"]>;
+      if (bound) {
+        checkFallbackEvacuation(bound, projectId, true);
+        // Reuse the plan-chain verifier with an internally constructed scope;
+        // no caller scope or serialized selector participates in this check.
+        const planScope = { identity: bound.identity, check: conditionalCurrent } as LocalFallbackScope;
+        assertFallbackAttempt(planScope, operationId);
+        const plan = storage.internal.prepare("SELECT projects FROM clank_platform_evacuations WHERE id=?").get(bound.identity.planId);
+        if (plan?.projects !== bound.projectsStopped) throw new Error("Cold fallback resume requires the exact signed STOPPED evacuation image.");
+        authority = localFallbackScope.run(planScope, () => platformFallbacks.get(runtime)!.recovery(journal, authentication));
+      } else {
+        requireNoEvacuation(projectId);
+        authority = platformFallbacks.get(runtime)!.recovery(journal, authentication);
+      }
+      authority.cleanupCheck();
+
+      // Check aggregate limits with scalar SQL before materializing any record
+      // journal strings. Individual 1 MiB limits alone permit an attacker to
+      // force gigabytes through the synchronous SQLite adapter.
+      const budget = storage.internal.prepare(`SELECT
+        (SELECT COUNT(*) FROM clank_platform_fallback_resume_heads WHERE predecessor_id=?) AS heads,
+        (SELECT COUNT(*) FROM clank_platform_fallback_resume_records WHERE predecessor_id=?) AS records,
+        COALESCE((SELECT SUM(LENGTH(journal)) FROM clank_platform_fallback_resume_records WHERE predecessor_id=?),0) AS bytes`).get(operationId, operationId, operationId);
+      const headCount = Number(budget?.heads), recordCount = Number(budget?.records), journalBytes = Number(budget?.bytes);
+      if (!Number.isSafeInteger(headCount) || headCount < 1 || headCount > 32 || !Number.isSafeInteger(recordCount) || recordCount < 1 || recordCount > 192
+        || !Number.isSafeInteger(journalBytes) || journalBytes < 1 || journalBytes > 64 * 1024 * 1024)
+        throw new Error("Cold fallback resume chain exceeds its aggregate head, record, or byte budget.");
+      const heads = storage.internal.prepare("SELECT * FROM clank_platform_fallback_resume_heads WHERE predecessor_id=? ORDER BY attempt").all(operationId);
+      if (heads.length !== headCount) throw new Error("Cold fallback resume head count changed after preflight.");
+      if (storage.internal.prepare("SELECT resume_id FROM clank_platform_fallback_resume_records WHERE predecessor_id=? AND resume_id NOT IN (SELECT resume_id FROM clank_platform_fallback_resume_heads WHERE predecessor_id=?) LIMIT 1").get(operationId, operationId))
+        throw new Error("Cold fallback resume contains an unaffiliated journal record.");
+      type ResumeRow = Record<string, any>;
+      const allowed: Record<string, readonly string[]> = { planned: ["claimed", "stopped"], claimed: ["staged", "stopped"], staged: ["running", "stopped"], running: ["published", "stopped"], published: ["stopped"], stopped: [] };
+      let selected: PlatformColdFallbackResumeSelection | undefined;
+      for (let index = 0; index < heads.length; index++) {
+        const head = heads[index] as ResumeRow, attempt = index + 1;
+        if (Number(head.attempt) !== attempt || head.predecessor_id !== operationId || head.project_id !== projectId || head.resume_id !== "fallback_resume_" + operationId + "_" + attempt
+          || !Number.isSafeInteger(head.revision) || Number(head.revision) < 1 || Number(head.revision) > 128)
+          throw new Error("Cold fallback resume attempt head identity or sequence differs.");
+        const rows = storage.internal.prepare("SELECT * FROM clank_platform_fallback_resume_records WHERE resume_id=? ORDER BY revision").all(head.resume_id) as ResumeRow[];
+        if (rows.length !== Number(head.revision)) throw new Error("Cold fallback resume journal has a missing revision.");
+        let previous: ResumeRow | undefined;
+        for (let revision = 1; revision <= rows.length; revision++) {
+          const row = rows[revision - 1]!, body = row.journal;
+          if (row.revision !== revision || row.predecessor_id !== operationId || row.project_id !== projectId || row.attempt !== attempt || typeof body !== "string" || Buffer.byteLength(body) > 1048576
+            || typeof row.authentication !== "string" || !/^[a-f0-9]{64}$/u.test(row.authentication) || fallbackResumeSign(body) !== row.authentication)
+            throw new Error("Cold fallback resume revision authentication or link differs.");
+          const record = JSON.parse(body);
+          if (record.protocol !== "clank-provider-fallback-resume-attempt/1" || record.controlIdentity === undefined || JSON.stringify(record.controlIdentity) !== JSON.stringify(conditionalControl().identity)
+            || record.resumeId !== head.resume_id || record.predecessorId !== operationId || record.predecessorJournalSha256 !== syncHash(journal) || record.predecessorAuthentication !== authentication
+            || record.projectId !== projectId || record.attempt !== attempt || record.revision !== revision || record.phase !== row.phase
+            || JSON.stringify(record.identity) !== JSON.stringify(input.identity) || JSON.stringify(record.endpointBindings) !== JSON.stringify(input.endpointBindings)
+            || JSON.stringify(record.evacuation) !== JSON.stringify(bound) || !["source", "target"].includes(record.selected)
+            || !Number.isSafeInteger(record.initialFence) || record.initialFence < 0 || typeof record.initialPlacement !== "string"
+            || record.nodeId !== (record.selected === "source" ? input.identity.sourceNodeId : input.identity.targetNodeId)
+            || record.generation !== (record.selected === "source" ? input.identity.sourceGeneration : input.identity.targetGeneration)
+            || JSON.stringify(record.desired) !== JSON.stringify({ releaseId: input.identity.releaseId, generation: record.generation, state: "running", runtimeProtocol: "clank-runtime/1" })
+            || record.capsuleSha256 !== (record.selected === "source" ? input.source?.capsuleSha256 : input.capsuleSha256)
+            || !/^[0-9]{1,24}$/u.test(String(record.deadline)))
+            throw new Error("Cold fallback resume signed identity differs from its predecessor.");
+          if (revision === 1 ? record.phase !== "planned" || record.previousAuthentication !== null
+            : !previous || !allowed[previous.phase]?.includes(record.phase) || record.previousAuthentication !== previous.authentication)
+            throw new Error("Cold fallback resume revision link or phase transition differs.");
+          previous = { ...record, authentication: row.authentication, journal: body };
+        }
+        const last = previous!;
+        if (head.revision !== rows.length || head.phase !== last.phase || head.authentication !== last.authentication)
+          throw new Error("Cold fallback resume head does not match its authenticated revision chain.");
+        if (index < heads.length - 1 && last.phase !== "stopped") throw new Error("Cold fallback resume attempt predecessor has not settled STOPPED.");
+        if (index === heads.length - 1) {
+          const settlement = last.settlement;
+          if (last.phase !== "stopped" || !settlement || typeof settlement.placement !== "string" || !Object.hasOwn(settlement, "operation"))
+            throw new Error("Cold fallback resume latest attempt is not an exact STOPPED settlement.");
+          const placement = storage.internal.prepare("SELECT * FROM clank_deployment_placements WHERE project_id=?").get(projectId);
+          if (JSON.stringify(placement) !== settlement.placement || placement?.project_id !== projectId || placement.observed_state !== "stopped" || placement.observed_release_id !== null)
+            throw new Error("Cold fallback resume STOPPED placement image changed.");
+          const fence = Number(storage.internal.prepare("SELECT fence FROM clank_deployment_project_fences WHERE project_id=?").get(projectId)?.fence ?? 0);
+          if (fence !== last.fence || !Number.isSafeInteger(last.fence) || last.fence < last.initialFence) throw new Error("Cold fallback resume STOPPED fence differs.");
+          const op = last.operation ? JSON.parse(last.operation) as ResumeRow : undefined;
+          if (op && (op.project_id !== projectId || op.node_id !== last.nodeId || op.action !== "reconcile" || op.idempotency_key !== last.resumeId || op.payload !== JSON.stringify(last.desired)))
+            throw new Error("Cold fallback resume operation binding differs.");
+          const currentOperation = storage.internal.prepare("SELECT * FROM clank_deployment_operations WHERE idempotency_key=? AND project_id=?").get(last.resumeId, projectId);
+          if (settlement.operation === null ? currentOperation !== undefined : !currentOperation || JSON.stringify(currentOperation) !== settlement.operation || !op || currentOperation.id !== op.id)
+            throw new Error("Cold fallback resume STOPPED operation afterimage changed.");
+          if (currentOperation && (!['cancelled', 'succeeded'].includes(String(currentOperation.state)) || currentOperation.lease_token_hash !== null || currentOperation.lease_expires_at !== null))
+            throw new Error("Cold fallback resume operation is not canonically settled.");
+          if (storage.internal.prepare("SELECT id FROM clank_deployment_operations WHERE project_id=? AND state IN ('queued','retry','leased')").get(projectId))
+            throw new Error("Cold fallback resume found competing pending project work.");
+          selected = Object.freeze({ predecessorJournal: journal, predecessorAuthentication: authentication, resumeJournal: last.journal, resumeAuthentication: last.authentication,
+            resumeId: last.resumeId, revision: last.revision, projectId, operationId, attempt });
+        }
+      }
+      if (!selected) throw new Error("Cold fallback resume selection is absent.");
+      const token = Object.freeze({});
+      const snapshot = selected;
+      const selectionRuntime = runtime;
+      const checkSelection = () => {
+        const refreshed = platformFallbacks.get(runtime)!.coldStoppedResume(journal, authentication);
+        const current = platformColdFallbackResumeSelections.get(refreshed);
+        if (!current || current.resumeId !== snapshot.resumeId || current.resumeAuthentication !== snapshot.resumeAuthentication || current.resumeJournal !== snapshot.resumeJournal
+          || current.projectId !== snapshot.projectId || current.operationId !== snapshot.operationId || current.attempt !== snapshot.attempt || current.revision !== snapshot.revision)
+          throw new Error("Cold fallback resume selection changed after admission.");
+      };
+      platformColdFallbackResumeSelections.set(token, Object.freeze({ ...selected, runtime: selectionRuntime, check: checkSelection }));
+      return token;
+    },
+    coldStoppedResumeCounterpart(token, owner, root) {
+      const selected = platformColdFallbackResumeSelections.get(token);
+      if (!selected || selected.runtime !== runtime) throw new Error("A genuine original platform cold STOPPED resume selection is required.");
+      selected.check();
+      const predecessor = JSON.parse(selected.predecessorJournal);
+      const resume = JSON.parse(selected.resumeJournal);
+      const side = resume.selected === "source" ? "target" : resume.selected === "target" ? "source" : undefined;
+      const endpoint = side ? predecessor.endpointBindings?.[side] : undefined;
+      const nativePath = (globalThis as any).process.getBuiltinModule("node:path");
+      if (!side || !endpoint || endpoint.protocol !== "clank-provider-fallback-endpoint/1" || typeof owner !== "string" || typeof root !== "string"
+        || owner !== endpoint.owner || root !== endpoint.root || owner === resume.intent?.owner || !nativePath.isAbsolute(root) || nativePath.resolve(root) !== root
+        || typeof endpoint.daemonId !== "string" || !endpoint.daemonId || typeof endpoint.serviceDirectory !== "string" || !Array.isArray(endpoint.paths))
+        throw new Error("Cold fallback counterpart identity is not the exact signed opposite endpoint.");
+      const endpointIdentity = JSON.stringify(endpoint);
+      const snapshot = Object.freeze({ protocol: "clank-platform-cold-fallback-counterpart/1" as const, owner, root, projectId: selected.projectId,
+        operationId: selected.operationId, resumeId: selected.resumeId, revision: selected.revision, side, daemonId: endpoint.daemonId, endpointIdentity });
+      const admitted = Object.freeze({});
+      const check = () => {
+        selected.check();
+        const current = platformColdFallbackResumeSelections.get(token);
+        if (!current || current.runtime !== runtime) throw new Error("Cold fallback counterpart platform runtime changed.");
+        const currentPredecessor = JSON.parse(current.predecessorJournal), currentResume = JSON.parse(current.resumeJournal);
+        const currentSide = currentResume.selected === "source" ? "target" : currentResume.selected === "target" ? "source" : undefined;
+        const currentEndpoint = currentSide ? currentPredecessor.endpointBindings?.[currentSide] : undefined;
+        if (currentSide !== snapshot.side || !currentEndpoint || JSON.stringify(currentEndpoint) !== snapshot.endpointIdentity
+          || currentEndpoint.owner !== snapshot.owner || currentEndpoint.root !== snapshot.root || current.projectId !== snapshot.projectId
+          || current.operationId !== snapshot.operationId || current.resumeId !== snapshot.resumeId || current.revision !== snapshot.revision)
+          throw new Error("Cold fallback counterpart admission changed after authentication.");
+      };
+      platformColdFallbackNoSweepSelections.set(admitted, Object.freeze({ ...snapshot, check }));
+      return admitted;
+    },
+    recovery(journal, authentication) {
+      conditionalCurrent();
+      if (typeof journal !== "string" || Buffer.byteLength(journal) > 524288 || typeof authentication !== "string" || !/^[a-f0-9]{64}$/u.test(authentication) || fallbackSign(journal) !== authentication) throw new Error("Fallback coordinator authentication differs.");
+      const input = JSON.parse(journal);
+      if (input.protocol !== "clank-provider-fallback/1" || !["reserved","stopping","stopped","launching","prepared"].includes(input.phase) || JSON.stringify(input.controlIdentity) !== JSON.stringify(conditionalControl().identity)) throw new Error("Fallback coordinator native database identity differs.");
+      const p = input.platform, id = p.identity.projectId;
+      const check = (cleanup = false) => {
+        conditionalCurrent(); requireNoProviderCanary(id); checkFallbackEvacuation(p.evacuation,id,cleanup); requireNoInterruptedPromotion(id);
+        if(storage.internal.prepare("SELECT predecessor_id FROM clank_platform_fallback_successors WHERE predecessor_id=?").get(input.identity.operationId))throw new Error("Fallback predecessor has advanced to its signed successor.");
+        if(!cleanup&&p.evacuation)assertFallbackAttempt(localFallbackScope.getStore() as LocalFallbackScope,input.identity.operationId);
+        const before = fallbackProject(id) === p.projectBefore && fallbackRelease(p.identity.releaseId) === p.releaseBefore && fallbackGeneration(id,p.identity.targetGeneration) === undefined;
+        const after = ["launching","prepared"].includes(input.phase) && fallbackProject(id) === p.projectAfter && fallbackRelease(p.identity.releaseId) === p.releaseAfter && fallbackGeneration(id,p.identity.targetGeneration) === p.targetGeneration;
+        if ((!before && !after) || fallbackGeneration(id,p.identity.sourceGeneration) !== p.sourceGeneration) throw new Error("Fallback recovery platform images changed.");
+      };
+      type ResumeRecord = import("./provider-fallback-coordinator.ts").ProviderFallbackResumeRecord;
+      let terminal: { permit: object; result: ResumeRecord; scope: LocalFallbackScope; images: string; projects: string } | undefined;
+      const terminalImages = () => JSON.stringify({
+        project: fallbackProject(id), release: fallbackRelease(p.identity.releaseId), sourceGeneration: fallbackGeneration(id,p.identity.sourceGeneration), targetGeneration: fallbackGeneration(id,p.identity.targetGeneration),
+        placement: storage.internal.prepare("SELECT * FROM clank_deployment_placements WHERE project_id=?").get(id), fence: storage.internal.prepare("SELECT * FROM clank_deployment_project_fences WHERE project_id=?").get(id),
+        operations: storage.internal.prepare("SELECT * FROM clank_deployment_operations WHERE project_id=? ORDER BY id").all(id), handoff: storage.internal.prepare("SELECT * FROM clank_deployment_handoffs WHERE handoff_id=?").get(input.identity.operationId),
+        successor: storage.internal.prepare("SELECT * FROM clank_platform_fallback_successors WHERE predecessor_id=?").get(input.identity.operationId),
+        nodes: [input.identity.sourceNodeId,input.identity.targetNodeId].map(node=>storage.internal.prepare("SELECT id,region,endpoint,capacity,labels,token_hash FROM clank_deployment_nodes WHERE id=?").get(node)),
+        plan: p.evacuation ? storage.internal.prepare("SELECT id,node_id,requested_by,created_at,projects,lease_id FROM clank_platform_evacuations WHERE id=?").get(p.evacuation.identity.planId) : undefined,
+      });
+      const terminalCheck = (permit: object, cleanup = false) => {
+        if (!terminal || terminal.permit !== permit) throw new Error("A genuine published resume terminal capability is required.");
+        conditionalCurrent();
+        if (!cleanup) { if (localFallbackScope.getStore() !== terminal.scope) throw new Error("Resume terminal execution scope differs."); terminal.scope.check(); }
+        const result=terminal.result, head=storage.internal.prepare("SELECT revision,phase,authentication FROM clank_platform_fallback_resume_heads WHERE resume_id=?").get(result.resumeId), retained=storage.internal.prepare("SELECT journal,authentication FROM clank_platform_fallback_resume_records WHERE resume_id=? AND revision=?").get(result.resumeId,result.revision);
+        if (terminalImages()!==terminal.images || head?.revision!==result.revision || head.phase!=="published" || head.authentication!==result.authentication || retained?.journal!==result.journal || retained.authentication!==result.authentication || fallbackResumeSign(result.journal)!==result.authentication) throw new Error("Resume terminal catalog afterimages changed.");
+      };
+      const prepareResumeWrite = (permit: object, publication?: string) => {
+        const held=providerFallbackResumeJournalContext(permit,authority),d=held.data,previous=held.previous;
+        conditionalCurrent();
+        if(d.predecessorId!==input.identity.operationId||d.predecessorJournalSha256!==syncHash(journal)||d.predecessorAuthentication!==authentication||d.projectId!==id||!["source","target"].includes(d.selected)||!Number.isSafeInteger(d.attempt)||d.attempt<1||d.attempt>32
+          ||d.resumeId!=="fallback_resume_"+input.identity.operationId+"_"+d.attempt||d.deadline===undefined||!/^[0-9]{1,24}$/u.test(d.deadline))throw new Error("Resume journal differs from its original fallback authority.");
+        const phase=d.phase as import("./provider-fallback-coordinator.ts").ProviderFallbackResumePhase;
+        const allowed:Record<string,readonly string[]>={planned:["claimed","stopped"],claimed:["staged","stopped"],staged:["running","stopped"],running:["published","stopped"],published:["stopped"],stopped:[]};
+        if(!previous&&phase!=="planned"||previous&&(!allowed[previous.phase]?.includes(phase)||previous.resumeId!==d.resumeId)||phase==="published"&&typeof publication!=="string")throw new Error("Resume journal phase transition differs.");
+        if(previous&&fallbackResumeSign(previous.journal)!==previous.authentication)throw new Error("Resume journal predecessor authentication differs.");
+        const revision=(previous?.revision??0)+1,record=JSON.stringify({...d,protocol:"clank-provider-fallback-resume-attempt/1",controlIdentity:conditionalControl().identity,predecessorId:input.identity.operationId,predecessorJournalSha256:syncHash(journal),predecessorAuthentication:authentication,identity:input.identity,endpointBindings:input.endpointBindings,evacuation:p.evacuation,revision,previousAuthentication:previous?.authentication??null,...(publication===undefined?{}:{publication})});
+        if(Buffer.byteLength(record)>1048576)throw new Error("Resume journal exceeds its native evidence bound.");
+        const signed=fallbackResumeSign(record),result=Object.freeze({resumeId:String(d.resumeId),revision,phase,journal:record,authentication:signed});
+        const readback=()=>{const row=storage.internal.prepare("SELECT * FROM clank_platform_fallback_resume_records WHERE resume_id=? AND revision=?").get(d.resumeId,revision),head=storage.internal.prepare("SELECT * FROM clank_platform_fallback_resume_heads WHERE resume_id=?").get(d.resumeId);return row?.journal===record&&row.authentication===signed&&head?.revision===revision&&head.authentication===signed&&head.phase===phase;};
+        const insert=()=>{
+          held.check();conditionalCurrent();
+          const head=storage.internal.prepare("SELECT * FROM clank_platform_fallback_resume_heads WHERE resume_id=?").get(d.resumeId);
+          if(previous?head?.revision!==previous.revision||head.authentication!==previous.authentication||head.phase!==previous.phase:head!==undefined)throw new Error("Resume journal head changed.");
+          if(!previous){const last=storage.internal.prepare("SELECT attempt,phase FROM clank_platform_fallback_resume_heads WHERE predecessor_id=? ORDER BY attempt DESC LIMIT 1").get(input.identity.operationId);if(d.attempt!==Number(last?.attempt??0)+1||last&&last.phase!=="stopped")throw new Error("Resume attempt predecessor has not settled STOPPED.");}
+          if(storage.internal.prepare("INSERT INTO clank_platform_fallback_resume_records VALUES(?,?,?,?,?,?,?,?)").run(d.resumeId,input.identity.operationId,id,d.attempt,revision,phase,record,signed).changes!==1)throw new Error("Resume journal revision was not appended.");
+          if(previous){if(storage.internal.prepare("UPDATE clank_platform_fallback_resume_heads SET revision=?,phase=?,authentication=? WHERE resume_id=? AND revision=? AND authentication=?").run(revision,phase,signed,d.resumeId,previous.revision,previous.authentication).changes!==1)throw new Error("Resume journal head compare-and-set failed.");}
+          else if(storage.internal.prepare("INSERT INTO clank_platform_fallback_resume_heads VALUES(?,?,?,?,?,?,?)").run(d.resumeId,input.identity.operationId,id,d.attempt,revision,phase,signed).changes!==1)throw new Error("Resume journal head was not retained.");
+          if(!readback())throw new Error("Resume journal readback differs.");
+        };
+        return {result,insert,readback};
+      };
+      check(); const authority = Object.freeze({ orchestrator: nativeOrchestrator, check:()=>check(), recordResume(permit:object){const write=prepareResumeWrite(permit);try{storage.internal.transaction(()=>write.insert());}catch(error){if(!write.readback())throw error;}return write.result;}, resumeTerminal(permit:object){if(!terminal||terminal.permit!==permit)throw new Error("A genuine published resume terminal capability is required.");return terminal.result;},checkResumeTerminal:terminalCheck, cleanupCheck:()=>{check(true);const early=["reserved","stopping","stopped"].includes(input.phase);if(fallbackProject(id)!==(early?p.projectBefore:p.projectAfter)||fallbackRelease(p.identity.releaseId)!==(early?p.releaseBefore:p.releaseAfter)||fallbackGeneration(id,p.identity.targetGeneration)!==(early?undefined:p.targetGeneration))throw new Error("Fallback resume requires its exact selected platform images.");}, apply(permit: object) { assertProviderFallbackSettlement(permit,authority); const resumeJournal=providerFallbackResumeSettlementJournal(permit,authority),write=resumeJournal?prepareResumeWrite(resumeJournal):undefined;
+          if(terminal){terminalCheck(terminal.permit,true);if(!write||write.result.phase!=="stopped")throw new Error("Published resume settlement requires its signed STOPPED revision.");write.insert();if(p.evacuation&&!["stopping","stopped"].includes(input.phase)&&storage.internal.prepare("UPDATE clank_platform_evacuations SET projects=? WHERE id=? AND projects=?").run(p.evacuation.projectsStopped,p.evacuation.identity.planId,terminal.projects).changes!==1)throw new Error("Terminal resume STOPPED plan changed.");return write.result;}
+          check(true);write?.insert(); if (["stopping","stopped"].includes(input.phase)) return write?.result; if (!["launching","prepared"].includes(input.phase)) throw new Error("Untouched fallback source cannot publish a target generation."); if (fallbackProject(id) === p.projectBefore) applyFallbackImages(p);if(p.evacuation){const bound=p.evacuation;storage.internal.prepare("UPDATE clank_platform_evacuations SET projects=? WHERE id=? AND projects=?").run(bound.projectsStopped,bound.identity.planId,bound.projectsRunning);} check(true);return write?.result; },
+        async api(request:Request){check();if(!deploymentCoordinator)throw new Error("Original fallback runner API is unavailable.");const response=await deploymentCoordinator.handle(request);check();return response;},
+        complete(permit:object){assertProviderFallbackCompletion(permit,authority);check();
+          if(["reserved","stopping","stopped"].includes(input.phase)){
+            const completion=providerFallbackSourceCompletionContext(permit,authority),scope=localFallbackScope.getStore() as LocalFallbackScope|undefined,bound=p.evacuation;
+            if(!scope||!bound)throw new Error("Source recovery successor requires its original administrator evacuation.");
+            assertFallbackAttempt(scope,input.identity.operationId);
+            const predecessorId=input.identity.operationId,successorId=fallbackNextAttempt(predecessorId),cancelledReservation=JSON.stringify(input.cancelledReservation),placement=JSON.stringify(storage.internal.prepare("SELECT * FROM clank_deployment_placements WHERE project_id=?").get(id)),placed=JSON.parse(placement),fence=Number(storage.internal.prepare("SELECT fence FROM clank_deployment_project_fences WHERE project_id=?").get(id)?.fence);
+            const evidence=completion.evidence as Record<string,any>;
+            if(JSON.stringify(storage.internal.prepare("SELECT * FROM clank_deployment_handoffs WHERE handoff_id=?").get(predecessorId))!==cancelledReservation||placed.assigned_node_id!==input.identity.sourceNodeId||placed.generation!==input.identity.sourceGeneration||placed.desired_release_id!==input.identity.releaseId||placed.desired_state!=="running"||placed.observed_state!=="running"||placed.observed_generation!==input.identity.sourceGeneration||placed.observed_release_id!==input.identity.releaseId
+              ||evidence.projectId!==id||evidence.releaseId!==input.identity.releaseId||evidence.generation!==input.identity.sourceGeneration||evidence.capsuleSha256!==input.source.capsuleSha256||evidence.owner!==input.source.owner||evidence.daemonId!==input.source.daemonId||evidence.imageId!==input.source.imageId||evidence.policySha256!==input.source.policySha256
+              ||storage.internal.prepare("SELECT id FROM clank_deployment_operations WHERE project_id=? AND state IN ('queued','retry','leased')").get(id))throw new Error("Fallback successor requires its exact native running source and cancelled predecessor.");
+            let sourceOperation:string|null=null;
+            if(input.phase==="reserved"){
+              if(completion.kind!=="reserved"||completion.request||fence!==input.fence||placement!==JSON.stringify(input.placement)||JSON.stringify(evidence)!==JSON.stringify(input.source))throw new Error("Untouched source successor differs from its original running identity.");
+            }else{
+              const request=completion.request,operation=request?storage.internal.prepare("SELECT * FROM clank_deployment_operations WHERE id=?").get(request.operation.id):undefined;
+              if(completion.kind!=="resumed"||!request||!operation||operation.state!=="succeeded"||operation.project_id!==id||operation.node_id!==input.identity.sourceNodeId||operation.action!=="reconcile"||operation.payload!==JSON.stringify(request.desired)||operation.fence!==fence||fence<=input.fence||request.operation.fence!==fence||request.runtime?.sha256!==input.source.capsuleSha256||request.desired.generation!==input.identity.sourceGeneration||!String(operation.idempotency_key).startsWith("fallback_resume_"+predecessorId+"_"))throw new Error("Source successor lacks its fresh completed original runner operation.");sourceOperation=JSON.stringify(operation);
+            }
+            const projectsBefore=bound.projectsBefore,projectsAfter=JSON.stringify((JSON.parse(projectsBefore) as EvacuationProject[]).map(project=>project.projectId===id?{...project,fallbackAttemptId:successorId}:project));
+            const successor=JSON.stringify({protocol:"clank-provider-fallback-successor/1",controlIdentity:conditionalControl().identity,identity:bound.identity,predecessorId,successorId,predecessorJournalSha256:syncHash(journal),predecessorAuthentication:authentication,cancelledReservation,placement,fence,sourceOperation,sourceEvidence:evidence,originalSourceSha256:syncHash(JSON.stringify(input.source)),endpointBindings:JSON.stringify(input.endpointBindings),projectsBefore,projectsAfter});
+            if(Buffer.byteLength(successor)>1048576)throw new Error("Fallback successor record exceeds its bound.");const signed=fallbackSuccessorSign(successor);
+            const resumeJournal=providerFallbackResumeCompletionJournal(permit,authority),resumeWrite=resumeJournal?prepareResumeWrite(resumeJournal,projectsAfter):undefined;let terminalAfterimage:string|undefined;
+            const readback=()=>{const row=storage.internal.prepare("SELECT * FROM clank_platform_fallback_successors WHERE predecessor_id=?").get(predecessorId);return row?.successor_id===successorId&&row.project_id===id&&row.journal===successor&&row.authentication===signed&&storage.internal.prepare("SELECT projects FROM clank_platform_evacuations WHERE id=?").get(bound.identity.planId)?.projects===projectsAfter&&(!resumeWrite||resumeWrite.readback()&&terminalAfterimage!==undefined&&terminalImages()===terminalAfterimage);};
+            try{storage.internal.transaction(changes=>{
+              assertProviderFallbackCompletion(permit,authority);check();assertFallbackAttempt(scope,predecessorId);
+              if(JSON.stringify(storage.internal.prepare("SELECT * FROM clank_deployment_handoffs WHERE handoff_id=?").get(predecessorId))!==cancelledReservation
+                ||JSON.stringify(storage.internal.prepare("SELECT * FROM clank_deployment_placements WHERE project_id=?").get(id))!==placement
+                ||Number(storage.internal.prepare("SELECT fence FROM clank_deployment_project_fences WHERE project_id=?").get(id)?.fence)!==fence
+                ||sourceOperation!==null&&JSON.stringify(storage.internal.prepare("SELECT * FROM clank_deployment_operations WHERE id=?").get(completion.request!.operation.id))!==sourceOperation)throw new Error("Fallback successor source completion changed before its plan compare-and-set.");
+              resumeWrite?.insert();
+              if(storage.internal.prepare("INSERT INTO clank_platform_fallback_successors VALUES(?,?,?,?,?)").run(predecessorId,successorId,id,successor,signed).changes!==1
+                ||storage.internal.prepare("UPDATE clank_platform_evacuations SET projects=? WHERE id=? AND projects=? AND state='running' AND phase='quiescing' AND lease_id=? AND lease_until>?").run(projectsAfter,bound.identity.planId,projectsBefore,scope.identity.executionLeaseId,Date.now()).changes!==1)throw new Error("Fallback successor plan compare-and-set failed.");
+              if(resumeWrite)terminalAfterimage=terminalImages();
+              if(!readback())throw new Error("Fallback successor readback differs.");changes.record("__platform",id);
+            });}catch(error){if(!readback())throw error;}
+            // Exact durable successor publication revokes this predecessor authority.
+            if(!readback())throw new Error("Fallback successor terminal afterimages changed after COMMIT.");
+            if(resumeWrite&&resumeJournal)terminal={permit:resumeJournal,result:resumeWrite.result,scope,projects:projectsAfter,images:terminalAfterimage!};
+            return;
+          }
+          if(!p.evacuation)return;const bound=p.evacuation,scope=localFallbackScope.getStore() as LocalFallbackScope,resumeJournal=providerFallbackResumeCompletionJournal(permit,authority),resumeWrite=resumeJournal?prepareResumeWrite(resumeJournal,bound.projectsRunning):undefined;let terminalAfterimage:string|undefined;
+          const readback=()=>storage.internal.prepare("SELECT projects FROM clank_platform_evacuations WHERE id=?").get(bound.identity.planId)?.projects===bound.projectsRunning&&(!resumeWrite||resumeWrite.readback()&&terminalAfterimage!==undefined&&terminalImages()===terminalAfterimage);
+          try{storage.internal.transaction(changes=>{assertProviderFallbackCompletion(permit,authority);check();resumeWrite?.insert();if(storage.internal.prepare("UPDATE clank_platform_evacuations SET projects=? WHERE id=? AND projects=? AND state='running' AND lease_id=? AND lease_until>?").run(bound.projectsRunning,bound.identity.planId,bound.projectsStopped,scope.identity.executionLeaseId,Date.now()).changes!==1)throw new Error("Resumed native evacuation progress changed.");if(resumeWrite)terminalAfterimage=terminalImages();changes.record("__platform",id);});}catch(error){if(!readback())throw error;}if(!readback())throw new Error("Resumed native terminal publication was not retained.");if(resumeWrite&&resumeJournal)terminal={permit:resumeJournal,result:resumeWrite.result,scope,projects:bound.projectsRunning,images:terminalAfterimage!};}
+      }); return authority;
+    },
+    async prepare(source, bytes, targetNodeId, deadline) {
+      conditionalCurrent();
+      const ownedBytes = new Uint8Array(bytes);
+      try {
+      const module = await import("./provider-service.ts"), placement = await import("./runtime-placement.ts"), native = module.providerFallbackSourceContext(source);
+      native.check(); if (native.deadline !== deadline) throw new Error("Fallback source deadline differs.");
+      const capsule = await placement.decodeDeploymentRuntimeCapsule(ownedBytes);
+      try {
+        native.check(); await native.verifyRunning();
+        const projectId = source.projectId, sourceGeneration = source.generation, targetGeneration = sourceGeneration + 1;
+        const project = projectById(storage.internal,projectId), release = releaseById(storage.internal,capsule.manifest.releaseId), generation = providerGeneration(storage.internal,projectId,sourceGeneration,capsule.manifest.releaseId);
+        const sourceNode = nativeOrchestrator.listNodes().find(n => n.id === project?.providerNodeId), targetNode = nativeOrchestrator.listNodes().find(n => n.id === targetNodeId), desired = nativeOrchestrator.desired(projectId);
+        if (!project || !project.organizationId || project.placement !== "provider" || project.runtimePolicy === "suspended" || project.activeReleaseId !== capsule.manifest.releaseId || project.activeGeneration !== sourceGeneration
+          || !release || !release.artifactAvailable || release.projectId !== projectId || release.status !== "active" || release.purpose !== "deployment" || release.providerGeneration !== sourceGeneration || project.databasePath !== release.config.database.path || !generation
+          || !sourceNode?.endpoint || !targetNode?.endpoint || targetNode.id === sourceNode.id || targetNode.status !== "active" || !["active","draining"].includes(sourceNode.status)
+          || !desired || desired.assignedNodeId !== sourceNode.id || desired.generation !== sourceGeneration || desired.desiredReleaseId !== release.id || desired.desiredState !== "running" || desired.observedState !== "running" || desired.observedGeneration !== sourceGeneration || desired.observedReleaseId !== release.id) throw new Error("Fallback does not match the original platform running placement.");
+        const sourceOrigin = providerIngressOrigin(sourceNode.endpoint,providerPlacement!.allowedProviderHosts), targetOrigin = providerIngressOrigin(targetNode.endpoint,providerPlacement!.allowedProviderHosts);
+        const environment = decryptProviderEnvironment(generation.encryptedEnvironment,masterKey), image = (v: Readonly<Record<string,string>>) => JSON.stringify(Object.entries(v).sort(([a],[b]) => a < b ? -1 : a > b ? 1 : 0));
+        if (project.providerOrigin !== sourceOrigin || capsule.sha256 !== native.capsuleSha256 || capsule.manifest.projectId !== projectId || capsule.manifest.generation !== sourceGeneration || capsule.artifact.sha256 !== release.digest
+          || capsule.manifest.database.path !== release.config.database.path || image(capsule.manifest.environment) !== image(environment) || capsule.manifest.ingress.route !== providerRuntimePath(projectId)
+          || capsule.manifest.ingress.token !== providerIngressToken(masterKey,projectId,sourceGeneration) || capsule.manifest.ingress.controlToken !== providerControlToken(masterKey,projectId,sourceGeneration)) throw new Error("Fallback source capsule differs from platform approval.");
+        const identity = Object.freeze({ protocol: "clank-platform-fallback/1", operationId: source.operationId, projectId, releaseId: release.id, sourceGeneration, targetGeneration, sourceNodeId: sourceNode.id, targetNodeId: targetNode.id, sourceOrigin, targetOrigin });
+        const evacuationScope=localFallbackScope.getStore() as LocalFallbackScope|undefined;
+        const evacuation=evacuationScope?{identity:{...evacuationScope.identity},projectsBefore:evacuationScope.projectsBefore}:undefined;
+        if(evacuationScope&&(evacuationScope.identity.projectId!==projectId||evacuationScope.identity.releaseId!==release.id||evacuationScope.identity.generation!==sourceGeneration||evacuationScope.identity.sourceNodeId!==sourceNode.id||evacuationScope.source.service!==native.service))throw new Error("Fallback source differs from its original evacuation project.");
+        if(evacuationScope){const expectedTarget=assertFallbackAttempt(evacuationScope,source.operationId);if(expectedTarget&&expectedTarget!==targetNode.id)throw new Error("Fallback successor target differs from its original approval.");}
+        const projectBefore = fallbackProject(projectId), releaseBefore = fallbackRelease(release.id), sourceImage = fallbackGeneration(projectId,sourceGeneration)!;
+        let committed = false, target: import("./runtime-placement.ts").DeploymentRuntimeCapsule | undefined, images: Record<string,any> | undefined;
+        const artifact = new Uint8Array(capsule.artifact.bytes);
+        const check = () => {
+          conditionalCurrent(); native.check(); requireNoProviderCanary(projectId); checkFallbackEvacuation(images?.evacuation??evacuation,projectId); requireNoInterruptedPromotion(projectId);
+          if ((globalThis as any).process.hrtime.bigint() >= deadline || fallbackProject(projectId) !== (committed ? images!.projectAfter : projectBefore) || fallbackRelease(release.id) !== (committed ? images!.releaseAfter : releaseBefore)
+            || fallbackGeneration(projectId,sourceGeneration) !== sourceImage || fallbackGeneration(projectId,targetGeneration) !== (committed ? images!.targetGeneration : undefined)) throw new Error("Original fallback platform approval changed.");
+        };
+        const participant: PlatformFallbackParticipant = Object.freeze({ orchestrator: nativeOrchestrator, identity, controlIdentity: conditionalControl().identity, check,
+          authorizeServices(sourceService: object,targetService: object){check();if(sourceService!==native.service||evacuationScope&&(evacuationScope.source.service!==sourceService||evacuationScope.target.service!==targetService||localProviders.get(targetNode.id)!==evacuationScope.target))throw new Error("Fallback services differ from the original evacuation bindings.");},
+          async snapshot() {
+            check(); await native.verifyStopped(); check(); if (target) return target;
+            const snapshot = native.snapshot(), effective = projectQuotas(storage.internal,project,quotaDefaults);
+            const manager = await projectBackupManager(paths.projects,project,masterKey,{...backupPolicy,maxBackups:effective.backupsPerProject},backupObjects,check);
+            try {
+              check(); const manifest = await manager.createFromSnapshot({bytes:snapshot.bytes,sha256:snapshot.sha256,source:project.databasePath!.split("/").at(-1)!,reason:"Native all-role fallback " + source.operationId}); check();
+              const verified = await manager.read(manifest.id); check();
+              if (verified.verification.databaseSha256 !== snapshot.sha256 || verified.verification.databaseBytes !== snapshot.bytes.byteLength) throw new Error("Fallback encrypted snapshot differs.");
+              target = await placement.createDeploymentRuntimeCapsule({projectId,releaseId:release.id,generation:targetGeneration,environment,database:{path:release.config.database.path,mode:"replace",snapshot:snapshot.bytes},ingress:{route:providerRuntimePath(projectId),token:providerIngressToken(masterKey,projectId,targetGeneration),controlToken:providerControlToken(masterKey,projectId,targetGeneration)},artifact}, {maxArtifactBytes:runnerArtifactLimit,maxDatabaseBytes:providerPlacement!.maxDatabaseBytes,maxCapsuleBytes:providerPlacement!.maxRuntimeBytes});
+              check(); const now=Date.now(); images={identity,projectBefore,releaseBefore,sourceGeneration:sourceImage,projectAfter:JSON.stringify({...JSON.parse(projectBefore),active_generation:targetGeneration,provider_node_id:targetNode.id,provider_origin:targetOrigin}),releaseAfter:JSON.stringify({...JSON.parse(releaseBefore),provider_generation:targetGeneration}),targetGeneration:JSON.stringify({...JSON.parse(sourceImage),generation:targetGeneration,database_mode:"replace",restore_backup_id:manifest.id,restore_database_sha256:snapshot.sha256,restore_database_bytes:snapshot.bytes.byteLength,safety_backup_id:null,recovery_kind:"failover",recovery_source_node_id:sourceNode.id,created_at:now})};
+              if(evacuation){
+                const progress=(state:"stopped"|"running")=>JSON.stringify((JSON.parse(evacuation.projectsBefore) as EvacuationProject[]).map(item=>item.projectId===projectId?{...item,backupId:manifest.id,targetNodeId:targetNode.id,targetGeneration,fallbackOperationId:source.operationId,fallbackState:state}:item));
+                images.evacuation={...evacuation,projectsStopped:progress("stopped"),projectsRunning:progress("running")};
+              }
+              await native.verifyStopped(); check(); return target;
+            } finally { snapshot.bytes.fill(0); artifact.fill(0); manager.close(); }
+          },
+          images() { check(); return structuredClone(images ?? {identity,projectBefore,releaseBefore,sourceGeneration:sourceImage,...(evacuation?{evacuation}:{})}); },
+          sign(permit: object) { check(); const journal=providerFallbackJournalContext(permit,participant); if (Buffer.byteLength(journal)>524288) throw new Error("Fallback journal exceeds its bound."); return fallbackSign(journal); },
+          apply(permit: object) { assertProviderFallbackCommit(permit,participant); check(); if (!images) throw new Error("Fallback final snapshot is not prepared."); applyFallbackImages(images); },
+          accept() { if (!images || fallbackProject(projectId)!==images.projectAfter || fallbackRelease(release.id)!==images.releaseAfter || fallbackGeneration(projectId,targetGeneration)!==images.targetGeneration) throw new Error("Fallback platform commit was not confirmed."); committed=true; check(); },
+          complete(permit: object){assertProviderFallbackCompletion(permit,participant);check();if(!images?.evacuation)return;const bound=images.evacuation;storage.internal.transaction(changes=>{assertProviderFallbackCompletion(permit,participant);check();if(storage.internal.prepare("UPDATE clank_platform_evacuations SET projects=? WHERE id=? AND projects=? AND state='running' AND lease_id=? AND lease_until>?").run(bound.projectsRunning,bound.identity.planId,bound.projectsStopped,evacuationScope!.identity.executionLeaseId,Date.now()).changes!==1)throw new Error("Fallback published plan progress changed.");changes.record("__platform",projectId);});check();},
+          async api(request: Request) { check(); if (!deploymentCoordinator) throw new Error("Original fallback runner API is unavailable."); const response=await deploymentCoordinator.handle(request); check(); return response; },
+        });
+        check(); fallbackParticipants.add(participant); return participant;
+      } finally { capsule.bytes.fill(0); }
+      } finally { ownedBytes.fill(0); }
+    },
+  });
+  return runtime;
 }
 
 async function assertPlatformSupervisorMode(path:string,enabled:boolean):Promise<void> {

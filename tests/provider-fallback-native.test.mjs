@@ -1,0 +1,74 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { mkdtemp, mkdir, writeFile, chmod, rm, access, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { providerDockerClient } from '../dist/provider-docker-client.js';
+import { observeProviderFallbackRoles } from '../dist/provider-fallback-native.js';
+import { openProviderFallbackWatchdog } from '../dist/provider-fallback-watchdog.js';
+import { providerFallbackResumeNativeContext } from '../dist/provider-docker.js';
+import { verifyProviderFallbackRecovery, providerFallbackNativeRecoveryContext, verifyProviderFallbackReservationCancellation, providerFallbackNativeCancellationContext, closeProviderFallbackNativeRecovery, closeProviderFallbackNativeCancellation } from '../dist/provider-fallback-recovery.js';
+const cid='1'.repeat(64), image='sha256:'+'2'.repeat(64), sha='3'.repeat(64);
+async function fixture(){
+ const root=await mkdtemp(join(tmpdir(),'fallback-native-refusal-')),data=join(root,'data'),release=join(root,'release'),state=join(root,'row.json'),script=join(root,'fake-docker'),removedAt=join(root,'removed-at');
+ await mkdir(data,{mode:0o700});await mkdir(release,{mode:0o700});
+ const row={Id:cid,Image:image,AppArmorProfile:'docker-default',Config:{Labels:{'run.clank.managed':'provider-runtime','run.clank.owner':'fallback_fixture','run.clank.project':'project_fallback','run.clank.release':'release_fallback','run.clank.generation':'1','run.clank.role':'web','run.clank.instance':'0'},User:'1000:1000',WorkingDir:'/app',Cmd:['node','server.mjs']},HostConfig:{OomKillDisable:false,ReadonlyRootfs:true,Privileged:false,Init:true,RestartPolicy:{Name:'no'},CapDrop:['ALL'],CapAdd:null,SecurityOpt:['no-new-privileges=true'],Memory:536870912,MemorySwap:536870912,NanoCpus:1e9,PidsLimit:128,NetworkMode:'bridge'},Mounts:[{Type:'bind',Source:release,Destination:'/app',RW:false},{Type:'bind',Source:data,Destination:'/data',RW:true}],State:{Status:'running',Running:true,Pid:0,Paused:false,Restarting:false,Dead:false},RestartCount:0};
+ await writeFile(state,JSON.stringify(row));
+ await writeFile(script,`#!${process.execPath}\nimport fs from 'node:fs';const args=process.argv.slice(2),file=${JSON.stringify(state)};if(args[0]==='info'){console.log(JSON.stringify('fake-daemon'));}else if(args[0]==='image'){console.log(JSON.stringify(${JSON.stringify(image)}));}else if(args[1]==='create'){const row=JSON.parse(fs.readFileSync(file,'utf8'));row.Name='/'+args[args.indexOf('--name')+1];row.State={Status:'created',Running:false,Pid:0,StartedAt:'0001-01-01T00:00:00Z'};fs.writeFileSync(file,JSON.stringify(row));console.log(row.Id);}else if(args[1]==='ls'){if(fs.existsSync(file))console.log(${JSON.stringify(cid)});}else if(args[1]==='inspect'){console.log('['+fs.readFileSync(file,'utf8')+']');}else if(args[1]==='rm'){if(args.slice(3).some(id=>id!==${JSON.stringify(cid)}))process.exit(90);fs.rmSync(file,{force:true});fs.writeFileSync(${JSON.stringify(removedAt)},String(process.hrtime.bigint()));}else process.exit(91);`);await chmod(script,0o700);
+ const client=providerDockerClient({executable:script,dockerEnvironment:{DOCKER_HOST:'unix:///var/run/docker.sock'}});
+ const input={client,owner:'fallback_fixture',projectId:'project_fallback',releaseId:'release_fallback',generation:1,capsuleSha256:sha,image,user:'1000:1000',network:'bridge',memory:'512m',cpus:'1',pidsLimit:128,releaseDirectory:release,dataDirectory:data,roles:[{role:'web',instance:0,containerId:cid,command:['node','server.mjs']}],deadline:process.hrtime.bigint()+30_000_000_000n};
+ return {root,state,row,input,client,removedAt,close:()=>rm(root,{recursive:true,force:true})};
+}
+for(const pid of [0,undefined,null])test(`running role with PID ${String(pid)} cannot become native fallback evidence`,async()=>{const f=await fixture();try{f.row.State.Pid=pid;await writeFile(f.state,JSON.stringify(f.row));await assert.rejects(observeProviderFallbackRoles(f.input),/original running process/);}finally{await f.close();}});
+test('authenticated recovery rejects copied authority before reading hostile records',async()=>{let reads=0;const fake=new Proxy({},{get(){reads++;throw Error('untrusted read');}});await assert.rejects(verifyProviderFallbackRecovery(fake,fake,fake,fake),/genuine original fallback recovery authority/);assert.throws(()=>providerFallbackNativeRecoveryContext(fake),/genuine authenticated fallback cleanup proof/);assert.equal(reads,0);});
+test('detached watchdog enrolls a never-started exact CID and removes it on parent pipe closure',async()=>{const f=await fixture();try{f.row.State={Status:'created',Running:false,Pid:0};await writeFile(f.state,JSON.stringify(f.row));const watcher=await openProviderFallbackWatchdog(f.client,{owner:'fallback_fixture',projectId:'project_fallback',releaseId:'release_fallback',generation:1,deadline:process.hrtime.bigint()+10_000_000_000n});await watcher.retain(cid);await access(f.state);await watcher.close();await assert.rejects(access(f.state),{code:'ENOENT'});}finally{await f.close();}});
+test('detached watchdog refuses a running container before granting start admission',async()=>{const f=await fixture();try{const watcher=await openProviderFallbackWatchdog(f.client,{owner:'fallback_fixture',projectId:'project_fallback',releaseId:'release_fallback',generation:1,deadline:process.hrtime.bigint()+10_000_000_000n});await assert.rejects(watcher.retain(cid),/watchdog fenced|cleanup/);await watcher.close();await access(f.state);}finally{await f.close();}});
+test('detached watchdog still removes its retained CID while the parent event loop is blocked past deadline',async()=>{const f=await fixture();try{f.row.State={Status:'created',Running:false,Pid:0};await writeFile(f.state,JSON.stringify(f.row));const watcher=await openProviderFallbackWatchdog(f.client,{owner:'fallback_fixture',projectId:'project_fallback',releaseId:'release_fallback',generation:1,deadline:process.hrtime.bigint()+1_500_000_000n});await watcher.retain(cid);Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,1900);await watcher.close();await assert.rejects(access(f.state),{code:'ENOENT'});}finally{await f.close();}});
+
+test('cleanup and untouched-source cancellation reject copied proof and authority before reads',async()=>{let reads=0;const fake=new Proxy({},{get(){reads++;throw Error('untrusted read');}});await assert.rejects(verifyProviderFallbackReservationCancellation(fake,fake,fake),/genuine original fallback recovery authority/);for(const read of [providerFallbackNativeCancellationContext,closeProviderFallbackNativeRecovery,closeProviderFallbackNativeCancellation])assert.throws(()=>read(fake),/genuine authenticated fallback/);assert.equal(reads,0);});
+
+test('detached watchdog admits only the known created-to-started AppArmor and OOM defaults',async()=>{const f=await fixture();try{f.row.State={Status:'created',Running:false,Pid:0};f.row.AppArmorProfile='';f.row.HostConfig.OomKillDisable=null;await writeFile(f.state,JSON.stringify(f.row));const watcher=await openProviderFallbackWatchdog(f.client,{owner:'fallback_fixture',projectId:'project_fallback',releaseId:'release_fallback',generation:1,deadline:process.hrtime.bigint()+10_000_000_000n});await watcher.retain(cid);f.row.State.Status='exited';f.row.AppArmorProfile='docker-default';f.row.HostConfig.OomKillDisable=false;await writeFile(f.state,JSON.stringify(f.row));await watcher.close();await assert.rejects(access(f.state),{code:'ENOENT'});}finally{await f.close();}});
+
+test('watchdog owns create and exact enrollment before returning a startable CID',async()=>{const f=await fixture();try{const watcher=await openProviderFallbackWatchdog(f.client,{owner:'fallback_fixture',projectId:'project_fallback',releaseId:'release_fallback',generation:1,deadline:process.hrtime.bigint()+10_000_000_000n});assert.equal(await watcher.create(['container','create','image']),cid);const created=JSON.parse(await readFile(f.state,'utf8'));assert.match(created.Name,/^\/clank-fallback-/);assert.equal(created.State.Status,'created');await watcher.close();await assert.rejects(access(f.state),{code:'ENOENT'});}finally{await f.close();}});
+test('watchdog reserve removes exact CID before the original deadline while parent is blocked',async()=>{const f=await fixture();try{f.row.State={Status:'created',Running:false,Pid:0};await writeFile(f.state,JSON.stringify(f.row));const deadline=process.hrtime.bigint()+2_100_000_000n,watcher=await openProviderFallbackWatchdog(f.client,{owner:'fallback_fixture',projectId:'project_fallback',releaseId:'release_fallback',generation:1,deadline});await watcher.retain(cid);Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,2500);await watcher.close();assert.ok(BigInt(await readFile(f.removedAt,'utf8'))<deadline,'writer cleanup must finish within original deadline, not a renewed cleanup window');}finally{await f.close();}});
+test('created intent cannot claim a previously started or running role',async()=>{const f=await fixture();try{f.row.State={Status:'created',Running:false,Pid:0,StartedAt:'2026-10-15T00:00:00Z'};await writeFile(f.state,JSON.stringify(f.row));await assert.rejects(observeProviderFallbackRoles({...f.input,created:true}),/already started/);}finally{await f.close();}});
+
+test('watchdog still removes the exact role when its inspected process has already exited',async()=>{const f=await fixture();try{f.row.State={Status:'created',Running:false,Pid:0};await writeFile(f.state,JSON.stringify(f.row));const watcher=await openProviderFallbackWatchdog(f.client,{owner:'fallback_fixture',projectId:'project_fallback',releaseId:'release_fallback',generation:1,deadline:process.hrtime.bigint()+10_000_000_000n});await watcher.retain(cid);f.row.State={Status:'running',Running:true,Pid:2147483647};await writeFile(f.state,JSON.stringify(f.row));await watcher.close();await assert.rejects(access(f.state),{code:'ENOENT'});}finally{await f.close();}});
+test('watchdog refuses removal when the retained native configuration changes',async()=>{const f=await fixture();try{f.row.State={Status:'created',Running:false,Pid:0};await writeFile(f.state,JSON.stringify(f.row));const watcher=await openProviderFallbackWatchdog(f.client,{owner:'fallback_fixture',projectId:'project_fallback',releaseId:'release_fallback',generation:1,deadline:process.hrtime.bigint()+10_000_000_000n});await watcher.retain(cid);f.row.HostConfig.Memory=1;await writeFile(f.state,JSON.stringify(f.row));await assert.rejects(watcher.close(),/cleanup/);await access(f.state);}finally{await f.close();}});
+
+for(const value of [true,undefined,'false','null',0])test(`fallback rejects OOM override ${String(value)} before process evidence`,async()=>{const f=await fixture();try{f.row.HostConfig.OomKillDisable=value;await writeFile(f.state,JSON.stringify(f.row));await assert.rejects(observeProviderFallbackRoles(f.input),/OOM policy/);f.row.State={Status:'created',Running:false,Pid:0};await writeFile(f.state,JSON.stringify(f.row));const watcher=await openProviderFallbackWatchdog(f.client,{owner:'fallback_fixture',projectId:'project_fallback',releaseId:'release_fallback',generation:1,deadline:process.hrtime.bigint()+10_000_000_000n});await assert.rejects(watcher.retain(cid),/watchdog fenced|cleanup/);await watcher.close();await access(f.state);}finally{await f.close();}});
+test('watchdog preserves exact identity across Docker false-to-null OOM default on start',async()=>{const f=await fixture();try{f.row.State={Status:'created',Running:false,Pid:0};f.row.AppArmorProfile='';f.row.HostConfig.OomKillDisable=false;await writeFile(f.state,JSON.stringify(f.row));const watcher=await openProviderFallbackWatchdog(f.client,{owner:'fallback_fixture',projectId:'project_fallback',releaseId:'release_fallback',generation:1,deadline:process.hrtime.bigint()+10_000_000_000n});await watcher.retain(cid);f.row.State={Status:'running',Running:true,Pid:2147483647};f.row.AppArmorProfile='docker-default';f.row.HostConfig.OomKillDisable=null;await writeFile(f.state,JSON.stringify(f.row));await watcher.close();await assert.rejects(access(f.state),{code:'ENOENT'});}finally{await f.close();}});
+
+test('running null OOM default still requires a real native process',async()=>{const f=await fixture();try{f.row.HostConfig.OomKillDisable=null;f.row.State.Pid=0;await writeFile(f.state,JSON.stringify(f.row));await assert.rejects(observeProviderFallbackRoles(f.input),/original running process/);}finally{await f.close();}});
+
+test('cleanup configuration proof tolerates an exited inspected PID without weakening running or configuration checks',async()=>{
+ const f=await fixture();let observation;
+ try{
+  f.row.State={Status:'created',Running:false,Pid:0,StartedAt:'0001-01-01T00:00:00Z'};await writeFile(f.state,JSON.stringify(f.row));
+  observation=await observeProviderFallbackRoles({...f.input,created:true});
+  f.row.State={Status:'running',Running:true,Pid:2147483647};await writeFile(f.state,JSON.stringify(f.row));
+  await observation.cleanupVerifyConfiguration();
+  await assert.rejects(observation.verifyRunning(),{code:'ENOENT'});
+  await assert.rejects(observation.cleanupVerifyRemaining(),{code:'ENOENT'});
+  f.row.HostConfig.Memory=1;await writeFile(f.state,JSON.stringify(f.row));
+  await assert.rejects(observation.cleanupVerifyConfiguration(),/original launch policy/);
+  f.row.HostConfig.Memory=536870912;await writeFile(f.state,JSON.stringify(f.row));await observation.cleanupVerifyConfiguration();
+  await assert.rejects(observation.cleanupVerifyStopped(),/remains present/);
+  await rm(f.state);await observation.cleanupVerifyStopped();
+ }finally{observation?.close();await f.close();}
+});
+
+
+test('resume native signing refuses copied capabilities before reading caller evidence',()=>{
+ let reads=0;const hostile=new Proxy({},{get(){reads++;throw Error('untrusted resume evidence read');}});
+ for(const value of [hostile,{},Object.freeze({protocol:'clank-provider-fallback-launch-intent/1'})])assert.throws(()=>providerFallbackResumeNativeContext(value),/genuine original native resume capability/);
+ assert.equal(reads,0);
+});
+test('created native observations remain data and cannot authorize resume journal signing',async()=>{
+ const f=await fixture();let observation;
+ try{
+  f.row.State={Status:'created',Running:false,Pid:0,StartedAt:'0001-01-01T00:00:00Z'};await writeFile(f.state,JSON.stringify(f.row));
+  observation=await observeProviderFallbackRoles({...f.input,created:true});await observation.verifyCreated();
+  for(const value of [observation,observation.evidence,{...observation.evidence}])assert.throws(()=>providerFallbackResumeNativeContext(value),/genuine original native resume capability/);
+ }finally{observation?.close();await f.close();}
+});

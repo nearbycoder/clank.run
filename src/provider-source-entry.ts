@@ -66,7 +66,8 @@ export function decodeSourceStartupEnvelope(encoded:string):{environment:Record<
   if(!environment||typeof environment!=="object"||Array.isArray(environment)||Object.keys(environment).length>512||Buffer.byteLength(JSON.stringify(environment))>MAX_ENVIRONMENT_BYTES)refuse();
   for(const [name,value]of Object.entries(environment))if(!/^[A-Z_][A-Z0-9_]{0,127}$/u.test(name)||typeof value!=="string"||value.includes("\0"))refuse();
   const fields=["protocol","binding","bindingSha256","containerId","catalogPath","grantSecret","controlSecret","recoveryKey","workerChannel"];
-  if(!bootstrap||typeof bootstrap!=="object"||Array.isArray(bootstrap)||Object.keys(bootstrap).length!==fields.length||fields.some(name=>!Object.hasOwn(bootstrap,name))||bootstrap.protocol!=="clank-provider-source-bootstrap/2"||bootstrap.catalogPath!=="/run/clank-source/catalog.sqlite")refuse();
+  const controlled=bootstrap?.protocol==="clank-provider-source-bootstrap/3";if(controlled)fields.push("controlChannel");
+  if(!bootstrap||typeof bootstrap!=="object"||Array.isArray(bootstrap)||Object.keys(bootstrap).length!==fields.length||fields.some(name=>!Object.hasOwn(bootstrap,name))||!controlled&&bootstrap.protocol!=="clank-provider-source-bootstrap/2"||bootstrap.catalogPath!=="/run/clank-source/catalog.sqlite")refuse();
   const source=JSON.stringify(bootstrap);if(Buffer.byteLength(source)>MAX_BOOTSTRAP_BYTES)refuse();
   delete envelope.environment;delete envelope.bootstrap;
   return {environment,source};

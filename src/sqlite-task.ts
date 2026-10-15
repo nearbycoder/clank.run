@@ -226,6 +226,7 @@ const BOOTSTRAP = `
 const { DatabaseSync } = await import('node:sqlite');
 const limit = new DatabaseSync(':memory:');
 limit.exec('PRAGMA hard_heap_limit = 67108864');
+limit.exec('PRAGMA soft_heap_limit = 8388608');
 limit.close();
 let request = '';
 process.stdin.setEncoding('utf8');

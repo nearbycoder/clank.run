@@ -519,6 +519,7 @@ export async function decodeDeploymentBundle(
   const files: DeploymentFile[] = [];
   const names = new Set<string>();
   let total = 0;
+  let decodedSinceYield = 0;
   for (let index = 0; index < rawFiles.length; index++) {
     const file = object(rawFiles[index], `files[${index}]`);
     exactKeys(file, ["path", "size", "sha256", "mode", "content"], `files[${index}]`);
@@ -539,6 +540,13 @@ export async function decodeDeploymentBundle(
     total += size;
     if (total > maxTotal) throw new Error(`Unpacked deployment exceeds ${maxTotal} bytes.`);
     files.push({ path: name, size, sha256: digest, mode, content });
+    decodedSinceYield += size;
+    // Cached imports above resolve as microtasks. Keep large verified bundles
+    // from starving original provider control I/O between file checks.
+    if ((index + 1) % 16 === 0 || decodedSinceYield >= 4 * 1024 * 1024) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      decodedSinceYield = 0;
+    }
   }
   if (!names.has(config.entry)) throw new Error("Deployment entry is missing from the artifact.");
   if (config.jobs && !names.has(config.jobs.entry)) throw new Error("Deployment jobs entry is missing from the artifact.");

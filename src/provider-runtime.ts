@@ -1,5 +1,15 @@
 export const DEPLOYMENT_RUNTIME_INGRESS_PROTOCOL = "clank-provider-ingress/1";
 
+/** Private admission before an original native owner performs expensive verification. */
+export async function providerRuntimeRequestAuthorized(request: Request, input: DeploymentRuntimeIngressBinding): Promise<boolean> {
+  if (!(request instanceof Request) || request.url.length > 8192) return false;
+  try {
+    const binding = await normalizeBinding(input), url = new URL(request.url);
+    if (url.pathname !== binding.path && !url.pathname.startsWith(binding.path + "/")) return false;
+    return await authorized(request.headers, binding);
+  } catch { return false; }
+}
+
 export interface DeploymentRuntimeIngressBinding {
   readonly protocol: "clank-runtime/1";
   readonly projectId: string;
@@ -82,6 +92,40 @@ interface RuntimeBinding {
   activatedAt: number;
   leases: Set<symbol>;
   waiters: Set<() => void>;
+}
+
+type FallbackStoppedIngressAuthority = ReturnType<typeof import("./provider-service.ts").providerFallbackIngressStoppedContext>;
+type FallbackSourceStoppedIngressAuthority = ReturnType<typeof import("./provider-service.ts").providerFallbackSourceIngressStoppedContext>;
+type FallbackReactivationAuthority = ReturnType<typeof import("./provider-service.ts").providerFallbackIngressReactivationContext>;
+const fallbackIngresses = new WeakMap<object, {
+  capture(authority: FallbackStoppedIngressAuthority): Promise<object | undefined>;
+  captureSource(authority: FallbackSourceStoppedIngressAuthority): Promise<object | undefined>;
+  reactivate(authority: FallbackReactivationAuthority): Promise<DeploymentRuntimeIngressState>;
+}>();
+const fallbackTombstones = new WeakMap<object, { ingress: DeploymentRuntimeIngress; binding: RuntimeBinding; request?: import("./provider.ts").DeploymentProviderRequest; source?: FallbackSourceStoppedIngressAuthority["identity"]; consumed: boolean }>();
+
+/** Private original-service cleanup receipt; caller-shaped permits grant no authority. */
+export async function captureProviderRuntimeFallbackTombstone(ingress: object, permit: object): Promise<object | undefined> {
+  const authority = (await import("./provider-service.ts")).providerFallbackIngressStoppedContext(permit);
+  const held = fallbackIngresses.get(ingress);
+  if (!held || authority.ingress !== ingress) throw new Error("Fallback stopped ingress is not its original service binding.");
+  authority.check(); return held.capture(authority);
+}
+
+/** Distinct source STOPPED receipt; only original finalized recovery can mint it. */
+export async function captureProviderRuntimeFallbackSourceTombstone(ingress: object, permit: object): Promise<object | undefined> {
+  const authority = (await import("./provider-service.ts")).providerFallbackSourceIngressStoppedContext(permit);
+  const held = fallbackIngresses.get(ingress);
+  if (!held || authority.ingress !== ingress) throw new Error("Fallback stopped source ingress is not its original service binding.");
+  authority.check(); return held.captureSource(authority);
+}
+
+/** Publish a genuine newer original operation over its exact drained tombstone. */
+export async function reactivateProviderRuntimeFallbackIngress(ingress: object, permit: object): Promise<DeploymentRuntimeIngressState> {
+  const authority = (await import("./provider-service.ts")).providerFallbackIngressReactivationContext(permit);
+  const held = fallbackIngresses.get(ingress);
+  if (!held || authority.ingress !== ingress) throw new Error("Fallback reactivation ingress is not its original service binding.");
+  authority.check(); return held.reactivate(authority);
 }
 
 const BINDING_HEADERS = [
@@ -416,6 +460,71 @@ export function createDeploymentRuntimeIngress(
       return results.every(Boolean);
     },
   };
+  const inactive = (projectId: string, binding?: RuntimeBinding) => {
+    if (closed) throw new Error("Deployment runtime ingress is closed.");
+    if ([...published.values(), ...draining.values()].some(value => value.projectId === projectId)
+      || [...routes.values()].some(group => [...group.values()].some(value => value.projectId === projectId))
+      || binding && (latestByProject.get(projectId) !== binding || binding.leases.size !== 0 || binding.waiters.size !== 0)) throw new Error("Fallback ingress is not its exact fully drained generation.");
+  };
+  fallbackIngresses.set(runtimeIngress, {
+    async capture(authority) {
+      authority.check();
+      const request = authority.request, runtime = request.runtime, projectId = request.operation.projectId, latest = latestByProject.get(projectId);
+      if (authority.ingress !== runtimeIngress || !runtime || request.desired.state !== "running") throw new Error("Fallback stopped ingress request differs.");
+      inactive(projectId, latest);
+      if (!latest) return undefined;
+      if (latest.generation !== request.desired.generation || latest.releaseId !== request.desired.releaseId) throw new Error("Fallback stopped ingress generation changed.");
+      const expected = await normalizeBinding({ protocol: "clank-runtime/1", projectId, releaseId: request.desired.releaseId, generation: request.desired.generation,
+        path: runtime.manifest.ingress.route, token: runtime.manifest.ingress.token, upstream: latest.upstream });
+      authority.check(); inactive(projectId, latest);
+      if (!sameBinding(latest, expected)) throw new Error("Fallback stopped ingress differs from its original capsule.");
+      const receipt = Object.freeze({});
+      fallbackTombstones.set(receipt, { ingress: runtimeIngress, binding: latest, request, consumed: false });
+      return receipt;
+    },
+    async captureSource(authority) {
+      authority.check(); const source = authority.identity, latest = latestByProject.get(source.projectId);
+      if (authority.ingress !== runtimeIngress) throw new Error("Fallback stopped source ingress differs.");
+      inactive(source.projectId, latest); if (!latest) return undefined;
+      if (latest.generation !== source.generation || latest.releaseId !== source.releaseId) throw new Error("Fallback stopped source ingress generation changed.");
+      const expected = await normalizeBinding({ protocol: "clank-runtime/1", projectId: source.projectId, releaseId: source.releaseId, generation: source.generation, path: source.route, token: source.token, upstream: latest.upstream });
+      authority.check(); inactive(source.projectId, latest);
+      if (!sameBinding(latest, expected)) throw new Error("Fallback stopped source ingress differs from its approved capsule.");
+      const receipt = Object.freeze({}); fallbackTombstones.set(receipt, { ingress: runtimeIngress, binding: latest, source, consumed: false }); return receipt;
+    },
+    async reactivate(authority) {
+      authority.check();
+      const receipt = fallbackTombstones.get(authority.tombstone), request = authority.request, runtime = request.runtime;
+      if (!receipt || receipt.ingress !== runtimeIngress || authority.ingress !== runtimeIngress || receipt.consumed || !runtime || request.desired.state !== "running") throw new Error("Fallback reactivation lacks its exact newer original operation and stopped receipt.");
+      if (receipt.source) {
+        const source = receipt.source;
+        if (request.operation.projectId !== source.projectId || request.operation.id === source.operationId || request.operation.fence <= source.minimumFence
+          || request.desired.generation !== source.generation || request.desired.releaseId !== source.releaseId || runtime.sha256 !== source.capsuleSha256) throw new Error("Fallback source reactivation lacks its exact newer original operation and stopped receipt.");
+      } else if (!receipt.request?.runtime || request.operation.projectId !== receipt.request.operation.projectId
+        || request.operation.id === receipt.request.operation.id || request.operation.fence <= receipt.request.operation.fence
+        || request.desired.generation !== receipt.request.desired.generation || request.desired.releaseId !== receipt.request.desired.releaseId
+        || runtime.sha256 !== receipt.request.runtime.sha256) throw new Error("Fallback reactivation lacks its exact newer original operation and stopped receipt.");
+      const previous = receipt.binding, projectId = request.operation.projectId;
+      inactive(projectId, previous);
+      const binding = await normalizeBinding(authority.binding);
+      const exact = () => {
+        authority.check(); inactive(projectId, previous);
+        if (receipt.consumed || fallbackTombstones.get(authority.tombstone) !== receipt
+          || binding.projectId !== projectId || binding.generation !== request.desired.generation || binding.releaseId !== request.desired.releaseId
+          || binding.path !== runtime.manifest.ingress.route || binding.path !== previous.path || !equalBytes(binding.tokenDigest, previous.tokenDigest)) throw new Error("Fallback reactivation changed its original generation or route.");
+        const route = routes.get(binding.path);
+        if (route && [...route.values()].some(value => value.projectId !== projectId)) throw new Error("Deployment runtime ingress path is already assigned.");
+        if (published.size + draining.size + 1 > maxBindings) throw new Error("Deployment runtime ingress binding limit reached.");
+      };
+      exact(); await authority.verifyRunning(); exact();
+      // All awaited native/lease checks precede this synchronous replacement.
+      // Retain the high-water mark throughout so delayed generic activation can
+      // neither publish the old upstream nor acquire an empty tombstone window.
+      const key = bindingKey(projectId, binding.generation), group = routes.get(binding.path) ?? new Map<string, RuntimeBinding>();
+      published.set(key, binding); group.set(key, binding); routes.set(binding.path, group); latestByProject.set(projectId, binding); receipt.consumed = true;
+      return publicState(binding, latestByProject);
+    },
+  });
   return Object.freeze(runtimeIngress);
 }
 

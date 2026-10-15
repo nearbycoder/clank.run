@@ -1,9 +1,18 @@
 /** Private original source launch. First-base completion is not readiness/write authority. */
 import * as h from "./provider-handoff.ts";
+import type {DeploymentRuntimeIngressBinding} from "./provider-runtime.ts";
 import { runProviderDockerClient } from "./provider-docker-client.ts";
 import { decodeDeploymentRuntimeCapsule } from "./runtime-placement.ts";
 
 const launches=new WeakSet<h.ProviderSourceLaunchDataLease>();
+const originalLaunches=new WeakMap<object,{container:h.ProviderSourceContainerLease;containerId:string;bridge:h.ProviderHandoffBridge;grantId:string;binding:DeploymentRuntimeIngressBinding;drains:Set<()=>Promise<void>>;check():void;close():Promise<void>}>();
+/** Original launcher lookup only; copied fields/callbacks cannot supply removal authority. */
+export function providerSourceLaunchStopContext(value:object){const held=originalLaunches.get(value);if(!held)refuse("A genuine original source launch is required.");return Object.freeze({...held});}
+/** Original route metadata and cleanup only; neither caller routes nor callbacks supply launch authority. */
+export function providerSourceLaunchIngressContext(value:object){
+ const held=originalLaunches.get(value);if(!held)refuse("A genuine original source launch is required.");held.check();
+ return Object.freeze({container:held.container,bridge:held.bridge,grantId:held.grantId,binding:held.binding,check:held.check,close:held.close,retainDrain(drain:()=>Promise<void>){held.check();held.drains.add(drain);return ()=>held.drains.delete(drain);}});
+}
 const ENTRY="node_modules/@clank.run/framework/dist/provider-source-entry.js";
 const FRAME_MAX=3*1024*1024+16384+128;
 const CAPSULE_MAX=32+2*1024*1024+100*1024*1024+512*1024*1024;
@@ -88,10 +97,13 @@ export async function launchProviderSourceContainer(
     context.check();const ids=result.stdout.trim()===""?[]:result.stdout.trim().split("\n");
     if(ids.some(id=>!/^[a-f0-9]{64}$/u.test(id))||ids.length!==(expected?1:0)||expected&&ids[0]!==expected)refuse("Source launch refuses an existing or additional managed project writer.");
   };
-  let channel:h.ProviderSourceWorkerChannel|undefined,grant:h.ProviderSourceGrantLease|undefined,runtimeData:h.ProviderSourceRuntimeDataLease|undefined,container:h.ProviderSourceContainerLease|undefined;
+  let channel:h.ProviderSourceWorkerChannel|undefined,controlChannel:h.ProviderSourceControlChannel|undefined,initialization:h.ProviderSourceInitializationLease|undefined,grant:h.ProviderSourceGrantLease|undefined,runtimeData:h.ProviderSourceRuntimeDataLease|undefined,container:h.ProviderSourceContainerLease|undefined;
+  const ingressDrains=new Set<()=>Promise<void>>();
   let child:any,childClosed:Promise<void>|undefined,cid:string|undefined,labels:Record<string,string>|undefined,closeFlight:Promise<void>|undefined,createUnacknowledged=false;
   const close=():Promise<void>=>closeFlight??=(async()=>{
     child?.stdin?.destroy();const errors:unknown[]=[];
+    for(const drain of ingressDrains)try{await drain();}catch(error){errors.push(error);}
+    try{await controlChannel?.close();}catch(error){errors.push(error);}
     try{await channel?.close();}catch(error){errors.push(error);}
     if(createUnacknowledged)errors.push(new Error("Original source creation is unacknowledged; no container removal authority is available."));
     if(cid)try{
@@ -114,13 +126,21 @@ export async function launchProviderSourceContainer(
   try{
     assertRelease();context.assertInitial();
     await assertProjectContainers();assertRelease();context.assertInitial();
+    const tailMaximum=Math.min(context.limits.maxBatchBytes,8388608);
+    if(context.limits.maxArchiveBytes+tailMaximum>context.limits.maxSpoolBytes)refuse("Source base and tail reservations exceed the original spool quota.");
     const issued=await h.issueProviderHandoffGrant(context.bridge,{binding,grantSecretSha256:hash(grantSecret),controlSecretSha256:hash(control)});assertRelease();
+    await h.storeProviderSourceCaptureKey(context.bridge,data.projectId,binding.grantId,recovery);assertRelease();
+    for(const [kind,maximumBytes]of [["base",context.limits.maxArchiveBytes],["tail",tailMaximum]] as const){
+      const inputSha256=hash(new TextEncoder().encode(JSON.stringify({protocol:"clank-provider-source-spool-slot/1",grantId:binding.grantId,bindingSha256:issued.bindingSha256,sourceIncarnation:binding.sourceIncarnation,kind})));
+      await h.reserveProviderHandoffSpool(context.bridge,data.projectId,{reservationId:crypto.randomUUID(),kind,maximumBytes,inputSha256});assertRelease();
+    }
     channel=await h.prepareProviderSourceWorkerChannel(context.bridge,{projectId:data.projectId,grantId:binding.grantId,bindingSha256:issued.bindingSha256,expectedVersion:2},control);assertRelease();
+    controlChannel=await h.prepareProviderSourceControlChannel(context.bridge,{projectId:data.projectId,grantId:binding.grantId,bindingSha256:issued.bindingSha256,expectedVersion:2},control);assertRelease();
     labels={"run.clank.managed":"provider-runtime","run.clank.owner":context.domain.owner,"run.clank.project":data.projectId,"run.clank.release":data.releaseId,"run.clank.generation":String(data.generation),"run.clank.role":"web","run.clank.instance":"0",
       "run.clank.handoff.protocol":binding.protocol,"run.clank.handoff.node":context.domain.nodeId,"run.clank.handoff.daemon":context.domain.daemonId,"run.clank.handoff.domain":binding.domainSha256,"run.clank.handoff.enablement":binding.enablementId,"run.clank.handoff.index":binding.indexId,"run.clank.handoff.catalog":binding.catalogId,"run.clank.handoff.grant":binding.grantId,"run.clank.handoff.binding":issued.bindingSha256,"run.clank.handoff.capsule":data.capsuleSha256,"run.clank.handoff.incarnation":binding.sourceIncarnation};
     const args=["container","create","--interactive","--pull","never","--restart","no","--read-only","--init","--cap-drop","ALL","--security-opt","no-new-privileges=true","--pids-limit","128","--memory","512m","--memory-swap","512m","--cpus","1","--user",binding.uid+":"+binding.gid,"--network","bridge","--stop-timeout","10","--tmpfs","/tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777","--tmpfs","/run:rw,noexec,nosuid,nodev,size=8m,mode=755","--log-driver","local","--log-opt","max-size=10m","--log-opt","max-file=3"];
     for(const [name,value]of Object.entries(labels))args.push("--label",name+"="+value);
-    for(const [source,target,readOnly]of [[data.releaseDirectory,"/app",true],[data.dataDirectory,"/data",false],[context.catalogDirectory,"/run/clank-source",true],[channel.mountSource,"/run/clank-source-worker",true]] as const){
+    for(const [source,target,readOnly]of [[data.releaseDirectory,"/app",true],[data.dataDirectory,"/data",false],[context.catalogDirectory,"/run/clank-source",true],[channel.mountSource,"/run/clank-source-worker",true],[controlChannel.mountSource,"/run/clank-source-control",true]] as const){
       if(/[\r\n,]/u.test(source))refuse("Source mount cannot be represented exactly.");args.push("--mount","type=bind,source="+source+",target="+target+(readOnly?",readonly":""));
     }
     args.push("--publish","127.0.0.1:"+port+":"+port,"--workdir","/app",imageId,"node",ENTRY,config.entry);
@@ -130,6 +150,7 @@ export async function launchProviderSourceContainer(
     const input={projectId:data.projectId,grantId:binding.grantId,bindingSha256:issued.bindingSha256,containerId:cid,expectedVersion:2};
     await h.recordProviderHandoffContainerCreated(context.bridge,input);assertRelease();
     const workerChannel=await channel.bindCreated({...input,expectedVersion:3});assertRelease();
+    const controlBinding=await controlChannel.bindCreated({...input,expectedVersion:3});assertRelease();
     child=cp.spawn(context.client.executable,["container","start","--attach","--interactive",cid],{env:context.client.environment,stdio:["pipe","pipe","pipe"]});
     childClosed=new Promise<void>(resolve=>{child.once("close",()=>resolve());});
     let attachmentFailure:unknown;child.once("error",(error:unknown)=>{attachmentFailure=error;});
@@ -140,10 +161,12 @@ export async function launchProviderSourceContainer(
     grant=await h.retainProviderSourceGrant(context.bridge,{...input,expectedVersion:4},control);runtimeData=await h.retainProviderSourceRuntimeData(grant);container=await h.retainProviderSourceContainer(runtimeData);assertRelease();
     await assertProjectContainers(cid);assertRelease();
     const firstBase=channel.dispatch(container);void firstBase.catch(()=>{});
-    const bootstrap={protocol:"clank-provider-source-bootstrap/2",binding,bindingSha256:issued.bindingSha256,containerId:cid,catalogPath:"/run/clank-source/catalog.sqlite",grantSecret:grantSecret.toString("base64url"),controlSecret:control.toString("base64url"),recoveryKey:recovery.toString("base64url"),workerChannel};
+    const initialized=controlChannel.initialize(container);void initialized.catch(()=>{});
+    const bootstrap={protocol:"clank-provider-source-bootstrap/3",binding,bindingSha256:issued.bindingSha256,containerId:cid,catalogPath:"/run/clank-source/catalog.sqlite",grantSecret:grantSecret.toString("base64url"),controlSecret:control.toString("base64url"),recoveryKey:recovery.toString("base64url"),workerChannel,controlChannel:controlBinding};
     const frame=Buffer.from(JSON.stringify({environment,bootstrap})+"\n");if(frame.length>FRAME_MAX)refuse("Source stdin envelope exceeds its original bound.");
     await new Promise<void>((resolve,reject)=>child.stdin.end(frame,(error:unknown)=>error?reject(error):resolve()));frame.fill(0);control.fill(0);grantSecret.fill(0);recovery.fill(0);bytes.fill(0);
     await firstBase;assertRelease();container.assertCurrent();
+    initialization=await initialized;assertRelease();container.assertCurrent();initialization.assertCurrent();
     const healthDeadline=Date.now()+config.health.timeoutMs;
     for(;;){
       assertRelease();container.assertCurrent();
@@ -156,7 +179,7 @@ export async function launchProviderSourceContainer(
       await new Promise(resolve=>setTimeout(resolve,50));
     }
     await assertProjectContainers(cid);assertRelease();container.assertCurrent();
-    const result=Object.freeze({container,assertCurrent(){assertRelease();container!.assertCurrent();},close});published=true;return result;
+    const result=Object.freeze({container,initialization,operate(encoded:string){assertRelease();container!.assertCurrent();return controlChannel!.operate(encoded);},assertCurrent(){assertRelease();container!.assertCurrent();initialization!.assertCurrent();},close});originalLaunches.set(result,{container:container!,containerId:cid!,bridge:context.bridge,grantId:binding.grantId,binding:Object.freeze({protocol:"clank-runtime/1",projectId:data.projectId,releaseId:data.releaseId,generation:data.generation,path:manifest.ingress.route,token:manifest.ingress.token,upstream:"http://127.0.0.1:"+port}),drains:ingressDrains,check:result.assertCurrent,close});published=true;return result;
   }catch(error){try{await close();}catch(cleanup){retainOnFailure=true;throw new AggregateError([error,cleanup],"Original source launch and cleanup failed.");}throw error;}
   }finally{bytes.fill(0);decodedBytes?.fill(0);if(!published&&!retainOnFailure)releasePins?.();}
 }

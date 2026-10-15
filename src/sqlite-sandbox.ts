@@ -98,7 +98,7 @@ export async function prepareSQLiteSandbox(module: string, operation: string, va
     mounts.push({ path: path.dirname(result), writable: true, create });
     return result;
   };
-  if (module === "recovery" && ["replayJournal", "finishReplay", "prepareTransferBase", "initializeTransfer", "inspectTransfer", "applyTransfer", "inspectSourceSeal"].includes(operation)) { args[0] = file(args[0], true); if(operation==="prepareTransferBase")args[1]=file(args[1],false); }
+  if (module === "recovery" && ["replayJournal", "finishReplay", "prepareTransferBase", "initializeTransfer", "inspectTransfer", "inspectProviderTransfer", "retireProviderTransfer", "applyTransfer", "inspectSourceSeal"].includes(operation)) { args[0] = file(args[0], true); if(operation==="prepareTransferBase")args[1]=file(args[1],false); }
   else if (module === "migrations" && operation === "planMigrations") args[0] = file(args[0], true, true);
   else if (module === "migrations" && operation === "applyMigrations") {
     args[0].path = file(args[0].path, true, true);
