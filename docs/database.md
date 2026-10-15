@@ -371,6 +371,12 @@ producing an inaccurate contract. `s.refine` now annotates its JSON Schema with
 `x-clank-refinement`; its runtime validation behavior is unchanged. Format annotations retain
 the runtime schema's documented semantics; the runtime remains authoritative for validation.
 
+Regular expression flags are retained as `x-clank-pattern-flags` metadata; flagged patterns
+require an explicit adapter contract and reject export. Optional fields omitted from built-in
+object return schemas are omitted from JSON responses; explicit `undefined` values still fail.
+Overlapping object or array output unions that need this omission, and custom schemas with
+optional object output fields, also reject export because their parser provenance is ambiguous.
+
 Pass `offlineMutations` only when it matches `openBackend`'s actual configuration. The document
 then describes the timestamp/UUID retry key, account binding, retention window, atomic replay
 and rejection of expired/conflicting keys. Otherwise it advertises no idempotency guarantee.

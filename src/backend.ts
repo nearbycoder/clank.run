@@ -5,6 +5,7 @@ import { openReviewedActions, type ReviewedActions, type ReviewedActionsOptions,
 import { openMutationReceipts, type MutationReceiptOptions } from "./mutation-receipts.ts";
 import {openOrganizationSecurityPolicies, assertOrganizationSecurityProtocol, type OrganizationSecurityPolicyOptions, type OrganizationSecurityPolicyController} from "./organization-security-policy.ts";
 import type { Tracer } from "./observability.ts";
+import { isBuiltinSchema } from "./schema-internal.ts";
 import { batch, signal, type Cleanup, type ReactiveSignal } from "./core.ts";
 import {
   ValidationError,
@@ -3616,9 +3617,16 @@ function parseBackendOutput(fn: AnyBackendFunction, value: unknown): unknown {
 }
 
 function finalizeBackendOutput(fn: AnyBackendFunction, value: unknown, maxBytes: number): unknown {
-  const parsed = parseBackendOutput(fn, value);
+  let parsed = parseBackendOutput(fn, value);
   try {
-    assertJsonOutput(parsed, true, new WeakSet());
+    try { assertJsonOutput(parsed, true, new WeakSet()); }
+    catch (error) {
+      if (!fn.returns || !isBuiltinSchema(fn.returns)) throw error;
+      // Object parsing preserves absent optional keys for in-process callers.
+      // Only omit those synthesized fields at the backend JSON boundary.
+      parsed = omitAbsentOptionalOutput(parsed, value, fn.returns.toJSONSchema(), new WeakSet());
+      assertJsonOutput(parsed, true, new WeakSet());
+    }
     const encoded = new TextEncoder().encode(parsed === undefined ? "" : JSON.stringify(parsed));
     if (encoded.byteLength > maxBytes) {
       throw new RangeError(`Backend output exceeds ${maxBytes} bytes.`);
@@ -3628,6 +3636,39 @@ function finalizeBackendOutput(fn: AnyBackendFunction, value: unknown, maxBytes:
     if (error instanceof BackendOutputError) throw error;
     throw new BackendOutputError(error);
   }
+}
+
+function omitAbsentOptionalOutput(parsed: unknown, original: unknown, schema: Record<string, unknown>, seen: WeakSet<object>, depth = 0): unknown {
+  if (depth > 32 || parsed === original || !parsed || typeof parsed !== "object" || !original || typeof original !== "object"
+    || !schema || typeof schema !== "object" || schema["x-clank-refinement"] || schema["x-clank-coerce"] || seen.has(parsed)) return parsed;
+  if (Array.isArray(schema.anyOf)) {
+    // Do not guess which overlapping/custom union branch supplied the result.
+    const candidates = schema.anyOf.filter((member: Record<string, unknown>) => {
+      if (!member || typeof member !== "object") return false;
+      if (Object.hasOwn(member, "const")) return Object.is(member.const, parsed);
+      if (member.type === undefined) return true;
+      return member.type === (Array.isArray(parsed) ? "array" : "object");
+    });
+    return candidates.length === 1 ? omitAbsentOptionalOutput(parsed, original, candidates[0], seen, depth + 1) : parsed;
+  }
+  seen.add(parsed);
+  try {
+    if (Array.isArray(parsed)) {
+      return schema.type === "array" && Array.isArray(original) && schema.items && typeof schema.items === "object"
+        ? parsed.map((entry, index) => omitAbsentOptionalOutput(entry, original[index], schema.items as Record<string, unknown>, seen, depth + 1)) : parsed;
+    }
+    if (schema.type !== "object" || Array.isArray(original) || ![Object.prototype, null].includes(Object.getPrototypeOf(parsed))
+      || ![Object.prototype, null].includes(Object.getPrototypeOf(original)) || Object.getOwnPropertySymbols(parsed).length) return parsed;
+    const properties = schema.properties && typeof schema.properties === "object" ? schema.properties as Record<string, Record<string, unknown>> : {};
+    const required = Array.isArray(schema.required) ? schema.required : undefined;
+    return Object.fromEntries(Object.entries(parsed).flatMap(([key, entry]) => {
+      const declared = Object.hasOwn(properties, key), source = original as Record<string, unknown>;
+      if (declared && required && !required.includes(key) && entry === undefined && !Object.hasOwn(source, key)) return [];
+      const child = declared ? properties[key] : schema.additionalProperties;
+      return [[key, child && typeof child === "object"
+        ? omitAbsentOptionalOutput(entry, Object.hasOwn(source, key) ? source[key] : undefined, child as Record<string, unknown>, seen, depth + 1) : entry]];
+    }));
+  } finally { seen.delete(parsed); }
 }
 
 function assertJsonOutput(value: unknown, topLevel: boolean, seen: WeakSet<object>): void {

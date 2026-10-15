@@ -1,5 +1,6 @@
 import type { AnyBackendFunction, BackendDefinition, FunctionTree } from "./backend.ts";
 import type { MutationReceiptOptions } from "./mutation-receipts.ts";
+import { isBuiltinSchema } from "./schema-internal.ts";
 
 export interface OpenAPIOptions {
   readonly title: string;
@@ -55,7 +56,8 @@ export function exportBackendOpenAPI(definition: BackendDefinition<any, any, any
   for (const [name, fn] of [...functions].sort(([a], [b]) => a.localeCompare(b))) {
     if (!fn.returns) throw new TypeError(`OpenAPI requires an explicit returns schema for ${name}.`);
     if (fn.returns.safeParse(undefined).success) throw new TypeError(`OpenAPI requires a defined JSON result for ${name}.`);
-    const input = exactSchema(fn.args.toJSONSchema(), `${name} arguments`, budget), output = exactSchema(fn.returns.toJSONSchema(), `${name} result`, budget);
+    const input = exactSchema(fn.args.toJSONSchema(), `${name} arguments`, budget), output = exactSchema(fn.returns.toJSONSchema(), `${name} result`, budget, true);
+    if (hasOptionalObjectFields(output) && !isBuiltinSchema(fn.returns)) throw new TypeError(`${name} result: custom optional output schemas require an explicit adapter contract.`);
     // Preserve the full path in schema keys and operation IDs; flattening dots
     // into underscores could make distinct namespaces collide.
     const key = `${fn.kind}.${name}`;
@@ -89,7 +91,7 @@ export function exportBackendOpenAPI(definition: BackendDefinition<any, any, any
   return document;
 }
 
-function exactSchema(source: Record<string, unknown>, label: string, budget: ExportBudget): Record<string, unknown> {
+function exactSchema(source: Record<string, unknown>, label: string, budget: ExportBudget, output = false): Record<string, unknown> {
   if (source.optional) throw new TypeError(`${label}: optional root schemas cannot guarantee a JSON result.`);
   const walk = (schema: unknown, depth: number, objectField = false): unknown => {
     budgetNode(budget);
@@ -98,16 +100,34 @@ function exactSchema(source: Record<string, unknown>, label: string, budget: Exp
     const result: Record<string, unknown> = Object.create(null);
     for (const [key, value] of Object.entries(schema)) {
       if (key === "optional") continue; // optional object fields are represented by required[]
+      if (key === "x-clank-pattern-flags") throw new TypeError(`${label}: regular expression pattern flags require an explicit adapter contract.`);
       if (key === "table" && typeof value === "string") { result["x-clank-table"] = value; continue; }
       if (!KEYWORDS.has(key)) throw new TypeError(`${label}: unsupported schema keyword ${key}; coercion and custom refinements require an explicit adapter contract.`);
       if (key === "properties") result[key] = Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([name, property]) => { budgetNode(budget, name); return [name, walk(property, depth + 1, true)]; }));
-      else if (key === "anyOf") result[key] = (value as unknown[]).map(member => walk(member, depth + 1));
+      else if (key === "anyOf") {
+        const members = (value as unknown[]).map(member => walk(member, depth + 1)) as Record<string, unknown>[];
+        if (output) for (const type of ["object", "array"]) {
+          // The JSON boundary cannot identify the parser branch from an
+          // overlapping structured result, so it cannot safely omit its keys.
+          const candidates = members.filter(member => !Object.hasOwn(member, "const") && (member.type === undefined || member.type === type));
+          if (candidates.length > 1 && candidates.some(hasOptionalObjectFields)) throw new TypeError(`${label}: overlapping optional output unions require an explicit adapter contract.`);
+        }
+        result[key] = members;
+      }
       else if (key === "items" || key === "additionalProperties" && typeof value === "object") result[key] = walk(value, depth + 1);
       else result[key] = jsonValue(value, depth + 1, label, budget);
     }
     return result;
   };
   return walk(source, 0) as Record<string, unknown>;
+}
+
+function hasOptionalObjectFields(schema: Record<string, unknown>): boolean {
+  const properties = schema.properties as Record<string, Record<string, unknown>> | undefined;
+  if (properties && (Object.keys(properties).some(key => !Array.isArray(schema.required) || !schema.required.includes(key))
+    || Object.values(properties).some(hasOptionalObjectFields))) return true;
+  if (Array.isArray(schema.anyOf) && schema.anyOf.some(hasOptionalObjectFields)) return true;
+  return [schema.items, schema.additionalProperties].some(child => child && typeof child === "object" && hasOptionalObjectFields(child as Record<string, unknown>));
 }
 
 function jsonValue(value: unknown, depth: number, label: string, budget: ExportBudget): unknown {

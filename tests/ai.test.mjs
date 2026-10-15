@@ -47,6 +47,21 @@ test("schema contracts snapshot mutable builder inputs", () => {
   assert.throws(() => profile.parse({ name: "Ada", role: "admin" }), ValidationError);
 });
 
+test('schema metadata preserves regex flags and omission through built-in wrappers', () => {
+  const insensitive = s.string({ pattern: /^foo$/i });
+  assert.equal(insensitive.parse('FOO'), 'FOO');
+  assert.equal(insensitive.toJSONSchema()['x-clank-pattern-flags'], 'i');
+  const record = s.record(s.boolean(), { keyPattern: /^foo$/i });
+  assert.deepEqual(record.parse({ FOO: true }), { FOO: true });
+  assert.equal(record.toJSONSchema().propertyNames['x-clank-pattern-flags'], 'i');
+  for (const field of [s.unknown(), s.nullable(s.unknown()), s.union([s.number(), s.unknown()]), s.nullable(s.optional(s.string()))]) {
+    const object = s.object({ value: field });
+    assert.deepEqual(object.parse({}), { value: undefined }, 'existing object parsing retains absent keys');
+    assert.deepEqual(object.toJSONSchema().required, []);
+    assert.equal(object.toJSONSchema().properties.value.optional, undefined);
+  }
+});
+
 test("object schemas validate own fields and preserve declared literal keys without changing prototypes", () => {
   const profile = s.object({ title: s.string(), constructor: s.optional(s.string()) });
   const inherited = Object.create({ get title() { throw new Error("Inherited getter must not run"); } });
@@ -183,6 +198,16 @@ test("invalid action output is an internal failure, not an input validation erro
   assert.match(body, /ACTION_FAILED/);
   assert.doesNotMatch(body, /secret internal output/);
   assert.doesNotMatch(body, /INVALID_INPUT/);
+});
+
+test('native schema parser and metadata state cannot be replaced through public properties', () => {
+  const schema = s.object({ value: s.string() });
+  const metadata = schema.toJSONSchema();
+  schema.parser = () => ({ missing: undefined });
+  schema.json = { type: 'object', properties: { missing: { type: 'string' } }, required: [] };
+  assert.deepEqual(schema.parse({ value: 'kept' }), { value: 'kept' });
+  assert.deepEqual(schema.toJSONSchema(), metadata);
+  assert.equal(schema.safeParse({}).success, false);
 });
 
 test("agent-described views validate user props without treating children as schema input", () => {

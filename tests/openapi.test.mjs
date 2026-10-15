@@ -94,3 +94,62 @@ test("OpenAPI bounds shared function/default graphs before exponential expansion
   assert.throws(() => exportBackendOpenAPI(definition(s.number(), s.default(s.unknown(), defaults)), settings), /node or text budget/u);
   assert.throws(() => exportBackendOpenAPI({ ...definition(), functions: tree }, settings), /function tree exceeds/u);
 });
+
+test('OpenAPI fails closed on flagged patterns while runtime validation retains its flags', async () => {
+  for (const flags of ['i', 'm', 's', 'u', 'v', 'g', 'y', 'd']) {
+    const pattern = s.string({ pattern: new RegExp('^foo$', flags) });
+    assert.throws(() => exportBackendOpenAPI(definition(s.string(), pattern), settings), /pattern.*flags/i);
+    assert.throws(() => exportBackendOpenAPI(definition(pattern), settings), /pattern.*flags/i);
+  }
+  const recordPattern = s.record(s.boolean(), { keyPattern: /^foo$/i });
+  assert.throws(() => exportBackendOpenAPI(definition(s.string(), recordPattern), settings), /unsupported schema/u);
+  assert.throws(() => exportBackendOpenAPI(definition(recordPattern), settings), /unsupported schema/u);
+  const backend = defineBackend({ schema: defineDatabase({}) }).functions(({ publicQuery }) => ({
+    insensitive: publicQuery({ args: { value: s.string({ pattern: /^foo$/i }) }, returns: s.string(), agent: false, handler: (_, { value }) => value }),
+  }));
+  const runtime = await openBackend(backend, { path: ':memory:', agent: false });
+  try {
+    const response = await runtime.handle(new Request(settings.serverUrl + '/__clank/query/insensitive', {
+      method: 'POST', headers: { 'content-type': 'application/json', origin: settings.serverUrl }, body: JSON.stringify({ value: 'FOO' }),
+    }));
+    assert.equal(response.status, 200); assert.equal((await response.json()).value, 'FOO');
+  } finally { runtime.close(); }
+  assert.equal(exportBackendOpenAPI(definition(s.string(), s.string({ pattern: /^foo$/ })), settings).components.schemas['query.math.double.input'].properties.value.pattern, '^foo$');
+});
+
+test('OpenAPI refuses overlapping output unions requiring optional object normalization', async (t) => {
+  const optional = s.object({ value: s.optional(s.string()) });
+  for (const [name, schema] of [
+    ['objects', s.union([optional, s.object({ other: s.optional(s.string()) })])],
+    ['arrays', s.union([s.array(optional), s.array(s.string())])],
+    ['nested', s.object({ value: s.union([s.nullable(optional), s.object({ required: s.string() })]) })],
+  ]) await t.test(name, () => assert.throws(() => exportBackendOpenAPI(definition(schema), settings), /optional output unions/u));
+  assert.doesNotThrow(() => exportBackendOpenAPI(definition(s.string(), s.union([optional, s.object({ other: s.optional(s.string()) })])), settings));
+  assert.doesNotThrow(() => exportBackendOpenAPI(definition(s.union([s.object({ value: s.string() }), s.object({ other: s.string() })])), settings));
+  const custom = { parse: () => ({ value: undefined }), safeParse: () => ({ success: false }), toJSONSchema: () => optional.toJSONSchema() };
+  assert.throws(() => exportBackendOpenAPI(definition(custom), settings), /custom optional output schemas/u);
+});
+
+test('OpenAPI omission contracts agree with HTTP input and nested optional output', async (t) => {
+  const nested = s.object({ label: s.optional(s.string()), count: s.default(s.number(), 1) });
+  const backend = defineBackend({ schema: defineDatabase({}) }).functions(({ publicQuery }) => ({
+    omitted: publicQuery({ args: { value: s.unknown() }, returns: s.boolean(), agent: false, handler: (_, input) => input.value === undefined }),
+    output: publicQuery({ args: {}, agent: false, returns: s.object({
+      value: s.optional(s.string()), nested, list: s.array(nested), nullable: s.nullable(nested), defaults: s.default(s.string(), 'default'),
+    }), handler: () => ({ nested: {}, list: [{}], nullable: {} }) }),
+  }));
+  const document = exportBackendOpenAPI(backend, settings);
+  const runtime = await openBackend(backend, { path: ':memory:', agent: false, onError() {} });
+  try {
+    for (const [name, value] of [['omitted', true], ['output', { nested: { count: 1 }, list: [{ count: 1 }], nullable: { count: 1 }, defaults: 'default' }]]) {
+      await t.test(name, async () => {
+        if (name === 'omitted') assert.deepEqual(document.components.schemas['query.omitted.input'].anyOf[0].required, []);
+        else assert.deepEqual(document.components.schemas['query.output.output'].properties.value.required, ['nested', 'list', 'nullable']);
+        const response = await runtime.handle(new Request(settings.serverUrl + '/__clank/query/' + name, {
+          method: 'POST', headers: { 'content-type': 'application/json', origin: settings.serverUrl }, body: '{}',
+        }));
+        assert.equal(response.status, 200, name); assert.deepEqual((await response.json()).value, value);
+      });
+    }
+  } finally { runtime.close(); }
+});
