@@ -9479,14 +9479,11 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         if (input.confirmation !== plan.id) throw new PlatformError(422, "CONFIRMATION_REQUIRED", "Pass the exact evacuation plan ID as confirmation.");
         if (operation === "cancel") return api({ ok: true, plan: evacuations.cancel(plan.id, evacuationHooks(auth)) });
         if (operation !== "run") throw new PlatformError(404, "NOT_FOUND", "Evacuation operation not found.");
-        const evacuationRun = evacuations.run(plan.id, evacuationHooks(auth));
-        // Platform close must drain the durable plan through its terminal
-        // commit, not just the nested provider fallback scope.
-        activeEvacuationOperations.add(evacuationRun);
-        let completed:NodeEvacuationPlan;
-        try{completed=await evacuationRun;}finally{activeEvacuationOperations.delete(evacuationRun);}
-        audit(storage.internal, auth.user!.id, null, null, "runner.evacuation.complete", { id: plan.id, nodeId });
-        return api({ ok: true, plan: completed });
+        // Platform close must drain the durable plan and its completion audit,
+        // not just the nested provider fallback scope.
+        const evacuationRequest=(async()=>{const completed=await evacuations.run(plan.id,evacuationHooks(auth));audit(storage.internal,auth.user!.id,null,null,"runner.evacuation.complete",{id:plan.id,nodeId});return api({ok:true,plan:completed});})();
+        activeEvacuationOperations.add(evacuationRequest);
+        try{return await evacuationRequest;}finally{activeEvacuationOperations.delete(evacuationRequest);}
       }
       const adminRunnerDrainMatch =
         /^\/api\/admin\/runners\/([A-Za-z0-9_-][A-Za-z0-9_.:-]{0,127})\/drain$/.exec(url.pathname);

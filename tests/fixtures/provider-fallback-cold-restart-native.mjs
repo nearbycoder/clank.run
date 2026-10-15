@@ -86,7 +86,7 @@ const hold=${JSON.stringify(closeRaceHold)},release=${JSON.stringify(closeRaceRe
 const owner=${JSON.stringify(input.targetLabel)},project=${JSON.stringify(input.projectId)};
 let held=false;
 const gate=async(rows)=>{
- if(held||fs.existsSync(hold)||fs.existsSync(release)||args[0]!=='container'||args[1]!=='inspect')return;
+ if(held||fs.existsSync(hold)||fs.existsSync(release)||args[0]!=='container'||args[1]!=='inspect'||args.includes('--format')||!Array.isArray(rows))return;
  const listed=spawnSync('/usr/bin/docker',['container','ls','--filter','label=run.clank.owner='+owner,'--filter','label=run.clank.project='+project,'--format','{{.ID}}'],{encoding:'utf8',env:process.env});
  if(listed.status!==0||listed.stdout.trim().split('\\n').filter(Boolean).length<4)return;
  const target=rows.find(row=>row.Config?.Labels?.['run.clank.owner']===owner&&row.Config?.Labels?.['run.clank.project']===project);
