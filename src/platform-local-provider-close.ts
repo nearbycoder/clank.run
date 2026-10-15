@@ -20,10 +20,24 @@ export function createEvacuationAdmissionScope(AsyncLocalStorage: new () => {
   run<T>(store: object, callback: () => T): T;
 }) {
   const scope = new AsyncLocalStorage();
+  type Admission = { active: boolean };
   return Object.freeze({
-    run<T>(callback: () => T): T { return scope.run(Object.freeze({}), callback); },
+    run<T>(callback: () => T): T {
+      const admission: Admission = { active: true };
+      return scope.run(admission, () => {
+        let result: T;
+        try { result = callback(); }
+        catch (error) { admission.active = false; throw error; }
+        if (result && typeof (result as { then?: unknown }).then === "function") {
+          return Promise.resolve(result).finally(() => { admission.active = false; }) as T;
+        }
+        admission.active = false;
+        return result;
+      });
+    },
     assertAllowed(closing: boolean, closed: boolean): void {
-      if ((closing || closed) && !scope.getStore()) throw new Error("Original platform is closing and cannot admit a new fallback operation.");
+      const admission = scope.getStore() as Admission | undefined;
+      if ((closing || closed) && !admission?.active) throw new Error("Original platform is closing and cannot admit a new fallback operation.");
     },
   });
 }

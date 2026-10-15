@@ -32,6 +32,16 @@ test('platform close drains an admitted multi-project plan while rejecting new s
  assert.deepEqual(events,['first:scope-started','first:scope-completed','second:scope-started','second:scope-completed','plan:terminal','close:services']);
 });
 
+test('settled evacuation admission is revoked in detached async descendants',async()=>{
+ const admission=createEvacuationAdmissionScope(AsyncLocalStorage);let closing=false,releaseDescendant;
+ const descendantGate=new Promise(resolve=>{releaseDescendant=resolve;});let descendant;
+ await admission.run(async()=>{
+  descendant=(async()=>{await descendantGate;admission.assertAllowed(closing,false);})();
+ });
+ closing=true;releaseDescendant();
+ await assert.rejects(descendant,/cannot admit a new fallback operation/u);
+});
+
 test('unresolved factory roots preflight before closing any owned service',async()=>{
  let closed=0,removed=0;
  const entries=new Map([
