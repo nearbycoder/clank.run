@@ -77,7 +77,8 @@ async function mockIdp(){
  return {issuer,get tokenCalls(){return tokenCalls},holdKeys(){let reached,release;const ready=new Promise(resolve=>reached=resolve),wait=new Promise(resolve=>release=resolve);heldKeys={reached,wait};return {ready,release}},setClaims(value){overrides=value},badSignature(value){wrongSignature=value},setDiscovery(value){discoveryOverride=value},async close(){server.closeAllConnections();await new Promise(resolve=>server.close(resolve))}};
 }
 async function ssoFixture(){const f=await fixture(),idp=await mockIdp(),secret='offboard-test-secret-32-characters-minimum',options={applicationOrigin:origin,allowInsecureLoopback:true,providers:[{organizationId:'company',issuer:idp.issuer,clientId:'clank-client',offboardingToken:secret}]};const sso=openOrganizationSso(f.runtime.database,f.runtime.auth,options);return{...f,idp,secret,sso,async close(){await idp.close();await f.close()}}}
-async function flow(f,alter){const start=await f.sso.handle(req('/__clank/sso/start/company'));assert.equal(start.status,303);const authorized=await fetch(start.headers.get('location'),{redirect:'manual'});const callback=new Request(authorized.headers.get('location'),{headers:{cookie:start.headers.get('set-cookie').split(';')[0]}});return f.sso.handle(alter?alter(callback):callback)}
+async function signInCallback(f){const start=await f.sso.handle(req('/__clank/sso/start/company'));assert.equal(start.status,303);const authorized=await fetch(start.headers.get('location'),{redirect:'manual'});return new Request(authorized.headers.get('location'),{headers:{cookie:start.headers.get('set-cookie').split(';')[0]}})}
+async function flow(f,alter){const callback=await signInCallback(f);return f.sso.handle(alter?alter(callback):callback)}
 
 test('real mock OIDC code+PKCE sign-in creates a subject bound session and offboarding atomically revokes access',async()=>{
  const f=await ssoFixture();try{
@@ -218,7 +219,7 @@ async function identityFixture(extra={}) {
  let runtime=await openBackend(definition,{path:join(dir,'identities.sqlite')});
  const options={applicationOrigin:origin,allowInsecureLoopback:true,identityLinking:{policyRevision:1},providers:[{organizationId:'company',issuer:idp.issuer,clientId:'clank-client',offboardingToken:'organization-one-offboarding-secret-32chars'},{organizationId:'second',issuer:second.issuer,clientId:'clank-client',offboardingToken:'organization-two-offboarding-secret-32chars'}],...extra};
  let sso=openOrganizationSso(runtime.database,runtime.auth,options);
- return {dir,idp,second,options,deliveries,get runtime(){return runtime},get sso(){return sso},get sql(){return runtime.database[key]},
+ return {dir,idp,second,options,definition,deliveries,get runtime(){return runtime},get sso(){return sso},get sql(){return runtime.database[key]},
   async fresh(session){const start=await post(runtime,'/__clank/auth/reauthenticate/mfa/start',{password:'password-for-tests'},session);await post(runtime,'/__clank/auth/reauthenticate/mfa/finish',{challengeId:start.challengeId,code:deliveries.at(-1).code},session);return session},
   async reopen(updated=options){runtime.close();runtime=await openBackend(definition,{path:join(dir,'identities.sqlite')});sso=openOrganizationSso(runtime.database,runtime.auth,updated)},
   async close(){runtime.close();await idp.close();await second.close();await rm(dir,{recursive:true,force:true})}};
@@ -415,6 +416,76 @@ test('held real JWKS response cannot publish a link after local revocation, offb
   if(mode==='policy') openOrganizationSso(f.runtime.database,f.runtime.auth,{...f.options,identityLinking:{policyRevision:2}});
   held.release();assert.equal((await finishing).status,mode==='session'?401:403);assert.equal(f.sql.prepare('SELECT count(*) n FROM clank_sso_identities').get().n,0);
  }finally{await f.close()}}
+});
+
+test('ordinary SSO callbacks can move between independent controllers with the exact same current policy',async()=>{
+ const f=await identityFixture();let other;
+ try{
+  const pending=await signInCallback(f);
+  other=await openBackend(f.definition,{path:join(f.dir,'identities.sqlite')});
+  const current=openOrganizationSso(other.database,other.auth,f.options);
+  const response=await current.handle(pending);assert.equal(response.status,303,await response.clone().text());
+  const cookie=response.headers.get('set-cookie').split(';')[0];
+  const context=await other.auth.resolve(new Request(origin,{headers:{cookie}}));assert.equal(context.user.email,'employee@example.test');
+  const previous=await flow(f);assert.equal(previous.status,303,await previous.clone().text());
+  assert.equal(Number(f.sql.prepare('SELECT count(*) n FROM clank_auth_sessions').get().n),2);
+  assert.equal(Number(f.sql.prepare('SELECT count(*) n FROM clank_sso_session_bindings').get().n),2);
+ }finally{other?.close();await f.close()}
+});
+
+test('ordinary SSO on a retained controller cannot bypass SCIM enabled through an independent database connection',async()=>{
+ for(const initiallyLinked of [false,true]){
+  let provisions=0;const f=await identityFixture({identityLinking:initiallyLinked?{policyRevision:1}:undefined,onProvision(){provisions++}});let other;
+  try{
+   const pending=await signInCallback(f);
+   other=await openBackend(f.definition,{path:join(f.dir,'identities.sqlite')});
+   const options={...f.options,identityLinking:{policyRevision:2},providers:f.options.providers.map(provider=>provider.organizationId==='company'
+    ?{...provider,provisioning:{token:'current-separate-provisioning-token-32chars',expiresAt:Date.now()+60000}}:provider),onProvisioning(){}};
+   const current=openOrganizationSso(other.database,other.auth,options);
+   const rejected=await f.sso.handle(pending);assert.equal(rejected.status,403,await rejected.clone().text());
+   assert.equal((await f.sso.handle(req('/__clank/sso/start/company'))).status,403);
+   const latest=await flow({...f,sso:current});assert.equal(latest.status,403);assert.equal((await latest.json()).error.code,'SSO_NOT_PROVISIONED');
+   assert.equal(provisions,0);
+   for(const table of ['clank_auth_users','clank_auth_sessions','clank_sso_identities','clank_sso_session_bindings','clank_scim_users'])assert.equal(Number(f.sql.prepare('SELECT count(*) n FROM '+table).get().n),0,table);
+   assert.equal(Number(f.sql.prepare("SELECT count(*) n FROM clank_sso_events WHERE event='login'").get().n),0);
+  }finally{other?.close();await f.close()}
+ }
+});
+
+test('ordinary SSO held at signed JWKS verification fences current policy and provider changes before provisioning',async()=>{
+ for(const mode of ['provisioning','removed','issuer','client','secret','allowlist','revision','disabled']){
+  let provisions=0;const f=await identityFixture({onProvision(){provisions++}});let other,held;
+  try{
+   const pending=await signInCallback(f),replacementPending=await signInCallback(f);held=f.idp.holdKeys();
+   const finishing=f.sso.handle(pending);await held.ready;
+   other=await openBackend(f.definition,{path:join(f.dir,'identities.sqlite')});
+   const options={...f.options,identityLinking:mode==='disabled'?undefined:{policyRevision:2},onProvisioning(){},
+    providers:mode==='removed'?f.options.providers.filter(provider=>provider.organizationId!=='company'):f.options.providers.map(provider=>provider.organizationId!=='company'?provider:{...provider,
+     ...(mode==='provisioning'?{provisioning:{token:'changed-separate-provisioning-token-32chars',expiresAt:Date.now()+60000}}:{}),
+     ...(mode==='issuer'?{issuer:f.second.issuer}:{}),...(mode==='client'?{clientId:'replacement-client'}:{}),
+     ...(mode==='secret'?{clientSecret:'replacement-client-secret'}:{}),...(mode==='allowlist'?{endpointOrigins:['https://replacement-keys.test']}:{}),})};
+   const current=openOrganizationSso(other.database,other.auth,options);
+   held.release();const response=await finishing;assert.equal(response.status,403,mode+': '+await response.clone().text());assert.equal(response.headers.get('set-cookie'),null);
+   const replacement=await current.handle(replacementPending);assert.equal(replacement.status,mode==='removed'?404:409,mode+': '+await replacement.clone().text());
+   assert.equal(provisions,0,mode);
+   for(const table of ['clank_auth_users','clank_auth_sessions','clank_sso_identities','clank_sso_session_bindings'])assert.equal(Number(f.sql.prepare('SELECT count(*) n FROM '+table).get().n),0,mode+': '+table);
+  }finally{held?.release();other?.close();await f.close()}
+ }
+});
+
+test('ordinary SSO policy changes during real session creation revoke the unpublished session',async()=>{
+ const f=await identityFixture();let other,release;
+ try{
+  let reached;const ready=new Promise(resolve=>reached=resolve),held=new Promise(resolve=>release=resolve);
+  const auth=new Proxy(f.runtime.auth,{get(target,property){if(property==='issueFederatedSession')return async(...args)=>{const response=await target.issueFederatedSession(...args);reached();await held;return response};const value=target[property];return typeof value==='function'?value.bind(target):value}});
+  const sso=openOrganizationSso(f.runtime.database,auth,f.options),pending=await signInCallback({...f,sso}),finishing=sso.handle(pending);await ready;
+  assert.equal(Number(f.sql.prepare('SELECT count(*) n FROM clank_auth_sessions').get().n),1);
+  other=await openBackend(f.definition,{path:join(f.dir,'identities.sqlite')});
+  openOrganizationSso(other.database,other.auth,{...f.options,identityLinking:{policyRevision:2}});
+  release();const response=await finishing;assert.equal(response.status,403);assert.equal(response.headers.get('set-cookie'),null);
+  assert.equal(Number(f.sql.prepare('SELECT count(*) n FROM clank_auth_sessions').get().n),0);
+  assert.equal(Number(f.sql.prepare('SELECT count(*) n FROM clank_sso_session_bindings').get().n),0);
+ }finally{release?.();other?.close();await f.close()}
 });
 
 test('changed provider configuration and account generation reject pending links; original policy cannot overwrite newer revisions',async()=>{

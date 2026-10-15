@@ -84,6 +84,9 @@ export function openOrganizationSso(database: SQLiteDatabase<any>, auth: AuthRun
   const publicConfiguration = JSON.stringify([applicationOrigin, prefix, maxActive, maxRetained,
     [...providers.values()].map(provider => [provider.organizationId, provider.issuer, provider.clientId, [...provider.allowed].sort(),
       ...(provider.provisioning ? [["scim", provider.provisioning.expiresAt, createHash("sha256").update(provider.provisioning.token).digest("hex"), provider.provisioning.groupRoles]] : [])]).sort((a,b) => String(a[0]).localeCompare(String(b[0])))]);
+  const admissionConfiguration = createHash("sha256").update(JSON.stringify([publicConfiguration, linking?.policyRevision ?? null,
+    [...providers.values()].map(provider => [provider.organizationId, provider.clientSecret ?? null, offboardingFingerprints.get(provider.organizationId)])
+      .sort((a,b) => String(a[0]).localeCompare(String(b[0])))])).digest("hex");
   // Transactional table replacement removes the legacy global user UNIQUE constraint.
   // Original issuer/subject ownership, revocations and audit rows are retained.
   const initializeIdentity = () => {
@@ -121,15 +124,21 @@ export function openOrganizationSso(database: SQLiteDatabase<any>, auth: AuthRun
     sql.prepare("DELETE FROM clank_sso_offboarding_credentials").run();
     for (const provider of providers.values()) sql.prepare("INSERT INTO clank_sso_offboarding_credentials VALUES(?,?,?)")
       .run(provider.organizationId, provider.issuer, offboardingFingerprints.get(provider.organizationId));
+    // Ordinary SSO must observe replacement policy even if this controller was
+    // opened before linking or SCIM existed. Persist no plaintext credentials.
+    sql.exec("CREATE TABLE IF NOT EXISTS clank_sso_admission_policy (singleton INTEGER PRIMARY KEY CHECK(singleton=1), fingerprint TEXT NOT NULL)");
+    sql.prepare("INSERT INTO clank_sso_admission_policy VALUES(1,?) ON CONFLICT(singleton) DO UPDATE SET fingerprint=excluded.fingerprint").run(admissionConfiguration);
   };
   const requireOffboardingCredential = (provider: OrganizationSsoProvider) => {
     const current = sql.prepare("SELECT issuer,fingerprint FROM clank_sso_offboarding_credentials WHERE organization=?").get(provider.organizationId);
     if (!current || current.issuer !== provider.issuer || current.fingerprint !== offboardingFingerprints.get(provider.organizationId))
       throw new AuthError("UNAUTHENTICATED", "Offboarding authentication failed.", 401);
   };
+  const admissionCurrent = () => sql.prepare("SELECT fingerprint FROM clank_sso_admission_policy WHERE singleton=1").get()?.fingerprint === admissionConfiguration;
+  const requireAdmission = () => { if (!admissionCurrent()) throw new AuthError("SSO_POLICY", "SSO provider policy changed; restart sign-in on the current controller.", 403); };
   const policyCurrent = () => {
     const policy = sql.prepare("SELECT * FROM clank_sso_policy WHERE singleton=1").get();
-    return Boolean(linking && policy && Number(policy.enabled)===1 && Number(policy.revision)===linking.policyRevision && policy.configuration===publicConfiguration);
+    return Boolean(linking && policy && Number(policy.enabled)===1 && Number(policy.revision)===linking.policyRevision && policy.configuration===publicConfiguration && admissionCurrent());
   };
   const requirePolicy = () => { if(!policyCurrent()) throw new AuthError("SSO_LINKING_DISABLED","Identity linking is disabled or its policy changed.",403); };
   const currentBrowser = async (request: Request, fresh = false) => {
@@ -254,12 +263,14 @@ export function openOrganizationSso(database: SQLiteDatabase<any>, auth: AuthRun
         }
         if (start && request.method === "GET") {
           const provider = providers.get(start[1]!); if (!provider) throw new AuthError("SSO_NOT_FOUND", "SSO provider not found.", 404);
+          requireAdmission();
           const metadata = await discovery(provider), state = random(), browser = random(), nonce = random(), verifier = random();
           const challenge = await hash(verifier), stateHash = await hash(state), browserHash = await hash(browser);
           sql.transaction(() => {
+            requireAdmission();
             sql.prepare("DELETE FROM clank_sso_states WHERE expires <= ?").run(Date.now());
             if (Number(sql.prepare("SELECT COUNT(*) AS n FROM clank_sso_states").get()!.n) >= 1000) throw new AuthError("SSO_BUSY", "SSO sign-in capacity is full.", 503);
-            sql.prepare("INSERT INTO clank_sso_states(state, organization, browser, nonce, verifier, expires) VALUES (?, ?, ?, ?, ?, ?)").run(stateHash, provider.organizationId, browserHash, nonce, verifier, Date.now() + 600_000);
+            sql.prepare("INSERT INTO clank_sso_states(state, organization, browser, nonce, verifier, expires, configuration) VALUES (?, ?, ?, ?, ?, ?, ?)").run(stateHash, provider.organizationId, browserHash, nonce, verifier, Date.now() + 600_000, admissionConfiguration);
           });
           metadata.authorization.search = new URLSearchParams({ response_type: "code", client_id: provider.clientId, redirect_uri: callback, scope: "openid email profile", state, nonce, code_challenge: challenge, code_challenge_method: "S256" }).toString();
           return new Response(null, { status: 303, headers: { ...headers, location: metadata.authorization.href, "set-cookie": cookie(browser) } });
@@ -287,6 +298,8 @@ export function openOrganizationSso(database: SQLiteDatabase<any>, auth: AuthRun
             sql.prepare("UPDATE clank_sso_states SET consumed = 1 WHERE state = ?").run(stateHash); return stored;
           });
           const provider = providers.get(String(row.organization)); if (!provider) throw new AuthError("SSO_NOT_FOUND", "SSO provider not found.", 404);
+          requireAdmission();
+          if (!row.user_id && row.configuration !== admissionConfiguration) throw new AuthError("SSO_POLICY", "SSO provider configuration changed during sign-in.", 409);
           if(row.user_id) await currentLinkBrowser(request,row);
           const metadata = await discovery(provider);
           const token = await networkJson(metadata.token, new URLSearchParams({ grant_type: "authorization_code", client_id: provider.clientId, ...(provider.clientSecret ? { client_secret: provider.clientSecret } : {}), redirect_uri: callback, code, code_verifier: String(row.verifier) }).toString(), options.allowInsecureLoopback);
@@ -319,6 +332,7 @@ export function openOrganizationSso(database: SQLiteDatabase<any>, auth: AuthRun
             return new Response(null,{status:303,headers:{...headers,location:`${applicationOrigin}/`}});
           }
           const userId = sql.transaction(changes => {
+            requireAdmission();
             scim.guardSubject(provider.organizationId,provider.issuer,String(claims.sub));
             if (sql.prepare("SELECT 1 FROM clank_sso_revocations WHERE organization = ? AND issuer = ? AND subject = ?").get(provider.organizationId, provider.issuer, claims.sub)) throw new AuthError("SSO_OFFBOARDED", "This organization identity has been offboarded.", 403);
             const existing = sql.prepare("SELECT * FROM clank_sso_identities WHERE organization = ? AND issuer = ? AND subject = ?").get(provider.organizationId, provider.issuer, claims.sub);
@@ -344,14 +358,16 @@ export function openOrganizationSso(database: SQLiteDatabase<any>, auth: AuthRun
           const binding=sql.prepare("SELECT id,version FROM clank_sso_identities WHERE organization=? AND issuer=? AND subject=? AND user_id=? AND active=1").get(provider.organizationId,provider.issuer,claims.sub,userId);
           if(!binding) throw new AuthError("SSO_OFFBOARDED","The organization identity is no longer active.",403);
           const generation=Number(sql.prepare("SELECT generation FROM clank_sso_accounts WHERE user_id=?").get(userId)?.generation??0);
+          requireAdmission();
           const session = await auth.issueFederatedSession(userId as AuthUserId, request);
-          try { scim.guardSubject(provider.organizationId,provider.issuer,String(claims.sub)); }
+          try { requireAdmission(); scim.guardSubject(provider.organizationId,provider.issuer,String(claims.sub)); }
           catch (error) { auth.revokeUserSessions(userId as AuthUserId); throw error; }
           if(Number(sql.prepare("SELECT generation FROM clank_sso_accounts WHERE user_id=?").get(userId)?.generation??0)!==generation || !sql.prepare("SELECT 1 FROM clank_sso_identities WHERE id=? AND version=? AND active=1").get(binding.id,binding.version) || sql.prepare("SELECT 1 FROM clank_sso_revocations WHERE organization=? AND issuer=? AND subject=?").get(provider.organizationId,provider.issuer,claims.sub)) {
             auth.revokeUserSessions(userId as AuthUserId);throw new AuthError("SSO_OFFBOARDED","This identity changed before the session was published.",403);
           }
           const issued = await session.clone().json() as {session?: {id?: string}};
           try {sql.transaction(() => {
+            requireAdmission();
             // Record authentication to this exact organization, not mere identity enrollment.
             const current = issued.session?.id ? auth.refreshSession(issued.session.id) : null;
             if (current?.user?.id !== userId || Number(sql.prepare("SELECT generation FROM clank_sso_accounts WHERE user_id=?").get(userId)?.generation??0)!==generation
