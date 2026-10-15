@@ -2192,7 +2192,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
   let closed = false;
   let closing = false;
   let closeFlight:Promise<void>|undefined;
-  const activeLocalFallbackOperations = new Set<Promise<unknown>>();
+  const activeEvacuationOperations = new Set<Promise<unknown>>();
 
   const storageDiagnostics = async (): Promise<Record<string, unknown>> => {
     const now = Date.now();
@@ -4946,8 +4946,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       if(localProviders.get(plan.nodeId)!==source||localProviders.get(targetNodeId)!==target||projectLeaseAssertions.get(item.projectId)!==projectLease||!storage.internal.prepare("SELECT 1 FROM clank_platform_evacuations WHERE id=? AND lease_id=? AND lease_until>?").get(plan.id,identity.executionLeaseId,Date.now()))throw new Error("Native evacuation original execution lease or provider binding changed.");
     }};
     const operation=localFallbackScope.run(scope,async()=>{scope.check();if(coldResume)await openColdFallbackFactoryServices(scope,coldResume.journal,coldResume.authentication);if(!scope.source.service||!scope.target.service)throw new Error("Native fallback provider services are not open inside the authenticated scope.");const result=await callback(scope);scope.check();return result;});
-    activeLocalFallbackOperations.add(operation);
-    try{return await operation;}finally{activeLocalFallbackOperations.delete(operation);}
+    activeEvacuationOperations.add(operation);
+    try{return await operation;}finally{activeEvacuationOperations.delete(operation);}
   };
   const openColdFallbackFactoryServices = async(scope:LocalFallbackScope,journal:string,authentication:string) => {
     const source=scope.source,target=scope.target;
@@ -9479,7 +9479,12 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         if (input.confirmation !== plan.id) throw new PlatformError(422, "CONFIRMATION_REQUIRED", "Pass the exact evacuation plan ID as confirmation.");
         if (operation === "cancel") return api({ ok: true, plan: evacuations.cancel(plan.id, evacuationHooks(auth)) });
         if (operation !== "run") throw new PlatformError(404, "NOT_FOUND", "Evacuation operation not found.");
-        const completed = await evacuations.run(plan.id, evacuationHooks(auth));
+        const evacuationRun = evacuations.run(plan.id, evacuationHooks(auth));
+        // Platform close must drain the durable plan through its terminal
+        // commit, not just the nested provider fallback scope.
+        activeEvacuationOperations.add(evacuationRun);
+        let completed:NodeEvacuationPlan;
+        try{completed=await evacuationRun;}finally{activeEvacuationOperations.delete(evacuationRun);}
         audit(storage.internal, auth.user!.id, null, null, "runner.evacuation.complete", { id: plan.id, nodeId });
         return api({ ok: true, plan: completed });
       }
@@ -12778,7 +12783,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       closeFlight=(async()=>{
       if(closed)return;
       closing=true;
-      try{await drainPlatformLocalFallbackOperations(activeLocalFallbackOperations,()=>closePlatformOwnedLocalProviders(localProviders, nodeId=>{localProviders.delete(nodeId);}));}
+      try{await drainPlatformLocalFallbackOperations(activeEvacuationOperations,()=>closePlatformOwnedLocalProviders(localProviders, nodeId=>{localProviders.delete(nodeId);}));}
       catch(error){if(error instanceof PlatformLocalProviderCloseError&&error.kind==="unresolved-root"){closing=false;closeFlight=undefined;}else closeFlight=undefined;throw error;}
       statusPages?.close();
       projectSlos.close();

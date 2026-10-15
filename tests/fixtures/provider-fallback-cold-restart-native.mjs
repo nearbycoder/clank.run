@@ -75,26 +75,31 @@ try{
  server=await serve(request=>runtime.handle(request),{hostname:'127.0.0.1',port:47451,maxBodySize:100*1024*1024,allowedHosts:['127.0.0.1:47451']});
  control=new DatabaseSync(controlPath,{readOnly:true});control.exec('PRAGMA query_only=ON;PRAGMA trusted_schema=OFF;PRAGMA busy_timeout=5000');
  const coordinator=createDeploymentCoordinatorClient({baseUrl:origin}),sessions=[input.credentials.sourceSession,input.credentials.targetSession];
- // Gate the first real target-role start after Docker has completed it. This
- // lets the fixture call platform.close() while the authenticated cold-resume
- // operation is still inside its scoped native work.
+ // Hold one identified, awaited inspect issued by the active cold-resume
+ // operation so close starts while that operation is suspended in native work.
  const closeRaceHold=join(input.directory,'cold-resume-close-race-held'),closeRaceRelease=join(input.directory,'cold-resume-close-race-release'),closeRaceDocker=join(input.directory,'cold-resume-close-race-docker.mjs');closeRaceReleasePath=closeRaceRelease;
  const closeRaceScript=`#!/usr/bin/env node
 import fs from 'node:fs';
 import {spawn,spawnSync} from 'node:child_process';
 const args=process.argv.slice(2);
 const hold=${JSON.stringify(closeRaceHold)},release=${JSON.stringify(closeRaceRelease)};
-const gate=async()=>{
- const listed=spawnSync('/usr/bin/docker',['container','ls','--filter','label=run.clank.owner=${input.targetLabel}','--filter','label=run.clank.project=${input.projectId}','--format','{{.ID}}'],{encoding:'utf8',env:process.env});
- if(listed.status!==0||listed.stdout.trim().split('\\n').filter(Boolean).length<4||fs.existsSync(release))return;
- const temporary=hold+'.'+process.pid+'.tmp';fs.writeFileSync(temporary,JSON.stringify({pid:process.pid,args:args.slice(0,3)}));fs.renameSync(temporary,hold);
+const owner=${JSON.stringify(input.targetLabel)},project=${JSON.stringify(input.projectId)};
+let held=false;
+const gate=async(rows)=>{
+ if(held||fs.existsSync(hold)||fs.existsSync(release)||args[0]!=='container'||args[1]!=='inspect')return;
+ const listed=spawnSync('/usr/bin/docker',['container','ls','--filter','label=run.clank.owner='+owner,'--filter','label=run.clank.project='+project,'--format','{{.ID}}'],{encoding:'utf8',env:process.env});
+ if(listed.status!==0||listed.stdout.trim().split('\\n').filter(Boolean).length<4)return;
+ const target=rows.find(row=>row.Config?.Labels?.['run.clank.owner']===owner&&row.Config?.Labels?.['run.clank.project']===project);
+ if(!target)return;
+ let claim;try{claim=fs.openSync(hold+'.claim','wx',0o600);}catch(error){if(error.code==='EEXIST')return;throw error;}fs.closeSync(claim);
+ held=true;const temporary=hold+'.'+process.pid+'.tmp';fs.writeFileSync(temporary,JSON.stringify({pid:process.pid,dockerArgs:args,containerId:target.Id,role:target.Config.Labels['run.clank.role']}));fs.renameSync(temporary,hold);
  const until=Date.now()+60000;while(!fs.existsSync(release)){if(Date.now()>=until)process.exit(75);await new Promise(resolve=>setTimeout(resolve,10));}
 };
 if(args[0]==='container'&&args[1]==='start'){
  const child=spawn('/usr/bin/docker',args,{stdio:'inherit',env:process.env});const [code,signal]=await new Promise((resolve,reject)=>{child.once('error',reject);child.once('exit',(code,signal)=>resolve([code,signal]));});if(signal)process.exit(1);process.exitCode=code??1;
 }else{
  const result=spawnSync('/usr/bin/docker',args,{encoding:'utf8',input:fs.readFileSync(0),env:process.env,maxBuffer:8*1024*1024});
- if(result.status===0&&(args[0]==='container'&&(args[1]==='ls'||args[1]==='inspect')))await gate();
+ if(result.status===0&&args[0]==='container'&&args[1]==='inspect'){let rows=[];try{rows=JSON.parse(result.stdout);}catch{}await gate(rows);}
  if(result.stdout)process.stdout.write(result.stdout);if(result.stderr)process.stderr.write(result.stderr);process.exitCode=result.status??1;
 }`;
  fs.writeFileSync(closeRaceDocker,closeRaceScript,{mode:0o700});fs.chmodSync(closeRaceDocker,0o700);
@@ -109,15 +114,17 @@ if(args[0]==='container'&&args[1]==='start'){
  heartbeat=setInterval(()=>{heartbeatTail=heartbeatTail.then(async()=>{const revoked=nativeFallbackSourceRevocationState(control,input.credentials.sourceRevocation);if(!revoked)try{await coordinator.heartbeat('native_node',sessions[0].token);}catch(error){if(error?.status!==401||error?.code!=='NODE_AUTH_FAILED'||!nativeFallbackSourceRevocationState(control,input.credentials.sourceRevocation))throw error;}await coordinator.heartbeat('native_target',sessions[1].token);}).catch(error=>{heartbeatFailure??=error;});},1000);heartbeat.unref();
  proof.stage='resume-plan-close-race';const resumeRequest=fetch(origin+'/api/admin/runners/native_node/evacuations/'+input.plan.id+'/run',{method:'POST',headers:{'content-type':'application/json',origin,cookie:input.credentials.cookie,'x-clank-csrf':input.credentials.csrfToken},body:JSON.stringify({confirmation:input.plan.id}),signal:AbortSignal.timeout(60000)});
  await waitForFile(closeRaceHold,'all four fresh target roles to start during cold resume');
+ const heldCall=JSON.parse(fs.readFileSync(closeRaceHold,'utf8'));assert.equal(heldCall.dockerArgs[0],'container');assert.equal(heldCall.dockerArgs[1],'inspect');assert.ok(/^[a-f0-9]{64}$/u.test(heldCall.containerId));assert.ok(['web','worker','scheduler'].includes(heldCall.role));
  const heldRows=await allRows(),freshDuringRace=heldRows.filter(row=>row.Config?.Labels?.['run.clank.owner']===input.targetLabel&&row.Config?.Labels?.['run.clank.project']===input.projectId&&row.State?.Status==='running');assert.equal(freshDuringRace.length,4,'The close race must begin after every target role is running.');
+ assert.ok(freshDuringRace.some(row=>row.Id===heldCall.containerId&&row.Config.Labels['run.clank.role']===heldCall.role),'The held Docker inspect must identify one of the exact running target roles.');
  for(const row of freshDuringRace){const pid=row.State.Pid,processBirth=birth(pid),cgroupLine=fs.readFileSync('/proc/'+pid+'/cgroup','utf8').trim();assert.ok(Number.isInteger(pid)&&pid>0);assert.ok(processBirth);assert.ok(cgroupLine.startsWith('0::/'));const cgroup='/sys/fs/cgroup'+cgroupLine.slice(3);assert.ok(fs.readFileSync(cgroup+'/cgroup.procs','utf8').trim().split('\n').includes(String(pid)));assert.equal(row.HostConfig.Memory,384*1024*1024);assert.equal(row.HostConfig.NanoCpus,500000000);assert.equal(row.HostConfig.PidsLimit,96);freshNativeEvidence.push({containerId:row.Id,pid,birth:processBirth,cgroup});}
  const webDuringRace=freshDuringRace.find(row=>row.Config.Labels['run.clank.role']==='web');assert.ok(webDuringRace);await webRequest(webDuringRace,'/write');const ledgerDeadline=performance.now()+5000;let ledgerDuringRace;
  for(;;){ledgerDuringRace=await webRequest(webDuringRace,'/');if(freshDuringRace.every(row=>ledgerDuringRace.some(value=>value.role===row.Config.Labels['run.clank.role']&&value.host===row.Config.Hostname&&value.value==='line one\nline two')))break;assert.ok(performance.now()<ledgerDeadline,'Fresh roles did not commit real writes before close.');await new Promise(resolve=>setTimeout(resolve,25));}
  const livePlan=control.prepare('SELECT state,phase FROM clank_platform_evacuations WHERE id=?').get(input.plan.id),liveHead=control.prepare('SELECT phase FROM clank_platform_fallback_resume_heads WHERE predecessor_id=? ORDER BY attempt DESC LIMIT 1').get(input.retained.operation_id);assert.ok(livePlan&&livePlan.state!=='completed'&&liveHead?.phase!=='published','The close gate must occur before cold-resume publication.');
- let closeSettled=false;const closeFlight=runtime.close().then(()=>{closeSettled=true;},error=>{closeSettled=true;throw error;});await new Promise(resolve=>setTimeout(resolve,100));const closeWaitedForResume=!closeSettled;assert.equal(closeWaitedForResume,true,'Platform close must wait for the active authenticated cold-resume operation.');
+ let closeSettled=false,closeResolvedAt,planAtClose;const closeFlight=runtime.close().then(()=>{closeSettled=true;closeResolvedAt=performance.now();planAtClose=control.prepare('SELECT state,phase FROM clank_platform_evacuations WHERE id=?').get(input.plan.id);},error=>{closeSettled=true;throw error;});await new Promise(resolve=>setTimeout(resolve,100));const closeWaitedForResume=!closeSettled;assert.equal(closeWaitedForResume,true,'Platform close must wait for the active authenticated cold-resume operation.');
  fs.writeFileSync(closeRaceRelease,'continue');
- const response=await resumeRequest,body=await response.json();await closeFlight;
- proof.activeCloseRace={observedStartedTargetRoles:freshDuringRace.length,freshRolesWroteBeforeClose:ledgerDuringRace.length>0,closeWaitedForActiveResume:closeWaitedForResume,planCompletedDuringClose:true,platformCloseCompletedAfterResume:true};
+ const [resolvedResume]=await Promise.all([resumeRequest.then(async response=>({response,body:await response.json(),settledAt:performance.now()})),closeFlight]);const {response,body}=resolvedResume;
+ const planCompletedAtClose=planAtClose?.state==='completed'&&planAtClose?.phase==='completed';proof.activeCloseRace={heldDockerCall:{command:heldCall.dockerArgs.slice(0,2),containerId:heldCall.containerId,role:heldCall.role},observedStartedTargetRoles:freshDuringRace.length,freshRolesWroteBeforeClose:ledgerDuringRace.length>0,closeWaitedForActiveResume:closeWaitedForResume,planCompletedAtClose,platformCloseCompletedAfterTerminalPlan:Boolean(closeResolvedAt&&planCompletedAtClose)};
  proof.resumeResponse={status:response.status,...(body.error?{error:diagnostic(body.error)}:{})};
  const planReadback=control.prepare('SELECT state,phase,error FROM clank_platform_evacuations WHERE id=?').get(input.plan.id);
  proof.planReadback={state:['planned','running','failed','completed','cancelled'].includes(planReadback?.state)?planReadback.state:'other',phase:['planned','quiescing','fenced','completed','failed','cancelled'].includes(planReadback?.phase)?planReadback.phase:'other',...(planReadback?.error?{error:diagnostic(planReadback.error)}:{})};
