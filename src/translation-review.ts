@@ -82,7 +82,7 @@ export async function reviewTranslationBundle<C extends MessageCatalog>(messages
       createI18n({ defaultLocale: source, messages: { [entry.key]: original.message }, translations: { [target]: { [entry.key]: translated } } });
     } catch { issues.push({ key: entry.key, code: "INVALID_TRANSLATION" }); continue; }
     result[entry.key] = translated;
-    if (!current?.[entry.key] || !sameMessage(current[entry.key]!, translated)) changes.push({ key: entry.key, before: current?.[entry.key] ?? null, after: translated });
+    if (current?.[entry.key] === undefined || !sameMessage(current[entry.key]!, translated)) changes.push({ key: entry.key, before: current?.[entry.key] ?? null, after: translated });
   }
   const accepted = issues.length ? null : defineMessages(result) as TranslatedCatalog<C>;
   return bounded({ protocol: "clank-translation-diff/1", ok: !issues.length, sourceLocale: source, targetLocale: target,
@@ -97,7 +97,7 @@ export async function acceptTranslationReview<C extends MessageCatalog>(messages
   if (snapshot.sourceRevision !== await messageCatalogRevision(catalog, source) || snapshot.targetRevision !== (current ? await messageCatalogRevision(current, target) : null)) throw new Error("Translation catalog changed after review.");
   createI18n({ defaultLocale: source, messages: catalog, translations: { [target]: snapshot.catalog } });
   if (snapshot.proposedRevision !== await messageCatalogRevision(snapshot.catalog, target)) throw new Error("Reviewed translation content changed.");
-  const expected = Object.keys(snapshot.catalog).filter(key => !current?.[key] || !sameMessage(current[key]!, snapshot.catalog![key]!)).sort();
-  if (JSON.stringify(expected) !== JSON.stringify(snapshot.changes.map(change => change.key).sort()) || snapshot.changes.some(change => !sameMessage(change.after, snapshot.catalog![change.key]!) || (change.before === null ? current?.[change.key] !== undefined : !current?.[change.key] || !sameMessage(change.before, current[change.key]!)))) throw new Error("Reviewed translation diff changed.");
+  const expected = Object.keys(snapshot.catalog).filter(key => current?.[key] === undefined || !sameMessage(current[key]!, snapshot.catalog![key]!)).sort();
+  if (JSON.stringify(expected) !== JSON.stringify(snapshot.changes.map(change => change.key).sort()) || snapshot.changes.some(change => !sameMessage(change.after, snapshot.catalog![change.key]!) || (change.before === null ? current?.[change.key] !== undefined : current?.[change.key] === undefined || !sameMessage(change.before, current[change.key]!)))) throw new Error("Reviewed translation diff changed.");
   return defineMessages(snapshot.catalog);
 }

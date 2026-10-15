@@ -77,7 +77,7 @@ export interface CollaborationLimits {
 export interface CreateCollaborationHubOptions {
   /** Exact endpoint path. Defaults to /__clank/collaboration. */
   path?: string;
-  /** Re-authorizes the current identity and exact room on every request. */
+  /** Re-authorizes the current identity and exact room on every request and stream delivery. */
   authorize(
     request: Request,
     attempt: CollaborationAuthorizationAttempt,
@@ -152,6 +152,9 @@ interface ConnectionRecord {
   rateStartedAt: number;
   rateCount: number;
   stream?: ReadableStreamDefaultController<Uint8Array>;
+  streamRequest?: Request;
+  delivery?: Promise<void>;
+  pendingDeliveries: number;
   abort?: () => void;
 }
 
@@ -186,6 +189,7 @@ export function createCollaborationHub(options: CreateCollaborationHubOptions): 
     connection.abort = undefined;
     const stream = connection.stream;
     connection.stream = undefined;
+    connection.streamRequest = undefined;
     try { stream?.close(); } catch { /* Stream already ended. */ }
     connection.room.connections.delete(connection.id);
     broadcast(connection.room, leaveEvent(connection.room, connection.id, now()), connection.id);
@@ -275,6 +279,7 @@ export function createCollaborationHub(options: CreateCollaborationHubOptions): 
 
   function connect(body: Record<string, unknown>, roomId: string, principal: CollaborationPrincipal): Response {
     exactKeys(body, ["operation", "room", "presence"], "connect request");
+    const presence = dataObject(body.presence ?? {}, limits.maxPresenceBytes, "presence");
     if (connections.size >= limits.maxRooms * limits.maxParticipantsPerRoom) {
       throw new CollaborationHttpError(503, "CAPACITY", "Collaboration capacity is unavailable.");
     }
@@ -282,7 +287,6 @@ export function createCollaborationHub(options: CreateCollaborationHubOptions): 
     if (!room) {
       if (rooms.size >= limits.maxRooms) throw new CollaborationHttpError(503, "CAPACITY", "Collaboration capacity is unavailable.");
       room = { id: roomId, revision: 0, connections: new Map() };
-      rooms.set(roomId, room);
     }
     if (room.connections.size >= limits.maxParticipantsPerRoom) {
       throw new CollaborationHttpError(409, "ROOM_FULL", "The collaboration room is full.");
@@ -297,7 +301,7 @@ export function createCollaborationHub(options: CreateCollaborationHubOptions): 
     const participant = participantSnapshot({
       id,
       name: principal.name,
-      data: dataObject(body.presence ?? {}, limits.maxPresenceBytes, "presence"),
+      data: presence,
       connectedAt: at,
       updatedAt: at,
     });
@@ -309,7 +313,9 @@ export function createCollaborationHub(options: CreateCollaborationHubOptions): 
       lastSeen: now(),
       rateStartedAt: now(),
       rateCount: 0,
+      pendingDeliveries: 0,
     };
+    rooms.set(roomId, room);
     connections.set(id, connection);
     room.connections.set(id, connection);
     broadcast(room, joinEvent(room, participant, now()));
@@ -335,6 +341,7 @@ export function createCollaborationHub(options: CreateCollaborationHubOptions): 
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         connection.stream = controller;
+        connection.streamRequest = request;
         enqueue(controller, snapshotEvent(connection.room, now()));
         const abort = () => remove(connection);
         connection.abort = () => request.signal.removeEventListener("abort", abort);
@@ -352,7 +359,30 @@ export function createCollaborationHub(options: CreateCollaborationHubOptions): 
   }
 
   function broadcast(room: RoomRecord, event: CollaborationEvent, except?: string): void {
-    for (const failed of deliver(room, event, except)) remove(failed);
+    const failed: ConnectionRecord[] = [];
+    for (const connection of room.connections.values()) {
+      if (connection.id === except || !connection.stream || !connection.streamRequest) continue;
+      // Keep authorization work bounded as well as the stream's output queue.
+      // Serial checks retain room event order when an application policy is async.
+      if ((connection.stream.desiredSize ?? 1) <= 0 || connection.pendingDeliveries >= 2) {
+        failed.push(connection);
+        continue;
+      }
+      const stream = connection.stream, request = connection.streamRequest;
+      connection.pendingDeliveries++;
+      const delivery = (connection.delivery ?? Promise.resolve()).then(async () => {
+        if (connection.stream !== stream || !connections.has(connection.id)) return;
+        const principal = await authorized(options, request, room.id, "stream");
+        if (connection.stream !== stream || !connections.has(connection.id)) return;
+        if (principal.id !== connection.principalId || (stream.desiredSize ?? 1) <= 0) {
+          remove(connection);
+          return;
+        }
+        enqueue(stream, event);
+      }).catch(() => remove(connection)).finally(() => { connection.pendingDeliveries--; });
+      connection.delivery = delivery;
+    }
+    for (const connection of failed) remove(connection);
   }
 
   return Object.freeze({
@@ -423,7 +453,7 @@ export function createCollaborationClient(options: CreateCollaborationClientOpti
   if (typeof options.csrfToken !== "string" && typeof options.csrfToken !== "function") {
     throw new TypeError("Collaboration client requires a CSRF token or resolver.");
   }
-  const initialPresence = dataObject(options.initialPresence ?? {}, DEFAULT_LIMITS.maxPresenceBytes, "initial presence");
+  let currentPresence = dataObject(options.initialPresence ?? {}, DEFAULT_LIMITS.maxPresenceBytes, "initial presence");
   const state = signal<CollaborationClientState>("idle");
   const participants = signal<readonly CollaborationParticipant[]>(Object.freeze([]));
   const lastEvent = signal<CollaborationEvent | null>(null);
@@ -479,7 +509,7 @@ export function createCollaborationClient(options: CreateCollaborationClientOpti
 
   const establish = async (currentGeneration: number): Promise<void> => {
     state.value = reconnectAttempt ? "reconnecting" : "connecting";
-    const connected = await post({ operation: "connect", room, presence: initialPresence });
+    const connected = await post({ operation: "connect", room, presence: currentPresence });
     if (!desired || generation !== currentGeneration) {
       await post({ operation: "disconnect", room, connection: connected.connection }).catch(() => undefined);
       return;
@@ -497,20 +527,23 @@ export function createCollaborationClient(options: CreateCollaborationClientOpti
     }, integer(connected.heartbeatMs, "collaboration heartbeat", 1_000, 60_000));
     const controller = new AbortController();
     streamAbort = controller;
-    void consume(endpoint, room, connection, request, controller.signal, apply)
+    void consume(endpoint, room, connection, request, controller.signal, event => {
+      if (desired && generation === currentGeneration && !controller.signal.aborted) apply(event);
+    })
       .then(() => reconnect(currentGeneration))
       .catch((error) => {
-        if (!controller.signal.aborted) clientError.value = error instanceof Error ? error : new Error(String(error));
+        if (generation === currentGeneration && !controller.signal.aborted) clientError.value = error instanceof Error ? error : new Error(String(error));
         return reconnect(currentGeneration);
       });
   };
 
   const reconnect = async (currentGeneration: number) => {
-    stopTransport();
     if (!desired || generation !== currentGeneration) return;
+    stopTransport();
     const old = connection;
     connection = undefined;
     if (old) await post({ operation: "disconnect", room, connection: old }).catch(() => undefined);
+    if (!desired || generation !== currentGeneration) return;
     if (options.reconnect === false) {
       state.value = "error";
       return;
@@ -522,6 +555,7 @@ export function createCollaborationClient(options: CreateCollaborationClientOpti
     if (!desired || generation !== currentGeneration) return;
     try { await establish(currentGeneration); }
     catch (error) {
+      if (!desired || generation !== currentGeneration) return;
       clientError.value = error instanceof Error ? error : new Error(String(error));
       void reconnect(currentGeneration);
     }
@@ -538,15 +572,18 @@ export function createCollaborationClient(options: CreateCollaborationClientOpti
       const currentGeneration = ++generation;
       try { await establish(currentGeneration); }
       catch (error) {
-        clientError.value = error instanceof Error ? error : new Error(String(error));
-        state.value = "error";
-        desired = false;
+        if (generation === currentGeneration) {
+          clientError.value = error instanceof Error ? error : new Error(String(error));
+          state.value = "error";
+          desired = false;
+        }
         throw error;
       }
     },
     async update(presence) {
       if (!connection || state.peek() !== "connected") throw new Error("Collaboration is not connected.");
-      await post({ operation: "presence", room, connection, presence: dataObject(presence, DEFAULT_LIMITS.maxPresenceBytes, "presence") });
+      currentPresence = dataObject(presence, DEFAULT_LIMITS.maxPresenceBytes, "presence");
+      await post({ operation: "presence", room, connection, presence: currentPresence });
     },
     async signal(channel, payload) {
       if (!connection || state.peek() !== "connected") throw new Error("Collaboration is not connected.");
@@ -564,9 +601,9 @@ export function createCollaborationClient(options: CreateCollaborationClientOpti
       const active = connection;
       connection = undefined;
       stopTransport();
-      if (active) await post({ operation: "disconnect", room, connection: active }).catch(() => undefined);
       participants.value = Object.freeze([]);
       state.value = "closed";
+      if (active) await post({ operation: "disconnect", room, connection: active }).catch(() => undefined);
     },
   });
 }
@@ -608,18 +645,6 @@ async function consume(
       apply(JSON.parse(data));
     }
   }
-}
-
-function deliver(room: RoomRecord, event: CollaborationEvent, except?: string): ConnectionRecord[] {
-  const failed: ConnectionRecord[] = [];
-  for (const connection of room.connections.values()) {
-    if (connection.id === except || !connection.stream) continue;
-    try {
-      if ((connection.stream.desiredSize ?? 1) <= 0) throw new Error("slow collaboration stream");
-      enqueue(connection.stream, event);
-    } catch { failed.push(connection); }
-  }
-  return failed;
 }
 
 function enqueue(controller: ReadableStreamDefaultController<Uint8Array>, event: CollaborationEvent): void {

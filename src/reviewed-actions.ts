@@ -458,6 +458,7 @@ export function openReviewedActions(database: SQLiteDatabase<any>, authRuntime: 
         const action = definition(row), args = action.args.parse(JSON.parse(String(row.input)));
         if (sync(action.authorize(context(db, auth), args)) !== true) throw new AuthError("FORBIDDEN", "This action is no longer permitted.", 403);
         if (row.status === "consumed") {
+          if (row.quorum != null && !canReadOwnPlan(row, db, auth)) throw new AuthError("FORBIDDEN", "This action is no longer permitted.", 403);
           const old = sql.prepare("SELECT receipt FROM clank_reviewed_receipts WHERE plan = ? AND owner = ?").get(id, auth.user!.id);
           if (!old) throw new Error("Consumed approval receipt is missing.");
           return JSON.parse(String(old.receipt)) as ReviewedActionReceipt;

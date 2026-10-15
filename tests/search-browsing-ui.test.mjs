@@ -48,6 +48,53 @@ test('saved controls retain uncertain creation keys and current edit versions wi
   await button(root, 'Delete Edited').fire('click'); assert.deepEqual(removed, [{ key: saves[0].key, revision: 2 }]); assert.equal(field(root, 'Saved search name').value, ''); dispose();
 });
 
+for (const action of ['Refresh saved searches', 'New saved search', 'Save search', 'Delete Private saved']) {
+  test(`${action} preserves visible result navigation and the next-page cursor`, async () => {
+    const root = fixture(), opened = [], browses = []; let rows = [saved];
+    const dispose = mount(root, {
+      saved: async () => rows,
+      browse: async (...args) => { browses.push(args); return { ...page(browses.length === 1 ? 'page-2' : null), hits: [{ ...page().hits[0], id: `record-${browses.length}` }] }; },
+      save: async (_scope, input) => { const accepted = { ...input, revision: input.expectedRevision + 1, usable: true }; rows = [accepted]; return accepted; },
+      removeSaved: async () => { rows = []; },
+    }, { open: id => opened.push(id) });
+    try {
+      await settle(); await field(root, 'Browse search records').fire('submit');
+      const first = button(root, '<script>Private title'); await first.fire('click'); assert.deepEqual(opened, ['record-1']);
+      field(root, 'Saved search name').value = 'Mine'; await button(root, action).fire('click');
+      assert.equal(first.isConnected, true); assert.equal(first.disabled, false); assert.equal(browses.length, 1);
+      await first.fire('click'); assert.deepEqual(opened, ['record-1', 'record-1']);
+      await button(root, 'Next results').fire('click'); assert.equal(browses[1][2].cursor, 'page-2');
+      await first.fire('click'); assert.deepEqual(opened, ['record-1', 'record-1'], 'replaced-page controls remain fenced');
+      await button(root, '<script>Private title').fire('click'); assert.deepEqual(opened, ['record-1', 'record-1', 'record-2']);
+    } finally { dispose(); }
+  });
+}
+
+test('query edits fence pending page replies, failures and retained result controls', async () => {
+  for (const [label, event, value, fail] of [['Search words', 'input', 'changed', false], ['Result order', 'change', 'title', true], ['Filter category', 'change', '"alpha"', false]]) {
+    const root = fixture(), opened = []; let calls = 0, resolve, reject;
+    const dispose = mount(root, { saved: async () => [], browse: () => ++calls === 2 ? new Promise((done, failed) => { resolve = done; reject = failed; }) : Promise.resolve(page()) }, { open: id => opened.push(id) });
+    try {
+      await settle(); await field(root, 'Browse search records').fire('submit'); const old = button(root, '<script>Private title');
+      await button(root, 'Next results').fire('click'); field(root, label).value = value; await field(root, label).fire(event);
+      if (fail) reject(Error('Old request failed')); else resolve(page()); await settle();
+      assert.doesNotMatch(root.textContent, /Private title/); assert.match(root.textContent, /Search changed\. Search again\./); assert.equal(button(root, 'Next results').disabled, true);
+      await old.fire('click'); assert.deepEqual(opened, []);
+      await field(root, 'Browse search records').fire('submit'); await button(root, '<script>Private title').fire('click'); assert.deepEqual(opened, ['record']);
+    } finally { dispose(); }
+  }
+});
+
+test('revoked, changed-account and disposed result controls cannot reopen records', async () => {
+  const root = fixture(), opened = []; let revoked = false, actor = 'user';
+  const dispose = mount(root, { saved: async () => { if (revoked) throw Object.assign(Error('Revoked'), { status: 403 }); return []; }, browse: async () => page(null) }, { currentUser: () => actor, open: id => opened.push(id) });
+  await settle(); await field(root, 'Browse search records').fire('submit'); const revokedResult = button(root, '<script>Private title');
+  revoked = true; await button(root, 'Refresh saved searches').fire('click'); await revokedResult.fire('click'); assert.deepEqual(opened, []); assert.doesNotMatch(root.textContent, /Private title/);
+  revoked = false; await field(root, 'Browse search records').fire('submit'); const oldAccountResult = button(root, '<script>Private title');
+  actor = 'other'; await oldAccountResult.fire('click'); actor = 'user'; await oldAccountResult.fire('click'); assert.deepEqual(opened, []); assert.doesNotMatch(root.textContent, /Private title/);
+  await field(root, 'Browse search records').fire('submit'); const disposedResult = button(root, '<script>Private title'); dispose(); await disposedResult.fire('click'); assert.deepEqual(opened, []); assert.equal(root.childNodes.length, 0);
+});
+
 test('account changes clear private forms and late pages; stale saved and open controls stay fenced', async () => {
   const root = fixture(); let actor = 'user', scope = 'scope', resolve, opened = 0, loads = 0;
   const dispose = mount(root, { saved: async () => [saved], browse: () => { loads++; return new Promise(done => { resolve = done; }); } }, { currentUser: () => actor, scope: () => scope, open: () => opened++ }); await settle(); const oldLoad = button(root, 'Load Private saved');

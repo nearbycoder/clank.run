@@ -13,6 +13,7 @@ class FakeNode {
     const index = this.parentNode.childNodes.indexOf(this);
     return this.parentNode.childNodes[index + 1] ?? null;
   }
+  appendChild(node) { return this.insertBefore(node, null); }
   insertBefore(node, before) {
     if (before !== null && before.parentNode !== this) throw new Error("Reference node has the wrong parent.");
     node.parentNode?.removeChild(node);
@@ -760,6 +761,171 @@ test("Portal mounts into an explicit target and cleans up without disturbing sib
   dispose();
   assert.deepEqual(target.children, [sibling]);
 });
+
+test("hydrate portal reactive replacements follow relocated boundaries and dispose once", () => {
+  const root = new FakeElement("main"), target = new FakeElement("aside"), sibling = new FakeElement("p");
+  target.appendChild(sibling);
+  const button = new FakeElement("button"), state = signal("button"), refs = [];
+  let attached = 0, cleaned = 0, clicks = 0;
+  for (const node of [new FakeComment("clank:portal"), new FakeComment("clank:start"), button, new FakeComment("clank:end"), new FakeComment("clank:/portal")]) root.appendChild(node);
+  const view = Portal({ target, children: expression(() => state.value === "" ? "" : h(state.value, {
+    use: () => { attached++; return () => cleaned++; },
+    ref: node => refs.push(node), onClick: () => clicks++,
+  })) });
+  const dispose = hydrate(root, view);
+  try {
+    assert.equal(root.getAttribute("data-clank-hydration"), "attached");
+    assert.equal(target.children[1], button);
+    button.listeners.get("click")();
+    state.value = "";
+    assert.deepEqual(target.children, [sibling]);
+    assert.equal(button.listeners.size, 0);
+    state.value = "span";
+    const replacement = target.children[1];
+    assert.equal(replacement.localName, "span");
+    replacement.listeners.get("click")();
+    assert.equal(clicks, 2);
+    assert.deepEqual(root.children, []);
+    assert.deepEqual(refs, [button, null, replacement]);
+  } finally { dispose(); dispose(); }
+  assert.equal(attached, 2);
+  assert.equal(cleaned, 2);
+  assert.equal(refs.at(-1), null);
+  assert.equal(state.observers.size, 0);
+  assert.deepEqual(target.childNodes, [sibling]);
+  assert.deepEqual(root.childNodes, []);
+});
+
+for (const disabled of [false, true]) {
+  test(`hydrate nested portal keyed and empty ranges move correctly (disabled=${disabled})`, () => {
+    const root = new FakeElement("main"), target = new FakeElement("aside"), nestedTarget = new FakeElement("nav");
+    const items = signal([{ id: "a" }, { id: "b" }]), empty = signal("");
+    const a = new FakeElement("button"), b = new FakeElement("button");
+    for (const node of [new FakeComment("clank:portal"), new FakeComment("clank:portal"), new FakeComment("clank:for"), a, b, new FakeComment("clank:/for"), new FakeComment("clank:start"), new FakeComment("clank:end"), new FakeComment("clank:/portal"), new FakeComment("clank:/portal")]) root.appendChild(node);
+    const dispose = hydrate(root, Portal({ target, children: Portal({ disabled, target: nestedTarget, children: [
+      For({ each: items, by: "id", children: item => h("button", { "data-id": item.id }) }),
+      expression(() => empty.value),
+    ] }) }));
+    const destination = disabled ? target : nestedTarget;
+    try {
+      assert.equal(root.getAttribute("data-clank-hydration"), "attached");
+      assert.deepEqual(destination.children, [a, b]);
+      items.value = [{ id: "b" }, { id: "a" }, { id: "c" }];
+      assert.deepEqual(destination.children.slice(0, 2), [b, a]);
+      assert.deepEqual(destination.children.map(node => node.getAttribute("data-id")), ["b", "a", "c"]);
+      items.value = [];
+      assert.deepEqual(destination.children, []);
+      empty.value = "Ready";
+      assert.equal(destination.textContent, "Ready");
+      items.value = [{ id: "d" }];
+      assert.equal(destination.children[0].getAttribute("data-id"), "d");
+    } finally { dispose(); }
+    assert.equal(items.observers.size, 0);
+    assert.equal(empty.observers.size, 0);
+    for (const container of [root, target, nestedTarget]) assert.deepEqual(container.childNodes, []);
+  });
+}
+
+test("hydrate portal missing closing marker cleans abandoned listeners, actions and refs before remount", () => {
+  const root = new FakeElement("main"), button = new FakeElement("button"), refs = [];
+  root.appendChild(new FakeComment("clank:portal")); root.appendChild(button);
+  let attached = 0, cleaned = 0;
+  const view = Portal({ disabled: true, children: h("button", {
+    use: () => { attached++; return () => cleaned++; }, onClick: () => {}, ref: node => refs.push(node),
+  }) });
+  const warn = console.warn; console.warn = () => {};
+  let dispose;
+  try { dispose = hydrate(root, view); } finally { console.warn = warn; }
+  try {
+    assert.equal(root.getAttribute("data-clank-hydration"), "remounted");
+    assert.equal(attached, 2);
+    assert.equal(cleaned, 1);
+    assert.equal(button.listeners.size, 0);
+    assert.deepEqual(refs, [button, null, root.children[0]]);
+  } finally { dispose(); }
+  assert.equal(cleaned, 2);
+  assert.equal(refs.at(-1), null);
+});
+
+test("hydrate portal target errors clean partial bindings and already relocated nested portals", () => {
+  const root = new FakeElement("main"), target = new FakeElement("aside"), button = new FakeElement("button");
+  let cleaned = 0;
+  for (const node of [new FakeComment("clank:portal"), new FakeComment("clank:portal"), button, new FakeComment("clank:/portal"), new FakeComment("clank:/portal")]) root.appendChild(node);
+  const view = Portal({ target: () => { throw new Error("target failed"); }, children: Portal({ target, children: h("button", {
+    onClick: () => {}, use: () => () => cleaned++,
+  }) }) });
+  assert.throws(() => hydrate(root, view), /target failed/);
+  assert.equal(cleaned, 1);
+  assert.equal(button.listeners.size, 0);
+  assert.deepEqual(target.childNodes, []);
+  assert.equal(root.getAttribute("data-clank-hydration"), null);
+});
+
+test("hydrate portal partial move failures clean bindings and remove moved nodes", () => {
+  const root = new FakeElement("main"), target = new FakeElement("aside"), buttons = [new FakeElement("button"), new FakeElement("button")];
+  let cleaned = 0, moves = 0;
+  target.appendChild = node => {
+    if (++moves === 2) throw new Error("move failed");
+    return target.insertBefore(node, null);
+  };
+  for (const node of [new FakeComment("clank:portal"), ...buttons, new FakeComment("clank:/portal")]) root.appendChild(node);
+  assert.throws(() => hydrate(root, Portal({ target, children: buttons.map(() => h("button", {
+    onClick: () => {}, use: () => () => cleaned++,
+  })) })), /move failed/);
+  assert.equal(cleaned, 2);
+  for (const button of buttons) assert.equal(button.listeners.size, 0);
+  assert.deepEqual(target.childNodes, []);
+});
+
+for (const reject of [false, true]) {
+  test(`hydrate portal relocates ranges mounted by onMount before promise settlement (reject=${reject})`, async () => {
+    const root = new FakeElement("main"), target = new FakeElement("aside");
+    for (const node of [new FakeComment("clank:portal"), new FakeComment("clank:start"), new FakeElement("button"), new FakeComment("clank:end"), new FakeComment("clank:/portal")]) root.appendChild(node);
+    const ready = signal(false), tag = signal("button"), items = signal([{ id: "a" }]);
+    let settle;
+    const pending = new Promise((resolve, fail) => { settle = reject ? fail : resolve; });
+    function Startup() {
+      onMount(() => { ready.value = true; });
+      return expression(() => ready.value ? Portal({ disabled: true, children: [
+        expression(() => h(tag.value)),
+        For({ each: items, by: "id", children: item => h("p", { "data-id": item.id }) }), pending,
+      ] }) : h("button"));
+    }
+    const dispose = hydrate(root, Portal({ target, children: h(Startup) }));
+    try {
+      assert.equal(root.getAttribute("data-clank-hydration"), "attached");
+      assert.deepEqual(target.children.map(node => node.localName), ["button", "p"]);
+      tag.value = "span";
+      items.value = [{ id: "b" }, { id: "a" }];
+      assert.deepEqual(target.children.map(node => node.localName), ["span", "p", "p"]);
+      assert.deepEqual(target.children.slice(1).map(node => node.getAttribute("data-id")), ["b", "a"]);
+      settle(reject ? new Error("Unavailable") : h("strong", {}, "Loaded"));
+      await Promise.resolve();
+      assert.equal(target.textContent, reject ? "Unavailable" : "Loaded");
+      assert.deepEqual(root.children, []);
+    } finally { dispose(); }
+    for (const state of [ready, tag, items]) assert.equal(state.observers.size, 0);
+    assert.deepEqual(root.childNodes, []);
+    assert.deepEqual(target.childNodes, []);
+  });
+}
+
+for (const dynamic of [false, true]) {
+  test(`hydrate nested portal disposal removes relocated boundaries when cleanup throws (dynamic=${dynamic})`, () => {
+    const root = new FakeElement("main"), target = new FakeElement("aside"), button = new FakeElement("button");
+    const content = dynamic ? [new FakeComment("clank:start"), button, new FakeComment("clank:end")] : [button];
+    for (const node of [new FakeComment("clank:portal"), new FakeComment("clank:portal"), ...content, new FakeComment("clank:/portal"), new FakeComment("clank:/portal")]) root.appendChild(node);
+    const view = h("button", {
+      use: () => () => { throw new Error("cleanup failed"); }, onClick: () => {},
+    });
+    const dispose = hydrate(root, Portal({ target, children: Portal({ disabled: true, children: dynamic ? expression(() => view) : view }) }));
+    assert.throws(dispose, /cleanup failed/);
+    assert.doesNotThrow(dispose);
+    assert.equal(button.listeners.size, 0);
+    assert.deepEqual(root.childNodes, []);
+    assert.deepEqual(target.childNodes, []);
+  });
+}
 
 test("callback refs receive null exactly once when their element is disposed", () => {
   const root = new FakeElement("main");

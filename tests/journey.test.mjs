@@ -187,3 +187,60 @@ test("journey contracts reject ambiguous operations, unsafe paths, unknown state
     steps: [{ input: { target: "title", value: "x".repeat(16 * 1024 + 1) } }],
   }), /bounded text/);
 });
+
+test('journey diagnostics share the overall timeout and caller cancellation', async (t) => {
+  const never = () => new Promise(() => {});
+  for (const phase of ['inspect step', 'failure surface', 'final URL', 'caller abort']) {
+    await t.test(phase, async () => {
+      const { driver } = driverFixture(), controller = new AbortController();
+      let steps = [{ expect: { text: 'Tasks' } }], calls = 0;
+      if (phase === 'final URL') {
+        driver.currentUrl = () => ++calls < 3 ? 'https://app.test/' : never();
+      } else {
+        driver.inspect = never;
+        steps = phase === 'failure surface' ? [{ activate: 'missing' }] : [{ inspect: 'snapshot' }];
+        if (phase === 'caller abort') driver.currentUrl = () => controller.signal.aborted
+          ? Promise.reject(new Error('Driver closed after cancellation')) : 'https://app.test/';
+      }
+      const pending = runJourney(defineJourney({ name: phase, steps }), driver, {
+        baseUrl: 'https://app.test', timeoutMs: phase === 'caller abort' ? 10_000 : 100, signal: controller.signal,
+      });
+      if (phase === 'caller abort') setTimeout(() => controller.abort(), 20);
+      let watchdog;
+      try {
+        const report = await Promise.race([pending, new Promise((_, reject) => {
+          watchdog = setTimeout(() => reject(new Error('Diagnostics ignored the journey budget')), 750);
+        })]);
+        assert.equal(report.ok, false);
+        assert.match(report.error, phase === 'failure surface' ? /missing or disabled/ : phase === 'caller abort' ? /abort/i : /overall timeout/);
+      } finally { clearTimeout(watchdog); controller.abort(); }
+    });
+  }
+});
+
+test('journey URL assertion failures and visit labels omit query and fragment values', async () => {
+  const observed = [];
+  const report = await runJourney(defineJourney({ name: 'Private URL', steps: [
+    { visit: '/callback?code=private-code#private-fragment' },
+    { expect: { url: '/expected?token=private-expected' } },
+  ] }), driverFixture().driver, { baseUrl: 'https://app.test', onStep: step => observed.push(step) });
+  assert.equal(report.ok, false);
+  assert.equal(report.steps[0].label, '/callback');
+  assert.match(report.error, /expected.*callback/i);
+  assert.doesNotMatch(JSON.stringify([report, observed]), /private-code|private-fragment|private-expected/);
+});
+
+test('resolved journey secrets are redacted from driver failures and diagnostic labels', async () => {
+  const fixture = driverFixture(), observed = [], secret = 'private-password-canary';
+  fixture.driver.input = (_id, value) => {
+    fixture.nodes[0].label = 'Rejected ' + value;
+    throw new Error('Input failed: ' + value);
+  };
+  const report = await runJourney(defineJourney({ name: 'Private failure', steps: [
+    { input: { target: 'task-title', value: { env: 'CLANK_TEST_PASSWORD' } } },
+  ] }), fixture.driver, { baseUrl: 'https://app.test', resolveSecret: () => secret, onStep: step => observed.push(step) });
+  assert.equal(report.ok, false);
+  assert.match(report.error, /Input failed: \[redacted\]/);
+  assert.equal(report.surface[0].label, 'Rejected [redacted]');
+  assert.doesNotMatch(JSON.stringify([report, observed]), /private-password-canary/);
+});

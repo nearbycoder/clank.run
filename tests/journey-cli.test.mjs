@@ -6,6 +6,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { runJourneyCommand } from "../scripts/cli-journey.mjs";
 
 const execute = promisify(execFile);
 const cli = new URL("../scripts/clank.mjs", import.meta.url);
@@ -109,5 +110,44 @@ test('journey CLI detects terminated startup and removes its own profile', async
     assert.ok(Date.now() - started < 8000, 'signal termination must be noticed before the 15-second startup timeout');
     const profile = process.platform === 'win32' ? message.match(/--user-data-dir=([^\r\n]+)/)?.[1] : await readFile(journal, 'utf8'); assert.match(profile, /clank-journey-/);
     await assert.rejects(access(profile), { code: 'ENOENT' });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('journey CLI closes its target and connection when CDP initialization fails', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'clank-journey-setup-')), path = join(root, 'journey.json');
+  await writeFile(path, JSON.stringify({ name: 'Setup cleanup', steps: [{ expect: { text: 'Ready' } }] }));
+  try {
+    for (const failedMethod of ['connect', 'Page.enable', 'Runtime.enable']) {
+      await t.test(failedMethod, async (t) => {
+        const commands = [], requests = []; let closed = 0;
+        t.mock.method(globalThis, 'fetch', async url => {
+          requests.push(url);
+          return new Response(JSON.stringify({
+            id: 'owned-target', webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/page/owned-target',
+          }));
+        });
+        class MockWebSocket extends EventTarget {
+          constructor() { super(); queueMicrotask(() => this.dispatchEvent(new Event(failedMethod === 'connect' ? 'error' : 'open'))); }
+          send(value) {
+            const message = JSON.parse(value); commands.push(message);
+            queueMicrotask(() => this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({
+              id: message.id, ...(message.method === failedMethod
+                ? { error: { code: -32000, message: 'Synthetic setup failure' } } : { result: {} }),
+            }) })));
+          }
+          close() { closed++; this.dispatchEvent(new Event('close')); }
+        }
+        const originalWebSocket = globalThis.WebSocket;
+        globalThis.WebSocket = MockWebSocket;
+        t.after(() => { globalThis.WebSocket = originalWebSocket; });
+        await assert.rejects(runJourneyCommand([path, '--cdp=http://127.0.0.1:9222', '--json']), failedMethod === 'connect' ? /Could not connect/ : /Synthetic setup failure/);
+        assert.equal(closed, 1, 'the initialized socket is closed');
+        if (failedMethod === 'connect') {
+          assert.deepEqual(commands, []);
+          assert.equal(requests.at(-1), 'http://127.0.0.1:9222/json/close/owned-target');
+        } else assert.deepEqual(commands.at(-1), { id: commands.length, method: 'Target.closeTarget', params: { targetId: 'owned-target' } });
+        assert.equal(commands.some(command => command.method === 'Browser.close'), false, 'an attached browser remains open');
+      });
+    }
   } finally { await rm(root, { recursive: true, force: true }); }
 });
