@@ -218,6 +218,12 @@ export async function openMediaProcessing(input: OpenMediaProcessingOptions): Pr
         }
         const source = await binding.read(input.source,String(row.owner_id)); guard(row,context);
         if (source.bytes.byteLength > transform.maxInputBytes) fail("MEDIA_INPUT_TOO_LARGE", "Source exceeds the declared transform input limit.",413);
+        // A retry replays the adapter from its beginning. Reset only while this
+        // native attempt is current, before exposing its progress callback.
+        sql.transaction(() => {
+          guard(rowById(operation)!,context);
+          sql.prepare("UPDATE clank_media_operations SET progress=0,progress_updates=0 WHERE id=? AND result IS NULL").run(operation);
+        });
         const output = await transform.handler({source,signal:context.signal,operationKey:`clank-media:${operation}`,
           progress(percent) { integer(percent,"progress",0,100); sql.transaction(() => {
             const latest=rowById(operation)!; guard(latest,context);

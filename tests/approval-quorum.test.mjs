@@ -57,6 +57,21 @@ async function fixture(t,{quorum={},action={},security=false,ttlMs=300000}={}) {
 }
 const denied=(fn,code)=>assert.throws(fn,error=>error.code===code);
 
+test('consumed quorum replay applies the same current requester membership as receipt reads',async t=>{
+  const f=await fixture(t),plan=f.plan();f.vote(plan,f.left);f.vote(plan,f.right);const receipt=f.commit(plan);
+  assert.deepEqual(f.commit(plan),receipt);
+  const sql=f.runtime.database[native],before={revision:f.runtime.database.version,events:sql.prepare('SELECT count(*) AS n FROM clank_reviewed_events').get().n};
+  f.runtime.database.transaction(db=>db.table('members').delete(f.owner.member));
+  const removedRevision=f.runtime.database.version;
+  denied(()=>f.runtime.reviewedActions.receipt(receipt.id,f.owner.auth),'FORBIDDEN');
+  denied(()=>f.commit(plan),'FORBIDDEN');
+  assert.equal(f.runtime.database.version,removedRevision);assert.ok(removedRevision>before.revision);
+  assert.equal(sql.prepare('SELECT count(*) AS n FROM clank_reviewed_events').get().n,before.events);
+  assert.equal(sql.prepare('SELECT count(*) AS n FROM clank_reviewed_receipts').get().n,1);
+  f.runtime.database.transaction(db=>db.table('members').insert({userId:f.owner.user.id,role:'requester',epoch:crypto.randomUUID()}));
+  assert.deepEqual(f.commit(plan),receipt);
+});
+
 test('distinct native human roles commit once; duplicate and lost-response votes never increase counts or events',async t=>{
   const f=await fixture(t),plan=f.plan();assert.equal(plan.quorum.minimum,2);assert.equal(plan.quorum.recordedVotes,0);
   denied(()=>f.vote(plan,f.owner),'QUORUM_REQUESTER');

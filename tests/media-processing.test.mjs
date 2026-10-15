@@ -63,6 +63,47 @@ test('native jobs process verified source bytes, persist progress and publish on
   const reopened=await f.reopen();assert.equal(reopened.get(owner,queued.id).outputCurrent,true);assert.equal(reopened.enqueue(owner,input).id,queued.id);assert.equal(await reopened.workOnce(),false);
 });
 
+test('a retry replays normal progress with a fresh attempt budget and rejects the previous attempt callback',async t=>{
+  const reached=barrier(),release=barrier(),keys=[];let calls=0,previousProgress;
+  t.after(()=>release.release());
+  const f=await fixture(t,{options:{maxAttempts:2,maxProgressUpdates:2},transform:{async handler({source,progress,operationKey}){
+    calls++;keys.push(operationKey);progress(20);
+    if(calls===2){reached.release();await release.wait;}
+    progress(60);
+    if(calls===1){previousProgress=progress;throw new Error('Transient provider failure after progress.');}
+    return {bytes:encode(decode(source.bytes).toUpperCase()),contentType:'text/plain'};
+  }}}),owner=await f.caller(f.owner),queued=f.controller.enqueue(owner,input);
+  await f.controller.workOnce();assert.equal(f.controller.get(owner,queued.id).state,'retry');assert.equal(f.controller.get(owner,queued.id).progress,60);
+  f.clock=Number(f.sql.prepare('SELECT run_at FROM clank_jobs WHERE id=?').get(queued.jobId).run_at)+1;
+  const reopened=await f.reopen(),pending=reopened.workOnce();
+  await Promise.race([reached.wait,pending.then(()=>assert.fail('Retry must reach the transform after replaying progress.'))]);
+  const current=reopened.get(owner,queued.id);assert.equal(current.state,'running');assert.equal(current.attempt,2);assert.equal(current.progress,20);
+  assert.throws(()=>previousProgress(80),/active native job attempt/);
+  assert.equal(reopened.get(owner,queued.id).progress,20);
+  release.release();await pending;
+  const accepted=reopened.get(owner,queued.id);assert.equal(accepted.state,'published');assert.equal(accepted.progress,100);assert.equal(accepted.outputCurrent,true);
+  assert.equal(calls,2);assert.equal(keys[0],keys[1]);assert.equal(f.errors.length,1);
+  assert.equal(Number(f.sql.prepare('SELECT progress_updates FROM clank_media_operations WHERE id=?').get(queued.id).progress_updates),2);
+  assert.equal(decode((await f.bucket.get('output',{userId:f.owner.user.id})).bytes),'ORIGINAL');
+});
+
+for(const violation of ['decreasing','update-limit']){
+  test(`retry progress still refuses a same-attempt ${violation} violation`,async t=>{
+    let calls=0;
+    const f=await fixture(t,{options:{maxAttempts:2,maxProgressUpdates:violation==='update-limit'?1:2},transform:{handler({progress}){
+      calls++;progress(20);if(calls===1)throw new Error('Transient provider failure.');
+      progress(violation==='decreasing'?10:20);return {bytes:encode('output'),contentType:'text/plain'};
+    }}}),owner=await f.caller(f.owner),queued=f.controller.enqueue(owner,input);
+    await f.controller.workOnce();f.clock=Number(f.sql.prepare('SELECT run_at FROM clank_jobs WHERE id=?').get(queued.jobId).run_at)+1;
+    await f.controller.workOnce();const status=f.controller.get(owner,queued.id);
+    assert.equal(status.state,'dead');assert.equal(status.attempt,2);assert.equal(status.progress,20);assert.equal(calls,2);
+    assert.equal(f.errors[1].code,'MEDIA_PROGRESS_LIMIT');
+    assert.equal(Number(f.sql.prepare('SELECT progress_updates FROM clank_media_operations WHERE id=?').get(queued.id).progress_updates),1);
+    assert.equal(f.bucket.stat('output',{userId:f.owner.user.id}),null);
+    assert.equal(f.sql.prepare('SELECT result FROM clank_media_operations WHERE id=?').get(queued.id).result,null);
+  });
+}
+
 for(const change of ['same-byte-replacement','delete','replace-restore','destination-replacement','session-revocation','policy-revocation','cancel','lease-replacement','protocol-change','expiry','controller-close']){
   test(`held actual transform cannot publish after ${change}`,async t=>{
     const reached=barrier(),release=barrier();const f=await fixture(t,{transform:{async handler({source,signal}){reached.release();await release.wait;signal.throwIfAborted();return {bytes:encode(decode(source.bytes).toUpperCase()),contentType:'text/plain'};}}});

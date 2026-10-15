@@ -82,13 +82,13 @@ const worker = processing.startWorker({
 });
 const status = processing.get(caller, queued.id);
 processing.cancel(caller, queued.id);
-await worker.stop();
+await worker.close();
 processing.close();
 ```
 
 Processing reserves the `clank-media` queue and `media.run` job name. Its workers always select that queue. Other job runtimes sharing the catalog must select their own queues and must not claim media jobs using missing or incompatible definitions. Two compatible processes contend through the existing native job leases, rather than a second queue implementation.
 
-Progress is a monotonic integer from 0 to 100, with at most 100 persisted updates by default. Inspect the job attempt, progress, creation time and expiry through the owner-scoped status. Successful publication appears as `published` even during the short interval before its job settles. A committed publication cannot be retroactively cancelled.
+Progress is a monotonic integer from 0 to 100 within each attempt, with at most 100 persisted updates per attempt by default. Before a retry invokes the transform, its progress and update budget reset so the handler can replay its normal progress sequence. Callbacks retained from an earlier attempt cannot update the current attempt. Inspect the job attempt, progress, creation time and expiry through the owner-scoped status. Successful publication appears as `published` even during the short interval before its job settles. A committed publication cannot be retroactively cancelled.
 
 `outputCurrent` becomes false and `object` becomes null when the source or accepted destination is replaced, or its processing policy retires. An exact enqueue retry then refuses to publish over the newer generation. A receipt acknowledges accepted publication; it does not turn historical bytes into the current file.
 
@@ -102,7 +102,7 @@ If a process dies after metadata and receipt commit but before job settlement, t
 
 ## Bounds, revisions and rollback
 
-Declare input and output byte budgets; both are limited by their bucket policy and an absolute 100 MiB ceiling. Defaults are three attempts, a 30-second attempt timeout, 1,000 retained operations and a 24-hour receipt lifetime. Configurable ceilings are ten attempts, one hour per attempt, 100,000 operations, 1,000 progress updates and seven days of retry authority.
+Declare input and output byte budgets; both are limited by their bucket policy and an absolute 100 MiB ceiling. Defaults are three attempts, a 30-second attempt timeout, 1,000 retained operations and a 24-hour receipt lifetime. Configurable ceilings are ten attempts, one hour per attempt, 100,000 operations, 1,000 progress updates per attempt and seven days of retry authority.
 
 At capacity, admission refuses new work instead of evicting retained identities. Expired operation IDs remain tombstones and cannot become fresh work. This initial protocol does not automatically purge or recycle operation identities. Plan catalog lifecycle and explicit offline archival before reaching the configured limit; increasing capacity is a policy change.
 
