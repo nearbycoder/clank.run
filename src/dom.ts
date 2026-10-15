@@ -316,6 +316,8 @@ function hydrateDynamic(parent: Node, read: () => Renderable, cursor: HydrationC
   let stop: Cleanup;
   try {
     stop = effect(() => {
+      // Portal hydration can relocate this range after its bindings attach.
+      parent = end.parentNode ?? parent;
       const next = unwrapReactive(read());
       if (first) {
         first = false;
@@ -342,12 +344,16 @@ function hydrateDynamic(parent: Node, read: () => Renderable, cursor: HydrationC
     dispose(remove = true) {
       if (!active) return;
       active = false;
-      stop();
-      current!.dispose(remove);
-      if (remove) {
-        start.parentNode?.removeChild(start);
-        end.parentNode?.removeChild(end);
-      }
+      cleanupAll([
+        stop,
+        () => current!.dispose(remove),
+        () => {
+          if (remove) {
+            start.parentNode?.removeChild(start);
+            end.parentNode?.removeChild(end);
+          }
+        },
+      ]);
     },
   };
 }
@@ -554,6 +560,7 @@ function mountDynamic(parent: Node, read: () => Renderable, before: Node | null,
   let current: Mounted | undefined;
   let currentValue: Renderable | undefined;
   const stop = effect(() => {
+    parent = end.parentNode ?? parent;
     const next = unwrapReactive(read());
     if (Object.is(next, currentValue) && current) return;
     if (isTextValue(next) && current?.nodes.length === 1 && isTextNode(parent, current.nodes[0])) {
@@ -572,13 +579,17 @@ function mountDynamic(parent: Node, read: () => Renderable, before: Node | null,
     dispose(remove = true) {
       if (!active) return;
       active = false;
-      stop();
-      current?.dispose(remove);
-      current = undefined;
-      if (remove) {
-        start.parentNode?.removeChild(start);
-        end.parentNode?.removeChild(end);
-      }
+      cleanupAll([
+        stop,
+        () => current?.dispose(remove),
+        () => {
+          current = undefined;
+          if (remove) {
+            start.parentNode?.removeChild(start);
+            end.parentNode?.removeChild(end);
+          }
+        },
+      ]);
     },
   };
 }
@@ -644,10 +655,10 @@ function mountPortal(
     throw error;
   }
   return {
-    nodes: [marker],
+    get nodes() { return portal.disabled ? [...children.nodes, marker] : [marker]; },
     dispose(remove = true) {
-      children.dispose(portal.disabled ? remove : true);
-      if (remove) marker.parentNode?.removeChild(marker);
+      try { children.dispose(portal.disabled ? remove : true); }
+      finally { if (remove) marker.parentNode?.removeChild(marker); }
     },
   };
 }
@@ -660,21 +671,35 @@ function hydratePortal(
 ): Mounted {
   const start = expectComment(parent, cursor, "clank:portal", context);
   const children = hydrateFragment(parent, portal.children, cursor, context);
-  const end = expectComment(parent, cursor, "clank:/portal", context);
-  if (!portal.disabled) {
-    const destination = portalTarget(parent, portal.target);
-    for (const node of children.nodes) destination.appendChild(node);
+  let end: Comment;
+  const moved: Node[] = [];
+  try {
+    end = expectComment(parent, cursor, "clank:/portal", context);
+    if (!portal.disabled) {
+      const destination = portalTarget(parent, portal.target);
+      for (const node of children.nodes) {
+        destination.appendChild(node);
+        moved.push(node);
+      }
+    }
+  } catch (error) {
+    cleanupAfterError(error, [
+      () => children.dispose(false),
+      () => { for (const node of moved) node.parentNode?.removeChild(node); },
+    ]);
   }
   let active = true;
   return {
-    nodes: [start, end],
+    get nodes() { return portal.disabled ? [start, ...children.nodes, end] : [start, end]; },
     dispose(remove = true) {
       if (!active) return;
       active = false;
-      children.dispose(portal.disabled ? remove : true);
-      if (remove) {
-        start.parentNode?.removeChild(start);
-        end.parentNode?.removeChild(end);
+      try { children.dispose(portal.disabled ? remove : true); }
+      finally {
+        if (remove) {
+          start.parentNode?.removeChild(start);
+          end.parentNode?.removeChild(end);
+        }
       }
     },
   };
@@ -748,6 +773,7 @@ function mountKeyed<T>(parent: Node, block: KeyedBlock<T>, before: Node | null, 
   };
 
   const stop = effect(() => {
+    parent = end.parentNode ?? parent;
     const values = resolve(block.each) as T[];
     if (!Array.isArray(values)) throw new TypeError("For expects an array, signal, computed value, or array accessor.");
     const keyedValues = values.map((item, index) => ({ item, index, key: keyOf(item, index) }));
@@ -871,6 +897,7 @@ function hydrateKeyed<T>(parent: Node, block: KeyedBlock<T>, cursor: HydrationCu
   let stop: Cleanup;
   try {
     stop = effect(() => {
+      parent = end.parentNode ?? parent;
       const values = resolve(block.each) as T[];
       if (!Array.isArray(values)) throw new TypeError("For expects an array, signal, computed value, or array accessor.");
       if (first) {
@@ -1013,13 +1040,13 @@ function mountPromise(parent: Node, promise: Promise<Renderable>, before: Node |
   void promise.then(
     (value) => {
       if (!active || !marker.parentNode) return;
-      current = mountValue(parent, value, marker, context);
+      current = mountValue(marker.parentNode, value, marker, context);
       marker.parentNode.removeChild(marker);
     },
     (error) => {
-      if (!active) return;
+      if (!active || !marker.parentNode) return;
       const message = ownerDocument.createTextNode(error instanceof Error ? error.message : String(error));
-      parent.insertBefore(message, marker);
+      marker.parentNode.insertBefore(message, marker);
       marker.parentNode?.removeChild(marker);
       current = simpleMount([message]);
     },
