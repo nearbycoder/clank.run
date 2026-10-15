@@ -1872,3 +1872,12 @@ async function nodePath(): Promise<NodePath> {
   const name = "node:path";
   return import(name) as unknown as Promise<NodePath>;
 }
+
+/** Private read-only validation for an already authorized native target lineage. */
+export function providerDataRestartBinding(stateJSON:string,fenceJSON:string,projectId:string){
+ if(typeof stateJSON!=="string"||typeof fenceJSON!=="string"||new TextEncoder().encode(stateJSON).byteLength>65536||new TextEncoder().encode(fenceJSON).byteLength>65536)throw new Error("Provider restart metadata exceeds its bound.");
+ const state=projectState(decodeStoredState(JSON.parse(stateJSON)),projectId);if(!state)throw new Error("Provider restart data is unavailable.");
+ const fence=exactObject(JSON.parse(fenceJSON),["protocol","projectId","fence"],"provider restart fence");
+ if(fence.protocol!=="clank-provider-data-fence/1"||fence.projectId!==projectId||positiveInteger(fence.fence,"fence")<state.active.fence)throw new Error("Provider restart lifecycle fence is inconsistent.");
+ return Object.freeze({active:Object.freeze({...state.active}),fence:Number(fence.fence)});
+}

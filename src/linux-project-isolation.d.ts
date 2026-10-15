@@ -25,5 +25,5 @@ export interface LinuxDockerNetworkPlan {
 }
 export declare function createLinuxDockerNetworkPlan(owner: string, projectId: string, policy: DockerOutboundNetworkPolicy): Promise<LinuxDockerNetworkPlan>;
 export declare function applyLinuxDockerNetworkPolicy(plan: LinuxDockerNetworkPlan, executable?: string, signal?: AbortSignal): Promise<void>;
-export declare function removeLinuxDockerNetworkPolicy(plan: LinuxDockerNetworkPlan, executable?: string): Promise<void>;
+export declare function removeLinuxDockerNetworkPolicy(plan: LinuxDockerNetworkPlan, executable?: string, signal?: AbortSignal): Promise<void>;
 export declare function enforceLinuxProjectDiskQuota(options: LinuxProjectDiskQuota, projectDirectory: string, registryDirectory: string, projectId: string, signal?: AbortSignal): Promise<void>;

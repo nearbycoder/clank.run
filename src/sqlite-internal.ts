@@ -16,6 +16,7 @@ export function withReviewedExecution<Value>(connection: SQLiteInternal, identit
 
 export interface SQLiteStatement {
   all(...parameters: any[]): Array<Record<string, unknown>>;
+  iterate?(...parameters: any[]): IterableIterator<Record<string, unknown>>;
   get(...parameters: any[]): Record<string, unknown> | undefined;
   run(...parameters: any[]): { changes: number | bigint; lastInsertRowid: number | bigint };
 }

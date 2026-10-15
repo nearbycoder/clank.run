@@ -164,3 +164,8 @@ async function runCommand(
 function throwIfAborted(signal:AbortSignal|undefined):void { if(signal?.aborted)throw signal.reason??new Error("Operation aborted."); }
 function safeError(value:unknown):string {return value instanceof Error?value.message:String(value);}
 function boundedFailure(value:string):string {return value.replace(/[\u0000-\u001f\u007f]+/gu," ").trim().slice(0,1024)||"no diagnostic output";}
+
+/** Stable native inspect projection shared by publication and cleanup readers; this is not authority. */
+export function providerDockerTargetConfiguration(row:any):string{
+ return JSON.stringify({id:row.Id,image:row.Image,created:row.Created,config:row.Config,host:{...row.HostConfig,OomKillDisable:false},mounts:row.Mounts.map((m:any)=>({Type:m.Type,Source:m.Source,Destination:m.Destination,RW:m.RW,Propagation:m.Propagation})).sort((a:any,b:any)=>a.Destination<b.Destination?-1:1)});
+}

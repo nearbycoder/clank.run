@@ -89,7 +89,7 @@ function parse(encoded: unknown, maximum: number): unknown {
 }
 function digest(value: string): string { return createHash("sha256").update(value).digest("hex"); }
 
-function keys(controlSecret: Uint8Array, value: SourceWorkerChannelBinding) {
+function keys(controlSecret: Uint8Array, value: SourceWorkerChannelBinding, control=false) {
   // Native typed-array slots avoid key getters/iterators and reject shared or
   // oversized backing input before copying. Never mutate the caller's key.
   if (!(controlSecret instanceof Uint8Array) || !ArrayBuffer.isView(controlSecret)) invalid();
@@ -100,7 +100,7 @@ function keys(controlSecret: Uint8Array, value: SourceWorkerChannelBinding) {
   const copy = new Uint8Array(controlSecret);
   try {
     const derive = (direction: string) => createHmac("sha256", copy)
-      .update(JSON.stringify({ protocol: "clank-provider-source-worker-key/1", direction, binding: value })).digest();
+      .update(JSON.stringify({ protocol: control?"clank-provider-source-control-key/1":"clank-provider-source-worker-key/1", direction, binding: value })).digest();
     return { request: derive("request"), response: derive("response") };
   } finally { copy.fill(0); }
 }
@@ -288,6 +288,65 @@ export async function openSourceWorkerSocketClient(controlSecret: Uint8Array, ch
   } catch (error) { close(error); throw error; }
 }
 
+/** Fixed, retained source-side control transport. Its owner validates every frame. */
+export async function openSourceControlSocketClient(uid:number,gid:number){
+  const process=(globalThis as any).process;
+  if(process.platform!=="linux"||!integer(uid,1)||!integer(gid,1)||process.getuid?.()!==uid||process.getgid?.()!==gid)invalid();
+  const fsName="node:fs",netName="node:net",[fs,net]=await Promise.all([import(fsName),import(netName)]);
+  const root="/run/clank-source-control",endpoint="control.sock";
+  let directory:number|undefined,socketPin:number|undefined,socket:any,closed=false,connected=false,failed:unknown;
+  let timer:ReturnType<typeof setTimeout>|undefined,pending:{resolve(value:string):void;reject(error:unknown):void}|undefined;
+  const clear=()=>{if(timer!==undefined)clearTimeout(timer);timer=undefined;};
+  const close=(error:unknown=new Error("Private source control channel is closed."))=>{
+    if(closed)return;closed=true;failed=error;clear();const held=pending;pending=undefined;held?.reject(error);socket?.destroy();
+    const errors:unknown[]=[];for(const fd of [socketPin,directory])if(fd!==undefined)try{fs.closeSync(fd);}catch(error){errors.push(error);}
+    socketPin=directory=undefined;if(errors.length)throw new AggregateError(errors,"Private source control pin cleanup failed.");
+  };
+  try{
+    const mount=()=>{
+      const text=fs.readFileSync("/proc/self/mountinfo","utf8");if(text.length>262144)invalid();
+      const rows=text.split("\n").map((line:string)=>line.split(" ")).filter((parts:string[])=>parts[4]===root);
+      if(rows.length!==1||!rows[0][5].split(",").includes("ro")||rows[0].slice(6,rows[0].indexOf("-")).some((field:string)=>/^(shared|master|propagate_from):/u.test(field)))invalid();
+    };
+    mount();const before=fs.lstatSync(root);directory=fs.openSync(root,fs.constants.O_RDONLY|fs.constants.O_DIRECTORY|fs.constants.O_NOFOLLOW);
+    const anchor="/proc/self/fd/"+directory,originalDirectory=fs.fstatSync(directory);
+    if(!before.isDirectory()||before.dev!==originalDirectory.dev||before.ino!==originalDirectory.ino||fs.realpathSync(root)!==root)invalid();
+    const original=fs.lstatSync(anchor+"/"+endpoint);socketPin=fs.openSync(anchor+"/"+endpoint,0x200000|fs.constants.O_NOFOLLOW);
+    const check=()=>{
+      if(closed)throw failed;mount();
+      for(const stat of [fs.lstatSync(root),fs.fstatSync(directory!)])if(!stat.isDirectory()||stat.uid!==uid||stat.gid!==gid||(stat.mode&0o777)!==0o700||stat.dev!==originalDirectory.dev||stat.ino!==originalDirectory.ino)invalid();
+      if(fs.realpathSync(root)!==root||fs.readdirSync(anchor).join("\0")!==endpoint)invalid();
+      for(const stat of [fs.fstatSync(socketPin!),fs.lstatSync(anchor+"/"+endpoint)])if(!stat.isSocket()||stat.uid!==uid||stat.gid!==gid||(stat.mode&0o777)!==0o600||stat.nlink!==2||stat.dev!==original.dev||stat.ino!==original.ino)invalid();
+    };
+    check();socket=net.createConnection(anchor+"/"+endpoint);
+    let text="",bytes=0;const decoder=new TextDecoder("utf-8",{fatal:true});
+    const fail=(error:unknown)=>{try{close(error);}catch(cleanup){failed=new AggregateError([error,cleanup],"Private source control failure and cleanup failed.");}};
+    socket.on("error",fail);socket.on("close",()=>fail(new Error("Private source control peer disconnected.")));
+    socket.on("data",(chunk:Uint8Array)=>{
+      if(closed)return;
+      try{
+        if(!pending||(bytes+=chunk.byteLength)>8193)invalid();text+=decoder.decode(chunk,{stream:true});const end=text.indexOf("\n");if(end<0)return;
+        if(chunk[chunk.byteLength-1]!==10||end!==text.length-1||text.includes("\r")||Buffer.byteLength(text.slice(0,end))>8192)invalid();
+        check();const held=pending;pending=undefined;clear();const value=text.slice(0,end);text="";bytes=0;held.resolve(value);
+      }catch(error){fail(error);}
+    });
+    await new Promise<void>((resolve,reject)=>{
+      const failure=(error:unknown)=>{fail(error);reject(error);};timer=setTimeout(()=>failure(new Error("Private source control connect exceeded10000ms.")),10000);
+      socket.once("error",failure);socket.once("close",()=>{if(!connected)failure(new Error("Private source control connect closed."));});
+      socket.once("connect",()=>{try{check();connected=true;clear();socket.off("error",failure);resolve();}catch(error){failure(error);}});
+    });
+    return Object.freeze({assertCurrent(){try{check();}catch(error){fail(error);throw error;}},
+      exchange(encoded:string):Promise<string>{
+        try{
+          check();if(pending)throw new Error("Private source control already has an owned frame.");
+          if(typeof encoded!=="string"||Buffer.byteLength(encoded)>8192||/[\r\n]/u.test(encoded))invalid();
+          return new Promise((resolve,reject)=>{pending={resolve,reject};timer=setTimeout(()=>fail(new Error("Private source control response exceeded30000ms.")),30000);socket.write(encoded+"\n",(error:unknown)=>{if(error)fail(error);});});
+        }catch(error){fail(error);return Promise.reject(error);}
+      },close:()=>close(),
+    });
+  }catch(error){try{close(error);}catch(cleanup){throw new AggregateError([error,cleanup],"Private source control acquisition and cleanup failed.");}throw error;}
+}
+
 /** Authenticated task receipts are wire correlation, never worker authority. */
 export function createSourceWorkerServerProtocol(controlSecret: Uint8Array, identity: SourceWorkerIdentity) {
   // A new server never adopts an old channel epoch or its replay history.
@@ -330,10 +389,101 @@ export function createSourceWorkerServerProtocol(controlSecret: Uint8Array, iden
 }
 
 
+// Control correlation is separate from the retired three-task initializer.
+// These protocol objects do not establish provider, source or write authority.
+const CONTROL_PROTOCOL="clank-provider-source-control/1";
+const CONTROL_MAX=8192;
+export type SourceControlRequestKind="hello"|"initialized"|"pulse";
+export interface AcceptedSourceControlRequest {
+  readonly kind:SourceControlRequestKind;
+  readonly initialization:string|null;
+  readonly result?:string;
+}
+interface ControlRequest {
+  protocol:typeof CONTROL_PROTOCOL;kind:SourceControlRequestKind;
+  binding:SourceWorkerChannelBinding;sequence:number;nonce:string;initialization:string|null;result?:string;
+}
+function controlRequest(encoded:string,scope:SourceWorkerChannelBinding,key:Uint8Array):ControlRequest {
+  const parsed=parse(encoded,CONTROL_MAX),hasResult=!!parsed&&Object.hasOwn(parsed as object,"result");
+  const data=own(parsed,["protocol","kind","binding","sequence","nonce","initialization",...(hasResult?["result"]:[]),"mac"]);
+  if(data.protocol!==CONTROL_PROTOCOL||!["hello","initialized","pulse"].includes(data.kind as string)
+    ||JSON.stringify(binding(data.binding))!==JSON.stringify(scope)||!integer(data.sequence,1)||!match(data.nonce,NONCE))invalid();
+  if(data.kind==="initialized"?typeof data.initialization!=="string"||Buffer.byteLength(data.initialization)>4096:data.initialization!==null)invalid();
+  const body:ControlRequest={protocol:CONTROL_PROTOCOL,kind:data.kind as SourceControlRequestKind,binding:scope,sequence:data.sequence,nonce:data.nonce,initialization:data.initialization as string|null};
+  if(hasResult){if(data.kind!=="pulse"||typeof data.result!=="string"||Buffer.byteLength(data.result)>4096)invalid();body.result=data.result;}
+  authenticated(encoded,body,data.mac,key);return body;
+}
+function controlKind(sequence:number):SourceControlRequestKind{return sequence===1?"hello":sequence===2?"initialized":"pulse";}
+function controlChallenge(value:unknown):value is string {
+  return match(value,/^[A-Za-z0-9_-]{43}$/u)&&Buffer.from(value,"base64url").toString("base64url")===value;
+}
+export function createSourceControlClientProtocol(controlSecret:Uint8Array,channel:SourceWorkerChannelBinding){
+  const scope=binding(channel),secret=keys(controlSecret,scope,true);
+  let closed=false,sequence=0,pending:ControlRequest|undefined,requestHash:string|undefined;
+  const close=()=>{closed=true;pending=undefined;requestHash=undefined;secret.request.fill(0);secret.response.fill(0);};
+  const current=()=>{if(closed)invalid();};
+  return Object.freeze({
+    begin(kind:SourceControlRequestKind,initialization?:string,result?:string):string{
+      try{
+        current();if(pending||sequence===Number.MAX_SAFE_INTEGER||kind!==controlKind(sequence+1))invalid();
+        if(kind==="initialized"?typeof initialization!=="string"||Buffer.byteLength(initialization)>4096:initialization!==undefined)invalid();
+        const body:ControlRequest={protocol:CONTROL_PROTOCOL,kind,binding:scope,sequence:sequence+1,nonce:randomBytes(18).toString("base64url"),initialization:initialization??null};
+        if(result!==undefined){if(kind!=="pulse"||typeof result!=="string"||Buffer.byteLength(result)>4096)invalid();body.result=result;}
+        const encoded=JSON.stringify({...body,mac:authenticator(secret.request,body)});if(Buffer.byteLength(encoded)>CONTROL_MAX)invalid();
+        pending=body;requestHash=digest(encoded);return encoded;
+      }catch(error){close();throw error;}
+    },
+    finish(encoded:string):string|undefined{
+      try{
+        current();if(!pending)invalid();
+        const parsed=parse(encoded,CONTROL_MAX),hasCommand=!!parsed&&Object.hasOwn(parsed as object,"command");
+        const data=own(parsed,["protocol","kind","binding","sequence","nonce","requestSha256","challenge",...(hasCommand?["command"]:[]),"mac"]);
+        const expected=pending.kind==="hello"?"challenge":"acknowledged";
+        if(data.protocol!==CONTROL_PROTOCOL||data.kind!==expected||JSON.stringify(binding(data.binding))!==JSON.stringify(scope)
+          ||data.sequence!==pending.sequence||data.nonce!==pending.nonce||data.requestSha256!==requestHash
+          ||(expected==="challenge"?!controlChallenge(data.challenge):data.challenge!==null))invalid();
+        const body={protocol:CONTROL_PROTOCOL,kind:expected,binding:scope,sequence:pending.sequence,nonce:pending.nonce,requestSha256:requestHash,challenge:data.challenge};
+        if(hasCommand&&(pending.kind!=="pulse"||typeof data.command!=="string"||Buffer.byteLength(data.command)>4096))invalid();
+        const responseBody=hasCommand?{...body,command:data.command}:body;
+        authenticated(encoded,responseBody,data.mac,secret.response);sequence=pending.sequence;pending=undefined;requestHash=undefined;
+        return expected==="challenge"?data.challenge as string:hasCommand?data.command as string:undefined;
+      }catch(error){close();throw error;}
+    },close,
+  });
+}
+export function createSourceControlServerProtocol(controlSecret:Uint8Array,identity:SourceWorkerIdentity){
+  const fields=own(identity,["bindingSha256","containerId","sourceIncarnation"]),scope=binding({...fields,channelId:randomUUID()}),secret=keys(controlSecret,scope,true);
+  const receipts=new WeakMap<AcceptedSourceControlRequest,{request:ControlRequest;hash:string}>();
+  let closed=false,sequence=0,active:AcceptedSourceControlRequest|undefined;
+  const close=()=>{closed=true;if(active)receipts.delete(active);active=undefined;secret.request.fill(0);secret.response.fill(0);};
+  const current=()=>{if(closed)invalid();};
+  return Object.freeze({binding:scope,
+    accept(encoded:string):AcceptedSourceControlRequest{
+      try{
+        current();if(active||sequence===Number.MAX_SAFE_INTEGER)invalid();
+        const request=controlRequest(encoded,scope,secret.request);if(request.sequence!==sequence+1||request.kind!==controlKind(sequence+1))invalid();
+        const accepted=Object.freeze({kind:request.kind,initialization:request.initialization,...(request.result===undefined?{}:{result:request.result})});receipts.set(accepted,{request,hash:digest(encoded)});active=accepted;return accepted;
+      }catch(error){close();throw error;}
+    },
+    reply(accepted:AcceptedSourceControlRequest,challenge?:string,command?:string):string{
+      try{
+        current();const held=receipts.get(accepted);if(!held||active!==accepted)invalid();
+        const hello=held.request.kind==="hello";if(hello?!controlChallenge(challenge):challenge!==undefined)invalid();
+        const body={protocol:CONTROL_PROTOCOL,kind:hello?"challenge":"acknowledged",binding:scope,sequence:held.request.sequence,nonce:held.request.nonce,requestSha256:held.hash,challenge:challenge??null};
+        if(command!==undefined&&(held.request.kind!=="pulse"||typeof command!=="string"||Buffer.byteLength(command)>4096))invalid();
+        const responseBody=command===undefined?body:{...body,command};
+        const encoded=JSON.stringify({...responseBody,mac:authenticator(secret.response,responseBody)});if(Buffer.byteLength(encoded)>CONTROL_MAX)invalid();
+        sequence=held.request.sequence;receipts.delete(accepted);active=undefined;return encoded;
+      }catch(error){close();throw error;}
+    },close,
+  });
+}
+
 // Raw bounded UNIX transport only. Neither filesystem capabilities nor wire
 // formatting mint provider/source authority. Its caller must retain the genuine
 // grant/container/worker and use the authenticated protocol before execution.
-const SOCKET_BROKER_BOOTSTRAP = `
+const socketBrokerBootstrap = (control:boolean) => `
+const requestMaximum=${control?8192:2048},requestLimit=${control?Number.MAX_SAFE_INTEGER:3},idleTimeout=${control?30000:10000};
 const net=await import('node:net'),fs=await import('node:fs');
 const send=value=>process.stdout.write(JSON.stringify(value)+'\\n');
 let client,used=false,pending=false,closed=false,input='',command='',requests=0,frameBytes=0,frameTimer;
@@ -341,14 +491,14 @@ const incoming=new TextDecoder('utf-8',{fatal:true}),commands=new TextDecoder('u
 const dispose=()=>{if(closed)return;closed=true;clearTimeout(frameTimer);client?.destroy();process.chdir('/proc/self/fd/4');server.close(()=>process.exit(0));};
 process.chdir('/proc/self/fd/3');
 const server=net.createServer(socket=>{
- if(closed||used){socket.destroy();return;}used=true;client=socket;frameTimer=setTimeout(dispose,10000);
+ if(closed||used){socket.destroy();return;}used=true;client=socket;frameTimer=setTimeout(dispose,idleTimeout);
  socket.on('error',dispose);socket.on('close',dispose);
  socket.on('data',chunk=>{
-  if(closed||pending||(frameBytes+=chunk.length)>2049){dispose();return;}
+  if(closed||pending||(frameBytes+=chunk.length)>requestMaximum+1){dispose();return;}
   try{input+=incoming.decode(chunk,{stream:true});}catch{dispose();return;}const end=input.indexOf('\\n');if(end<0)return;
   // A streaming decoder can hide an incomplete suffix after the newline.
-  if(chunk[chunk.length-1]!==10||end!==input.length-1||Buffer.byteLength(input.slice(0,end))>2048||input.includes('\\r')||input.includes('\\uFFFD')){dispose();return;}
-  if(++requests>3){dispose();return;}clearTimeout(frameTimer);frameTimer=setTimeout(dispose,30000);pending=true;send({kind:'request',body:input.slice(0,end)});input='';
+  if(chunk[chunk.length-1]!==10||end!==input.length-1||Buffer.byteLength(input.slice(0,end))>requestMaximum||input.includes('\\r')||input.includes('\\uFFFD')){dispose();return;}
+  if(++requests>requestLimit){dispose();return;}clearTimeout(frameTimer);frameTimer=setTimeout(dispose,30000);pending=true;send({kind:'request',body:input.slice(0,end)});input='';
  });
 });
 server.on('error',()=>process.exit(1));server.listen('socket',()=>{fs.chmodSync('socket',0o600);send({kind:'ready'});});
@@ -358,7 +508,7 @@ process.stdin.on('end',dispose);process.stdin.on('data',chunk=>{
  if(end!==command.length-1){dispose();return;}let value;try{value=JSON.parse(command.slice(0,end));}catch{dispose();return;}command='';
  if(value.kind==='close'){dispose();return;}
  if(value.kind!=='reply'||!pending||!client||typeof value.body!=='string'||Buffer.byteLength(value.body)>8192||value.body.includes('\\n')||value.body.includes('\\r')){dispose();return;}
- pending=false;frameBytes=0;clearTimeout(frameTimer);frameTimer=setTimeout(dispose,10000);client.write(value.body+'\\n');
+ pending=false;frameBytes=0;clearTimeout(frameTimer);frameTimer=setTimeout(dispose,idleTimeout);client.write(value.body+'\\n');
 });
 `;
 export interface SourceWorkerSocketBroker {
@@ -370,10 +520,21 @@ export interface SourceWorkerSocketBroker {
   close():Promise<void>;
 }
 /** Internal transport; the three directories must be original retained capabilities. */
-export async function openSourceWorkerSocketBroker(
+export function openSourceWorkerSocketBroker(
   listener:import("./sqlite-sandbox.ts").PinnedSQLiteDirectory,
   disposal:import("./sqlite-sandbox.ts").PinnedSQLiteDirectory,
   mount:import("./sqlite-sandbox.ts").PinnedSQLiteDirectory,
+):Promise<SourceWorkerSocketBroker> {return openSourceSocketBroker(listener,disposal,mount,false);}
+/** Separate persistent raw endpoint; original provider ownership remains required. */
+export function openSourceControlSocketBroker(
+  listener:import("./sqlite-sandbox.ts").PinnedSQLiteDirectory,
+  disposal:import("./sqlite-sandbox.ts").PinnedSQLiteDirectory,
+  mount:import("./sqlite-sandbox.ts").PinnedSQLiteDirectory,
+):Promise<SourceWorkerSocketBroker> {return openSourceSocketBroker(listener,disposal,mount,true);}
+async function openSourceSocketBroker(
+  listener:import("./sqlite-sandbox.ts").PinnedSQLiteDirectory,
+  disposal:import("./sqlite-sandbox.ts").PinnedSQLiteDirectory,
+  mount:import("./sqlite-sandbox.ts").PinnedSQLiteDirectory,control:boolean,
 ):Promise<SourceWorkerSocketBroker> {
   const sandbox=await import("./sqlite-sandbox.ts"),fs=await import("node:fs"),cp=await import("node:child_process");
   const process=(globalThis as any).process;
@@ -386,7 +547,8 @@ export async function openSourceWorkerSocketBroker(
   // its relative binding from this empty non-writable directory, so Node never
   // unlinks a replacement at the listener or public endpoint pathname.
   if(fs.readdirSync(disposal.anchor).length)throw new Error("Private UNIX disposal directory must be empty.");
-  const original=listener.anchor+"/socket",endpoint=mount.anchor+"/sqlite.sock";
+  const endpointName=control?"control.sock":"sqlite.sock",requestMaximum=control?8192:2048,outputMaximum=control?50176:16384;
+  const original=listener.anchor+"/socket",endpoint=mount.anchor+"/"+endpointName;
   for(const path of [original,endpoint]){let present=false;try{fs.lstatSync(path);present=true;}catch(error){if((error as any).code!=="ENOENT")throw error;}
     if(present)throw new Error("Private UNIX endpoint cannot be adopted.");}
   fs.fchmodSync(disposal.fd,0o500);
@@ -395,7 +557,7 @@ export async function openSourceWorkerSocketBroker(
   let active=false;
   let partial='',waiting:((value:string)=>void)|undefined,rejectWaiting:((error:Error)=>void)|undefined,queued:string|undefined;
   let readyResolve!:()=>void,readyReject!:(error:Error)=>void;const readiness=new Promise<void>((resolve,reject)=>{readyResolve=resolve;readyReject=reject;});
-  const child=cp.spawn("/usr/bin/setpriv",["--inh-caps=-all","--ambient-caps=-all","--no-new-privs","/usr/bin/prlimit",...sandbox.SQLITE_RESOURCE_LIMITS,"--",process.execPath,"--jitless","--max-old-space-size=64","--input-type=module","--eval",SOCKET_BROKER_BOOTSTRAP],{
+  const child=cp.spawn("/usr/bin/setpriv",["--inh-caps=-all","--ambient-caps=-all","--no-new-privs","/usr/bin/prlimit",...sandbox.SQLITE_RESOURCE_LIMITS,"--",process.execPath,"--jitless","--max-old-space-size=64","--input-type=module","--eval",socketBrokerBootstrap(control)],{
     stdio:["pipe","pipe","pipe",listener.fd,disposal.fd],env:{NODE_NO_WARNINGS:"1"},windowsHide:true,
   });
   let closeResolve!:()=>void;const actualClose=new Promise<void>(resolve=>closeResolve=resolve);
@@ -404,12 +566,12 @@ export async function openSourceWorkerSocketBroker(
   const stdin=child.stdin!,stdout=child.stdout!,stderr=child.stderr!;
   child.on("error",fail);stdin.on("error",fail);stderr.resume();
   stdout.on("data",(chunk:Uint8Array)=>{
-    if(chunk.length>16384||Buffer.byteLength(partial)+chunk.length>16384){fail(new Error("Private UNIX broker output exceeds its bound."));return;}
+    if(chunk.length>outputMaximum||Buffer.byteLength(partial)+chunk.length>outputMaximum){fail(new Error("Private UNIX broker output exceeds its bound."));return;}
     try{partial+=outputDecoder.decode(chunk,{stream:true});}catch{fail(new Error("Invalid private UNIX output encoding."));return;}let end;while((end=partial.indexOf("\n"))>=0){
     const line=partial.slice(0,end);partial=partial.slice(end+1);let value:Record<string,unknown>;
     try{value=JSON.parse(line);if(JSON.stringify(value)!==line)throw Error();}catch{fail(new Error("Invalid private UNIX broker output."));return;}
     if(value.kind==="ready"&&Object.keys(value).length===1&&!ready){ready=true;readyResolve();continue;}
-    if(value.kind!=="request"||Object.keys(value).length!==2||typeof value.body!=="string"||Buffer.byteLength(value.body)>2048||queued!==undefined){fail(new Error("Invalid private UNIX request frame."));return;}
+    if(value.kind!=="request"||Object.keys(value).length!==2||typeof value.body!=="string"||Buffer.byteLength(value.body)>requestMaximum||queued!==undefined){fail(new Error("Invalid private UNIX request frame."));return;}
     try{current();}catch(error){fail(error as Error);return;}
     if(waiting){const resolve=waiting;waiting=undefined;rejectWaiting=undefined;active=true;resolve(value.body);}else queued=value.body;
     }
@@ -449,7 +611,7 @@ export async function openSourceWorkerSocketBroker(
     // as a stream. O_NOFOLLOW prevents a substituted symbolic link.
     socketFd=fs.openSync(original,0x200000|fs.constants.O_NOFOLLOW);const held=fs.fstatSync(socketFd);if(!held.isSocket()||held.dev!==before.dev||held.ino!==before.ino)throw new Error("Private UNIX listener changed.");
     socketIdentity={dev:held.dev,ino:held.ino};fs.linkSync(original,endpoint);published=true;current();
-    return Object.freeze({socketPath:mount.path+"/sqlite.sock",closed:actualClose,assertCurrent:current,receive(){current();if(active)return Promise.reject(new Error("Private UNIX broker already has an unanswered frame."));if(waiting)return Promise.reject(new Error("Private UNIX broker already has a receiver."));if(queued!==undefined){const body=queued;queued=undefined;active=true;return Promise.resolve(body);}return new Promise<string>((resolve,reject)=>{waiting=resolve;rejectWaiting=reject;});},
+    return Object.freeze({socketPath:mount.path+"/"+endpointName,closed:actualClose,assertCurrent:current,receive(){current();if(active)return Promise.reject(new Error("Private UNIX broker already has an unanswered frame."));if(waiting)return Promise.reject(new Error("Private UNIX broker already has a receiver."));if(queued!==undefined){const body=queued;queued=undefined;active=true;return Promise.resolve(body);}return new Promise<string>((resolve,reject)=>{waiting=resolve;rejectWaiting=reject;});},
       reply(encoded:string){current();if(!active)throw new Error("Private UNIX broker has no unanswered frame.");if(typeof encoded!=="string"||Buffer.byteLength(encoded)>8192||/[\r\n]/u.test(encoded))throw new Error("Private UNIX response exceeds its frame.");active=false;stdin.write(JSON.stringify({kind:"reply",body:encoded})+"\n");},close});
   }catch(error){try{await close();}catch(cleanup){throw new AggregateError([error,cleanup],"Private UNIX broker acquisition and cleanup failed.");}throw error;}
 }

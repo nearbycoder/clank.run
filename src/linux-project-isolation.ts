@@ -121,18 +121,18 @@ async function verifyNetworkOwnership(plan: LinuxDockerNetworkPlan, executable: 
   return output.nftables;
 }
 
-export async function removeLinuxDockerNetworkPolicy(plan: LinuxDockerNetworkPlan, executable = "/usr/sbin/nft"): Promise<void> {
+export async function removeLinuxDockerNetworkPolicy(plan: LinuxDockerNetworkPlan, executable = "/usr/sbin/nft", signal?: AbortSignal): Promise<void> {
   requireLinux();
   const present = async () => {
-    const output = JSON.parse(await command(executable, ["-j", "list", "tables"]));
+    const output = JSON.parse(await command(executable, ["-j", "list", "tables"], undefined, signal));
     if (!Array.isArray(output.nftables) || output.nftables.some((entry: any) => entry?.table !== undefined
       && (typeof entry.table?.family !== "string" || typeof entry.table?.name !== "string"))) throw new Error("Cannot verify outbound network policy absence.");
     return output.nftables.some((entry: any) => entry.table?.family === "inet" && entry.table?.name === plan.table);
   };
   if (!await present()) return;
-  await verifyNetworkOwnership(plan, executable);
+  await verifyNetworkOwnership(plan, executable, signal);
   let failure: unknown;
-  try { await command(executable, ["delete", "table", "inet", plan.table]); }
+  try { await command(executable, ["delete", "table", "inet", plan.table], undefined, signal); }
   catch (error) { failure = error; }
   if (await present()) throw failure ?? new Error("Outbound network policy cleanup did not converge.");
 }
