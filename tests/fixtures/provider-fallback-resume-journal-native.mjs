@@ -14,7 +14,7 @@ import {serve} from '../../dist/node.js';
 import {openNativePlatformAPI} from './provider-platform-api-native.mjs';
 import {providerDockerClient,runProviderDockerClient} from '../../dist/provider-docker-client.js';
 assert.equal(process.getuid(),1000);assert.equal(process.getgid(),1000);
-const mode=process.argv[3]??'observer-failure';assert.ok(['observer-failure','early-admission-failure','plan-commit-loss','terminal-afterimage-mutation'].includes(mode));
+const mode=process.argv[3]??'observer-failure';assert.ok(['observer-failure','early-admission-failure','plan-commit-loss','terminal-afterimage-mutation','cold-stopped'].includes(mode));
 const image=process.argv[2];assert.match(image,/@sha256:[a-f0-9]{64}$/u);
 const directory=fs.mkdtempSync('/var/tmp/clank-fallback-resume-journal-'),root=join(directory,'provider'),targetRoot=join(directory,'target'),source=join(directory,'source'),configDirectory=join(directory,'docker-config');
 for(const path of [source,join(source,'dist'),join(source,'migrations'),configDirectory])fs.mkdirSync(path,{mode:0o700});
@@ -30,6 +30,7 @@ try{await commit(process.env.MULTILINE);while(!stopped){await new Promise(resolv
 `);
 const label='fallback_'+randomUUID(),targetLabel=label+'_target',client=providerDockerClient({dockerEnvironment:{DOCKER_HOST:'unix:///var/run/docker.sock',DOCKER_CONFIG:configDirectory}});
 const command=args=>runProviderDockerClient(client,args,{timeoutMs:15000,maxOutputBytes:65536});
+if(mode==='cold-stopped')process.send?.({event:'cold-fixture-start',directory,label,targetLabel});
 const key=randomBytes(32),keyPath=join(directory,'master.key');fs.writeFileSync(keyPath,key,{mode:0o600});
 const proof={directory,mode,version:process.version,qualification:'Stage1/2 only: real administrator target resume, append-only authenticated native intent before start, signed running roster, and atomic terminal plan publication before guard release. No cold startup or unrelated-runtime adoption claim.',complete:false};
 let service,target,api,sourceServer,targetServer,failure,lastSourceProbe;
@@ -145,7 +146,7 @@ try {
    if(!resumeInjected&&executable==='docker'&&args?.[0]==='info'){
     const attempt=operation();let state;try{state=JSON.parse(fs.readFileSync(join(targetRoot,'service',projectId+'.json'),'utf8'));}catch(error){if(error.code!=='ENOENT')throw error;}
     const reconciled=state?.phase==='running'&&state.operationId===attempt?.id;
-    if(attempt?.state==='leased'&&(mode==='observer-failure'?reconciled:!reconciled)){
+    if(attempt?.state==='leased'&&(['observer-failure','cold-stopped'].includes(mode)?reconciled:!reconciled)){
      captureFault();resumeInjected=true;
      // Original launcher/observer receives an actual failed CLI process. No
      // fake role/readiness evidence or fallback capabilities are supplied.
@@ -176,6 +177,27 @@ try {
   assert.equal(placement.assigned_node_id,'native_target');assert.equal(placement.observed_state,'stopped');assert.equal(placement.observed_release_id,null);assert.notEqual(afterFailure.state,'completed');assert.equal(JSON.parse(afterFailure.projects).find(item=>item.projectId===projectId).fallbackState,'stopped');assert.equal(failedRow.state,'cancelled');assert.equal(failedRow.lease_token_hash,null);assert.equal(failedRow.lease_expires_at,null);
   assert.equal(providerState.state,'stopped');assert.equal(providerState.phase,'stopped');assert.equal(providerState.generation,2);assert.equal(providerState.releaseId,null);assert.equal(providerState.capsuleSha256,null);
   const failedData=JSON.parse(fs.readFileSync(join(targetRoot,'projects',projectId,'state.json'),'utf8'));if(mode==='early-admission-failure')assert.ok(failedData.active.fence<failedFence);
+  if(mode==='cold-stopped'){
+   assert.equal(typeof process.send,'function','Cold checkpoint requires its supervising native runner.');
+   const head=api.control.prepare('SELECT * FROM clank_platform_fallback_resume_heads WHERE predecessor_id=? ORDER BY attempt DESC LIMIT 1').get(operationId);
+   assert.equal(head.phase,'stopped');
+   const stopped=api.control.prepare('SELECT journal,authentication FROM clank_platform_fallback_resume_records WHERE resume_id=? AND revision=?').get(head.resume_id,head.revision),record=JSON.parse(stopped.journal);
+   assert.equal(record.phase,'stopped');assert.equal(record.selected,'target');assert.equal(record.intent.roles.length,4);
+   assert.equal(createHmac('sha256',key).update('clank-provider-fallback-resume-attempt/1\n'+stopped.journal).digest('hex'),stopped.authentication);assert.equal(head.authentication,stopped.authentication);
+   assert.equal(record.settlement.placement,JSON.stringify(placement));assert.equal(record.settlement.operation,JSON.stringify(failedRow));
+   const checkpoint={protocol:'clank-native-cold-stopped-fixture/1',directory,root,targetRoot,keyPath,configDirectory,image,label,targetLabel,projectId,plan,
+    credentials:api.restartState(plan),retained,stopped,head,source:journal.source,target:journal.target,failedRuntime:faultNative,unrelated:unrelatedNative,
+    baselineRows:beforeRows,providerOptions:{source:{rootDirectory:root,owner:label,image,docker:{...docker,portStart:47260,portEnd:47265}},target:{rootDirectory:targetRoot,owner:targetLabel,image,docker:{...docker,portStart:47460,portEnd:47465}}},
+    controller:{pid:process.pid,birth:nativeBirth(process.pid)},controlIdentity:record.controlIdentity,daemonId:journal.source.daemonId};
+   const checkpointPath=join(directory,'cold-stopped-checkpoint.json'),fd=fs.openSync(checkpointPath,fs.constants.O_WRONLY|fs.constants.O_CREAT|fs.constants.O_EXCL|fs.constants.O_NOFOLLOW,0o600);
+   try{fs.writeFileSync(fd,JSON.stringify(checkpoint));fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
+   const keyFd=fs.openSync(keyPath,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);try{fs.fsyncSync(keyFd);}finally{fs.closeSync(keyFd);}
+   const directoryFd=fs.openSync(directory,fs.constants.O_RDONLY|fs.constants.O_DIRECTORY|fs.constants.O_NOFOLLOW);try{fs.fsyncSync(directoryFd);}finally{fs.closeSync(directoryFd);}
+   await new Promise((resolve,reject)=>process.send({event:'cold-stopped-checkpoint',path:checkpointPath},error=>error?reject(error):resolve()));
+   // Parent sends actual SIGKILL only after independent durable-state validation.
+   // Do not close providers: the unrelated original container must survive it.
+   await new Promise(()=>{});
+  }
   DatabaseSync.prototype.exec=function(sql){if(sql==='COMMIT'&&originalPrepare.call(this,'PRAGMA database_list').get().file===api.controlPath)captureJournalCommit(this);return originalExec.call(this,sql);};
   try{const completed=await api.runEvacuation(plan);assert.equal(completed.state,'completed');assert.equal(completed.projects.find(item=>item.projectId===projectId).fallbackState,'running');}finally{DatabaseSync.prototype.exec=originalExec;}
   retry=operation();assert.notEqual(retry.id,failedRow.id);assert.equal(retry.state,'succeeded');assert.equal(retry.fence,failedFence+1);

@@ -2,6 +2,7 @@ name: CI
 
 on:
   pull_request:
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -128,3 +129,62 @@ jobs:
           sudo apt-get install --yes --no-install-recommends bubblewrap util-linux nftables iproute2 procps apparmor
           sudo apparmor_parser --replace scripts/ci-linux.apparmor
           npm run check
+
+  provider-cold-resume:
+    name: Native cold STOPPED / Node ${{ matrix.node }}
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - node: "22.16"
+            image: "node@sha256:1471ea646673136b8308550ac14b36d847ffb21c24bc31828279e443c924e488"
+          - node: "26.10"
+            image: "node@sha256:cfa005801786b8e38fa220af518e43f5654c53b36af36b4ad5b3049225ee261e"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Select Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          package-manager-cache: false
+      - name: Prepare disposable native host
+        env:
+          CLANK_NATIVE_IMAGE: ${{ matrix.image }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap util-linux nftables iproute2 procps apparmor
+          sudo apparmor_parser --replace scripts/ci-linux.apparmor
+          test -S /var/run/docker.sock
+          test -f /sys/fs/cgroup/cgroup.controllers
+          docker info
+          docker pull "$CLANK_NATIVE_IMAGE"
+          test "$(getent passwd 1000 | cut -d: -f4)" = 1000
+      - name: Build and prove actual process restart with Docker enabled
+        env:
+          CLANK_NATIVE_IMAGE: ${{ matrix.image }}
+        run: |
+          npm run build
+          fixture_root=$(mktemp -d /var/tmp/clank-cold-ci.XXXXXX)
+          tar --exclude=.git -cf - . | sudo tar -xf - -C "$fixture_root"
+          sudo chown -R 1000:1000 "$fixture_root"
+          docker_group=$(getent group docker | cut -d: -f3)
+          test -n "$docker_group"
+          sudo env PATH="$PATH" CLANK_DISPOSABLE_TEST_HOST=1 setpriv --reuid=1000 --regid=1000 --groups="$docker_group" node "$fixture_root/scripts/verify-provider-cold-resume.mjs" "$CLANK_NATIVE_IMAGE"
+
+  provider-cold-resume-required:
+    name: Native cold STOPPED recovery
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch')
+    needs: provider-cold-resume
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require both native process-restart results
+        env:
+          NATIVE_RESULT: ${{ needs.provider-cold-resume.result }}
+        run: test "$NATIVE_RESULT" = success

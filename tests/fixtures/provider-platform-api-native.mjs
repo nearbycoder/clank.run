@@ -52,6 +52,13 @@ export async function openNativePlatformAPI(directory,key,{capacity=1,localFallb
     assert.equal(localFallback,true);assert.ok(targetSession);await runtime.bindLocalProvider('native_node',sourceSession.token,source);await runtime.bindLocalProvider('native_target',targetSession.token,target);
     const {result:planned}=await call('/api/admin/runners/native_node/evacuations',{confirmation:'evacuate native_node'},{cookie,'x-clank-csrf':account.csrfToken},201);assert.ok(result.oldSourceOperation);sourceRevocation=Object.freeze({plan:JSON.parse(JSON.stringify(planned.plan)),operation:result.oldSourceOperation,node:control.prepare('SELECT id,region,endpoint,capacity,labels,token_hash FROM clank_deployment_nodes WHERE id=?').get('native_node')});return planned.plan;
    },
+   // Private fixture checkpoint only. The caller must keep credentials out of logs.
+   restartState(plan){
+    assert.equal(localFallback,true);assert.ok(sourceSession&&targetSession&&sourceRevocation);
+    assert.equal(sourceRevocation.plan.id,plan.id);
+    return {cookie,csrfToken:account.csrfToken,sourceSession:structuredClone(sourceSession),targetSession:structuredClone(targetSession),
+     sourceRevocation:structuredClone(sourceRevocation),nodeImages:['native_node','native_target'].map(id=>control.prepare('SELECT id,region,endpoint,capacity,labels,token_hash FROM clank_deployment_nodes WHERE id=?').get(id))};
+   },
    async runEvacuation(plan){
     const response=await fetch(origin+'/api/admin/runners/native_node/evacuations/'+plan.id+'/run',{method:'POST',headers:{'content-type':'application/json',origin,cookie,'x-clank-csrf':account.csrfToken},body:JSON.stringify({confirmation:plan.id}),signal:AbortSignal.timeout(60000)}),result=await response.json();assert.equal(response.status,200,JSON.stringify({response:result,platformErrors:platformErrors.slice(-8),evacuation:control.prepare('SELECT state,phase,error FROM clank_platform_evacuations WHERE id=?').get(plan.id)}));assert.equal(result.plan.state,'completed');return result.plan;
    },
