@@ -57,3 +57,31 @@ test("translation imports reject changed source, duplicate keys, altered diffs, 
   await assert.rejects(acceptTranslationReview(messages, review, options), /diff changed/u);
   await assert.rejects(exportTranslationBundle(messages, { ...options, targetLocale: "en" }), /distinct/u);
 });
+
+test("unchanged empty translations produce an empty diff and can be accepted", async () => {
+  const source = defineMessages({ label: "Label" });
+  const current = defineMessages({ label: "" });
+  const currentOptions = { ...options, current };
+  const bundle = await exportTranslationBundle(source, currentOptions);
+  const review = await reviewTranslationBundle(source, bundle, currentOptions);
+  assert.equal(review.ok, true);
+  assert.deepEqual(review.changes, []);
+  assert.equal(review.proposedRevision, review.targetRevision);
+  assert.deepEqual(await acceptTranslationReview(source, review, currentOptions), current);
+});
+
+test("empty translations can be replaced without weakening before-message validation", async () => {
+  const source = defineMessages({ label: "Label" });
+  const currentOptions = { ...options, current: defineMessages({ label: "" }) };
+  const bundle = await exportTranslationBundle(source, currentOptions);
+  bundle.entries[0].translation = "Étiquette";
+  const review = await reviewTranslationBundle(source, bundle, currentOptions);
+  assert.equal(review.ok, true);
+  assert.deepEqual(review.changes, [{ key: "label", before: "", after: "Étiquette" }]);
+  assert.deepEqual(await acceptTranslationReview(source, review, currentOptions), defineMessages({ label: "Étiquette" }));
+  for (const before of [null, "Changed"]) {
+    const altered = structuredClone(review);
+    altered.changes[0].before = before;
+    await assert.rejects(acceptTranslationReview(source, altered, currentOptions), /diff changed/u);
+  }
+});
