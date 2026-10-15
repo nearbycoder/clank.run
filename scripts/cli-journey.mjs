@@ -151,25 +151,42 @@ async function openBrowser(options) {
   }
   let target;
   let cdp;
+  const close = async () => {
+    try {
+      if (cdp) {
+        await Promise.race([
+          (processHandle ? cdp.send("Browser.close") : cdp.send("Target.closeTarget", { targetId: target.id })).catch(() => undefined),
+          wait(500),
+        ]);
+      } else if (target && !processHandle) {
+        await fetch(`${endpoint}/json/close/${encodeURIComponent(target.id)}`, {
+          redirect: "error", signal: AbortSignal.timeout(500),
+        }).catch(() => undefined);
+      }
+    } finally {
+      cdp?.close();
+      if (processHandle) await stopChrome(processHandle);
+      if (profile) await rm(profile, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+    }
+  };
+  const exceptions = [];
+  const secrets = new Set();
   try {
     target = await createTarget(endpoint);
     cdp = await CdpConnection.connect(target.webSocketDebuggerUrl);
+    cdp.on("Runtime.exceptionThrown", (event) => {
+      const message = event?.exceptionDetails?.exception?.description
+        ?? event?.exceptionDetails?.text
+        ?? "Unknown browser exception.";
+      exceptions.push(safeBrowserError(message, secrets));
+      if (exceptions.length > 100) exceptions.shift();
+    });
+    await cdp.send("Page.enable");
+    await cdp.send("Runtime.enable");
   } catch (error) {
-    if (processHandle) await stopChrome(processHandle);
-    if (profile) await rm(profile, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+    await close();
     throw error;
   }
-  const exceptions = [];
-  const secrets = new Set();
-  cdp.on("Runtime.exceptionThrown", (event) => {
-    const message = event?.exceptionDetails?.exception?.description
-      ?? event?.exceptionDetails?.text
-      ?? "Unknown browser exception.";
-    exceptions.push(safeBrowserError(message, secrets));
-    if (exceptions.length > 100) exceptions.shift();
-  });
-  await cdp.send("Page.enable");
-  await cdp.send("Runtime.enable");
   const driver = createCdpDriver(cdp);
   return {
     driver,
@@ -183,15 +200,7 @@ async function openBrowser(options) {
       fromSurface: true,
       captureBeyondViewport: false,
     })).data,
-    async close() {
-      await Promise.race([
-        (processHandle ? cdp.send("Browser.close") : cdp.send("Target.closeTarget", { targetId: target.id })).catch(() => undefined),
-        wait(500),
-      ]);
-      cdp.close();
-      if (processHandle) await stopChrome(processHandle);
-      if (profile) await rm(profile, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
-    },
+    close,
   };
 }
 
@@ -300,6 +309,7 @@ class CdpConnection {
       }, { once: true });
       socket.addEventListener("error", () => {
         clearTimeout(timeout);
+        try { socket.close(); } catch { /* Connection never opened. */ }
         reject(new Error("Could not connect to Chrome DevTools."));
       }, { once: true });
     });

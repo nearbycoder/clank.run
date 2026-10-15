@@ -172,9 +172,19 @@ export async function runJourney(
   if (options.signal?.aborted) abortFromCaller();
   else options.signal?.addEventListener("abort", abortFromCaller, { once: true });
   const runSignal = controller.signal;
+  const secrets = new Set<string>();
+  const resolveSecret = options.resolveSecret ? async (name: string) => {
+    const value = await options.resolveSecret!(name);
+    if (typeof value === "string" && value.length) secrets.add(value);
+    return value;
+  } : undefined;
   const reports: JourneyStepReport[] = [];
   const publish = (report: JourneyStepReport) => {
-    const frozen = Object.freeze(report);
+    const frozen = Object.freeze({
+      ...report,
+      ...(report.target ? { target: redactSecrets(report.target, secrets) } : {}),
+      ...(report.label ? { label: redactSecrets(report.label, secrets) } : {}),
+    });
     reports.push(frozen);
     try { options.onStep?.(frozen); } catch { /* Reporting cannot change the journey. */ }
   };
@@ -189,7 +199,7 @@ export async function runJourney(
       const summary = stepSummary(step);
       try {
         ensureTime(deadline, runSignal);
-        const surface = await executeStep(step, driver, base, deadline, options.resolveSecret, runSignal);
+        const surface = await executeStep(step, driver, base, deadline, resolveSecret, runSignal, secrets);
         await assertCurrentOrigin(driver, base.origin, runSignal);
         publish({
           index,
@@ -199,8 +209,8 @@ export async function runJourney(
           ...(surface ? { surface } : {}),
         });
       } catch (error) {
-        failure = safeError(error);
-        failureSurface = await safeSurface(driver);
+        failure = safeError(error, secrets);
+        failureSurface = await safeSurface(driver, runSignal, secrets);
         publish({
           index,
           ...summary,
@@ -213,18 +223,20 @@ export async function runJourney(
       }
     }
   } catch (error) {
-    failure = safeError(error);
-    failureSurface = await safeSurface(driver);
+    failure = safeError(error, secrets);
+    failureSurface = await safeSurface(driver, runSignal, secrets);
   }
+  // Final diagnostics use the remaining run budget, including after a failed step.
+  const current = await safeCurrentUrl(driver, base, runSignal);
+  if (!failure && runSignal.aborted) failure = safeError(runSignal.reason, secrets);
   clearTimeout(timeout);
   options.signal?.removeEventListener("abort", abortFromCaller);
-  const current = await safeCurrentUrl(driver, base);
   return Object.freeze({
     protocol: "clank-journey-report/1" as const,
-    name: definition.name,
+    name: redactSecrets(definition.name, secrets),
     ok: failure === undefined,
-    origin: current.origin,
-    path: current.pathname,
+    origin: redactSecrets(current.origin, secrets),
+    path: redactSecrets(current.pathname, secrets),
     startedAt: new Date(started).toISOString(),
     durationMs: Date.now() - started,
     steps: Object.freeze(reports),
@@ -279,6 +291,7 @@ async function executeStep(
   deadline: number,
   resolveSecret?: RunJourneyOptions["resolveSecret"],
   signal?: AbortSignal,
+  secrets: ReadonlySet<string> = new Set(),
 ): Promise<readonly AgentNode[] | undefined> {
   if ("visit" in step) {
     await navigateWithinOrigin(driver, new URL(step.visit, base).href, base.origin, signal);
@@ -327,7 +340,7 @@ async function executeStep(
     }
     throw new Error(`${mismatch} Waited ${timeout}ms.`);
   }
-  return await safeSurface(driver);
+  return await safeSurface(driver, signal, secrets);
 }
 
 async function expectationMismatch(
@@ -352,7 +365,7 @@ async function expectationMismatch(
     if (expected.origin !== base.origin) return "Journey URL expectations must stay on the application origin.";
     const current = new URL(await abortable(signal, driver.currentUrl()));
     if (current.origin !== expected.origin || current.pathname + current.search !== expected.pathname + expected.search) {
-      return `Expected URL ${expected.pathname + expected.search}; received ${current.pathname + current.search}.`;
+      return `Expected URL ${expected.pathname}; received ${current.pathname} (query values omitted).`;
     }
   }
   if (expectation.text !== undefined) {
@@ -480,7 +493,7 @@ function normalizeViewport(value: JourneyInput["viewport"]): Readonly<{ width: n
 function stepSummary(step: JourneyStep): Pick<JourneyStepReport, "kind" | "target" | "label"> {
   if ("focus" in step) return { kind: "focus", target: step.focus };
   if ("press" in step) return { kind: "press", label: step.press };
-  if ("visit" in step) return { kind: "visit", label: step.visit };
+  if ("visit" in step) return { kind: "visit", label: safeHref(step.visit) };
   if ("input" in step) return { kind: "input", target: step.input.target };
   if ("activate" in step) return { kind: "activate", target: step.activate };
   if ("expect" in step) return { kind: "expect", ...(step.expect.target ? { target: step.expect.target } : {}) };
@@ -498,17 +511,20 @@ function flattenNodes(nodes: readonly AgentNode[]): AgentNode[] {
   return output;
 }
 
-async function safeSurface(driver: JourneyDriver): Promise<readonly AgentNode[] | undefined> {
+async function safeSurface(driver: JourneyDriver, signal?: AbortSignal, secrets: ReadonlySet<string> = new Set()): Promise<readonly AgentNode[] | undefined> {
   try {
-    const nodes = await driver.inspect();
+    if (signal?.aborted) return undefined;
+    const nodes = await abortable(signal, driver.inspect());
     let remaining = 1_000;
     const redact = (node: AgentNode): AgentNode | null => {
       if (remaining-- <= 0) return null;
       const children = (node.children ?? []).map(redact).filter((entry): entry is AgentNode => entry !== null);
       const { value: _value, href, children: _children, ...safe } = node;
+      const fields = Object.fromEntries(Object.entries(safe).map(([key, value]) =>
+        [key, typeof value === "string" ? redactSecrets(value, secrets) : value])) as typeof safe;
       return Object.freeze({
-        ...safe,
-        ...(href ? { href: safeHref(href) } : {}),
+        ...fields,
+        ...(href ? { href: redactSecrets(safeHref(href), secrets) } : {}),
         ...(children.length ? { children: Object.freeze(children) } : {}),
       });
     };
@@ -518,8 +534,11 @@ async function safeSurface(driver: JourneyDriver): Promise<readonly AgentNode[] 
   }
 }
 
-async function safeCurrentUrl(driver: JourneyDriver, fallback: URL): Promise<URL> {
-  try { return new URL(await driver.currentUrl()); } catch { return fallback; }
+async function safeCurrentUrl(driver: JourneyDriver, fallback: URL, signal?: AbortSignal): Promise<URL> {
+  try {
+    if (signal?.aborted) return fallback;
+    return new URL(await abortable(signal, driver.currentUrl()));
+  } catch { return fallback; }
 }
 
 function applicationBase(value: unknown): URL {
@@ -618,9 +637,14 @@ function equalValue(left: unknown, right: unknown): boolean {
     : left === right;
 }
 
-function safeError(error: unknown): string {
+function redactSecrets(value: string, secrets: ReadonlySet<string>): string {
+  for (const secret of [...secrets].sort((left, right) => right.length - left.length)) value = value.split(secret).join("[redacted]");
+  return value;
+}
+
+function safeError(error: unknown, secrets: ReadonlySet<string>): string {
   const message = error instanceof Error ? error.message : String(error);
-  return message.replace(/[\u0000-\u001f]/gu, " ").slice(0, 2_048) || "Journey failed.";
+  return redactSecrets(message, secrets).replace(/[\u0000-\u001f]/gu, " ").slice(0, 2_048) || "Journey failed.";
 }
 
 function safeHref(value: string): string {
@@ -639,11 +663,17 @@ function ensureTime(deadline: number, signal?: AbortSignal): void {
 
 async function abortable<Value>(signal: AbortSignal | undefined, value: Value | PromiseLike<Value>): Promise<Value> {
   if (!signal) return await value;
-  if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("Journey was aborted.");
   return await new Promise<Value>((resolve, reject) => {
-    const aborted = () => reject(signal.reason instanceof Error ? signal.reason : new Error("Journey was aborted."));
+    const aborted = () => {
+      signal.removeEventListener("abort", aborted);
+      reject(signal.reason instanceof Error ? signal.reason : new Error("Journey was aborted."));
+    };
     signal.addEventListener("abort", aborted, { once: true });
-    Promise.resolve(value).then(resolve, reject).finally(() => signal.removeEventListener("abort", aborted));
+    Promise.resolve(value).then(
+      result => { signal.removeEventListener("abort", aborted); resolve(result); },
+      error => { signal.removeEventListener("abort", aborted); reject(error); },
+    );
+    if (signal.aborted) aborted();
   });
 }
 
