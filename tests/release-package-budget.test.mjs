@@ -21,8 +21,9 @@ const featureOutputs = ['customer-status', 'offline-attachments', 'organization-
 featureOutputs.push('dist/point-in-time-source.js');
 const previousWire = [...previousComposition, 'dist/provider-source-worker-wire.js'].sort();
 const previousEntry = [...previousWire, 'dist/provider-source-entry.js'].sort();
+const previousLaunch = [...previousEntry, 'dist/provider-source-launch.js'].sort();
 
-test('current inventory adds only the reviewed private wire, entry and launch modules to prior inventories', () => {
+test('current inventory adds only the reviewed internal schema module after prior private modules', () => {
   assert.equal(initialMain.length, 422);
   assert.deepEqual(initialMain, [...new Set(initialMain)].sort());
   assert.ok(featureOutputs.every(path => !initialMain.includes(path)));
@@ -31,8 +32,9 @@ test('current inventory adds only the reviewed private wire, entry and launch mo
   assert.deepEqual(previousComposition, [...new Set(previousComposition)].sort());
   assert.equal(previousWire.length, 450);
   assert.equal(previousEntry.length, 451);
-  assert.equal(manifest.length, 452);
-  assert.deepEqual(manifest, [...previousEntry, 'dist/provider-source-launch.js'].sort());
+  assert.equal(previousLaunch.length, 452);
+  assert.equal(manifest.length, 453);
+  assert.deepEqual(manifest, [...previousLaunch, 'dist/schema-internal.js'].sort());
   assert.deepEqual(manifest, [...new Set(manifest)].sort());
   assert.ok(!manifest.some(path => path.includes('release-package-')));
   const input = pack(), before = copy(input);
@@ -40,17 +42,20 @@ test('current inventory adds only the reviewed private wire, entry and launch mo
   Object.freeze(initialMain);
   Object.freeze(previousComposition);
   const result = assertReleasePackageBudget(input, manifest);
-  assert.deepEqual(result, { files: 452, bytes: 452 });
+  assert.deepEqual(result, { files: 453, bytes: 453 });
   assert.ok(Object.isFrozen(result));
   assert.deepEqual(input, before);
 });
 
-test('prior 422/449/450/451 and current 452 inventories accept only their own exact manifests', () => {
+test('prior 422/449/450/451/452 and current 453 inventories accept only their own exact manifests', () => {
   assert.deepEqual(assertReleasePackageBudget(pack(initialMain), initialMain), {files:422, bytes:422});
   assert.deepEqual(assertReleasePackageBudget(pack(previousComposition), previousComposition), {files:449, bytes:449});
   assert.deepEqual(assertReleasePackageBudget(pack(previousWire), previousWire), {files:450, bytes:450});
   assert.deepEqual(assertReleasePackageBudget(pack(previousEntry), previousEntry), {files:451, bytes:451});
-  assert.deepEqual(assertReleasePackageBudget(pack(), manifest), {files:452, bytes:452});
+  assert.deepEqual(assertReleasePackageBudget(pack(previousLaunch), previousLaunch), {files:452, bytes:452});
+  assert.deepEqual(assertReleasePackageBudget(pack(), manifest), {files:453, bytes:453});
+  assert.throws(() => assertReleasePackageBudget(pack(previousLaunch), manifest), /count/);
+  assert.throws(() => assertReleasePackageBudget(pack(), previousLaunch), /count/);
   assert.throws(() => assertReleasePackageBudget(pack(previousEntry), manifest), /count/);
   assert.throws(() => assertReleasePackageBudget(pack(), previousEntry), /count/);
   assert.throws(() => assertReleasePackageBudget(pack(previousWire), manifest), /count/);
@@ -62,11 +67,11 @@ test('prior 422/449/450/451 and current 452 inventories accept only their own ex
   const next = [...manifest, 'dist/next-reviewed-feature.js'].sort();
   assert.throws(() => assertReleasePackageBudget(pack(next), manifest), /count/);
   // A matching hypothetical data model does not authorize another shipped path.
-  assert.equal(assertReleasePackageBudget(pack(next), next).files, 453);
+  assert.equal(assertReleasePackageBudget(pack(next), next).files, 454);
 });
 
 test('equal-count swapped paths cannot spend a removed path as a spare slot in every inventory', () => {
-  for (const paths of [initialMain, previousComposition, previousWire, previousEntry, manifest]) {
+  for (const paths of [initialMain, previousComposition, previousWire, previousEntry, previousLaunch, manifest]) {
     const input = pack(paths);
     input.files.find(file => file.path === 'dist/application-performance.js').path = 'dist/unreviewed-future.js';
     assert.throws(() => assertReleasePackageBudget(input, paths), /paths differ/);
@@ -74,7 +79,7 @@ test('equal-count swapped paths cannot spend a removed path as a spare slot in e
 });
 
 test('missing paths are refused even when reported count and bytes agree', () => {
-  for (const paths of [initialMain, previousComposition, previousWire, previousEntry, manifest]) {
+  for (const paths of [initialMain, previousComposition, previousWire, previousEntry, previousLaunch, manifest]) {
     const input = pack(paths.slice(1));
     assert.throws(() => assertReleasePackageBudget(input, paths), /count/);
   }
@@ -141,7 +146,7 @@ test('fixed 8 MiB limit is inclusive and cannot be overridden by a caller', () =
 
 test('a zero-byte file is legitimate when its exact path and total agree', () => {
   const input = pack(); input.files[0].size = 0; input.unpackedSize--;
-  assert.equal(assertReleasePackageBudget(input, manifest).bytes, 451);
+  assert.equal(assertReleasePackageBudget(input, manifest).bytes, 452);
 });
 
 test('actual audit integration requires readable valid manifest before exposing packed paths', async () => {
@@ -159,7 +164,7 @@ test('actual audit integration requires readable valid manifest before exposing 
     return {value, failures, successes};
   };
   const valid = await invoke(async path => {assert.equal(path, 'scripts/release-package-files.json'); return JSON.stringify(manifest);});
-  assert.equal(valid.value, 452); assert.equal(valid.failures.length, 0); assert.equal(valid.successes.length, 1);
+  assert.equal(valid.value, 453); assert.equal(valid.failures.length, 0); assert.equal(valid.successes.length, 1);
   for (const read of [async()=>{throw new Error('ENOENT');}, async()=>'{', async()=>'null', async()=>JSON.stringify([...manifest,'dist/optional.js'])]) {
     const result = await invoke(read);
     assert.equal(result.value, 0); assert.equal(result.successes.length, 0);
