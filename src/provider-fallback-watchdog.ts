@@ -8,7 +8,7 @@ export async function openProviderFallbackWatchdog(client: DockerClient, input: 
   const cleanupReserve = remaining / 3n < 10000000000n ? remaining / 3n : 10000000000n, stopAt = input.deadline - cleanupReserve;
   const daemonId = JSON.parse((await runProviderDockerClient(client, ["info", "--format", "{{json .ID}}"], { timeoutMs: Math.max(1, Math.min(15000, Number((input.deadline - process.hrtime.bigint()) / 1000000n))), maxOutputBytes: 65536 })).stdout);
   const program = `import {runProviderFallbackWatchdogWorker} from ${JSON.stringify(new URL("./provider-fallback-watchdog.js", import.meta.url).href)};runProviderFallbackWatchdogWorker();`;
-  const child = cp.spawn(process.execPath, ["--input-type=module", "--eval", program], { detached: true, stdio: ["pipe", "pipe", "pipe"], shell: false, env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" } }); child.unref();
+  const child = cp.spawn(process.execPath, ["--input-type=module", "--eval", program], { detached: true, stdio: ["pipe", "pipe", "pipe"], shell: false, env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" } });
   let failure: Error | undefined, ended = false, committed = false, text = "", sequence = 0;
   const pending = new Map<number, { resolve(value?: any): void; reject(error: Error): void }>();
   const fail = (error: Error) => { failure ??= error; for (const waiter of pending.values()) waiter.reject(failure); pending.clear(); };
