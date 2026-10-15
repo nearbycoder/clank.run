@@ -120,6 +120,34 @@ test('native HTML forms carry current CSRF and exact versions through draft, pre
  const preference=await f.handle(new Request(f.options.publicUrl+subscriberPath,{method:'POST',headers:{origin:f.options.publicUrl,cookie:subscriber.cookie,'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({action:'preferences',csrf:subscriber.csrf,operationId:'status_form_subscriber_01',expectedVersion:'0',subscribed:'yes'}).toString()}));assert.equal(preference.status,303);
  assert.equal((await f.call('/api/status/customer-health/preferences',undefined,200,'GET',subscriber)).preferences.subscribed,true);
 });
+test('native subscriber HTML pages reach every notification with account-scoped cursors and query-free preference forms',async t=>{
+ const f=await setup(t),subscriber=await f.account('status-paged-subscriber@example.test'),other=await f.account('status-other-subscriber@example.test'),stranger=await f.account('status-paged-stranger@example.test');
+ let page=await f.commit(await f.review(await f.create()));const path='/status/customer-health/preferences';
+ for(const [account,operationId]of [[subscriber,'status_paged_subscriber_01'],[other,'status_paged_subscriber_02']])await f.call('/api/status/customer-health/preferences',{subscribed:true,components:[],expectedVersion:0,operationId},200,'POST',account);
+ for(let index=1;index<=23;index++)page=await f.commit(await f.review(page,{kind:'update',copy:{...copy,title:'Public notification '+String(index).padStart(2,'0')},incident:null}),'status_paged_update_'+index);
+ const read=async(location,account=subscriber)=>{const response=await f.handle(new Request(f.options.publicUrl+location,{headers:account?{cookie:account.cookie}:{}}));return {status:response.status,html:await response.text()};};
+ const titles=html=>[...html.matchAll(/<article><h3>([^<]+)<\/h3>/gu)].map(match=>match[1]);
+ const first=await read(path);assert.equal(first.status,200);assert.match(first.html,/Notifications are shown oldest first, twenty per page/);assert.equal(titles(first.html).length,20);assert.equal(titles(first.html)[0],'Public notification 01');assert.equal(titles(first.html)[19],'Public notification 20');
+ const next=first.html.match(/<a rel="next" href="([^"]+)">Newer notifications<\/a>/u)?.[1];assert.ok(next,'The actual inbox exposes its bounded continuation link.');
+ const api=(await f.call('/api/status/customer-health/notifications',undefined,200,'GET',subscriber)).page;assert.equal(new URL(next,f.options.publicUrl).searchParams.get('after'),String(api.next));assert.ok(api.next>20,'Interleaved subscriber records do not turn the cursor into an offset.');
+ const second=await read(next);assert.equal(second.status,200);assert.deepEqual(titles(second.html),['Public notification 21','Public notification 22','Public notification 23']);assert.doesNotMatch(second.html,/rel="next"/u);assert.ok(second.html.includes('href="'+path+'">First notifications</a>'));
+ const apiSecond=(await f.call('/api/status/customer-health/notifications?after='+api.next,undefined,200,'GET',subscriber)).page;assert.deepEqual(apiSecond.notifications.map(notification=>notification.update.title),titles(second.html));assert.equal(apiSecond.next,null);
+ const unowned=await read(next,stranger);assert.equal(unowned.status,200);assert.deepEqual(titles(unowned.html),[]);assert.match(unowned.html,/No more notifications/);assert.equal((await read(next,null)).status,401);
+ const form=second.html.match(/<form method="post" action="([^"]+)">([\s\S]*?)<\/form>/u);assert.ok(form);assert.equal(form[1],path);
+ const fields=new URLSearchParams([...form[2].matchAll(/<input type="hidden" name="([^"]+)" value="([^"]+)">/gu)].map(match=>[match[1],match[2]]));fields.set('subscribed','no');
+ const saved=await f.handle(new Request(f.options.publicUrl+form[1],{method:'POST',headers:{origin:f.options.publicUrl,cookie:subscriber.cookie,'content-type':'application/x-www-form-urlencoded'},body:fields.toString()}));assert.equal(saved.status,303);assert.equal(saved.headers.get('location'),path);assert.equal((await f.call('/api/status/customer-health/preferences',undefined,200,'GET',subscriber)).preferences.subscribed,false);
+ f.db.prepare('DELETE FROM clank_auth_sessions WHERE user_id=?').run(subscriber.user.id);assert.equal((await read(next)).status,401);
+});
+test('native subscriber HTML cursor input is bounded and restricted to inbox GET requests',async t=>{
+ const f=await setup(t),path='/status/customer-health/preferences';await f.commit(await f.review(await f.create()));
+ for(const query of ['after=','after=-1','after=1.5','after=01','after=1e2','after=9007199254740992','after=10000000000000000','after=1&after=2','after=1&actor=another-account','before=1']){
+  const response=await f.handle(new Request(f.options.publicUrl+path+'?'+query,{headers:{cookie:f.owner.cookie}}));assert.equal(response.status,422,query);
+ }
+ for(const location of ['/projects/'+f.development.id+'/status?after=1',path+'?after=1']){
+  const response=await f.handle(new Request(f.options.publicUrl+location,{method:location.startsWith('/projects/')?'GET':'POST',headers:{origin:f.options.publicUrl,cookie:f.owner.cookie}}));assert.equal(response.status,422,location);
+ }
+ const valid=await f.handle(new Request(f.options.publicUrl+path+'?after=0',{headers:{cookie:f.owner.cookie}}));assert.equal(valid.status,200);assert.match(await valid.text(),/No notifications yet/);
+});
 test('native SLO health exposes insufficient-data as unknown and selected policy versions fence an approved review',async t=>{
  const f=await setup(t),policy=(await f.call(`/api/projects/${f.development.id}/slo-policies`,{configuration:{name:'Customer checkout',objective:{kind:'request-success'},targetBasisPoints:9900,windowMinutes:5,minimumRequests:100,burnThreshold:2,enabled:true},operationId:'status_native_slo_01'},201)).policy;
  const configuration={...f.configuration,components:[{key:'checkout',label:'Checkout',source:{kind:'slo',policyId:policy.id,expectedVersion:1}}]},created=(await f.call(f.path+'/create',{configuration,operationId:'status_slo_create_01'},201)).page,preview=await f.review(created);assert.equal(preview.page.components[0].health,'unknown');assert.equal(preview.page.components[0].complete,false);
