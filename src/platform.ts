@@ -1,6 +1,6 @@
 import { providerFallbackJournalContext, assertProviderFallbackCommit, assertProviderFallbackSettlement, assertProviderFallbackCompletion, providerFallbackSourceCompletionContext, providerFallbackResumeJournalContext, providerFallbackResumeCompletionJournal, providerFallbackResumeSettlementJournal } from "./provider-fallback-coordinator.ts";
 import { openNodeEvacuations, type NodeEvacuationPlan, type EvacuationProject, type NodeEvacuationHooks } from "./node-evacuation.ts";
-import { closePlatformOwnedLocalProviders, drainPlatformLocalFallbackOperations, PlatformLocalProviderCloseError } from "./platform-local-provider-close.ts";
+import { closePlatformOwnedLocalProviders, createEvacuationAdmissionScope, drainPlatformLocalFallbackOperations, PlatformLocalProviderCloseError } from "./platform-local-provider-close.ts";
 import { openProjectIncidents, ProjectIncidentError, type PlatformIncidentOptions, type IncidentAuthority } from "./platform-incidents.ts";
 import {openPlatformStatusPages,type PlatformStatusPagesOptions,type StatusPageAuthority} from "./platform-status-pages.ts";
 import {CustomerStatusError,type CustomerStatusSnapshot} from "./customer-status.ts";
@@ -1681,6 +1681,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
   const ProviderWriterScope = (globalThis as any).process.getBuiltinModule("node:async_hooks").AsyncLocalStorage;
   const providerWriterScope = new ProviderWriterScope();
   const localFallbackScope = new ProviderWriterScope();
+  const evacuationAdmissionScope = createEvacuationAdmissionScope(ProviderWriterScope);
   type LocalProviderBinding = { nodeId:string; service?: import("./provider-service.ts").DeploymentProviderService; token: string; factoryOptions?: import("./provider-service.ts").DockerDeploymentProviderServiceOptions; owned: boolean; ownership?: import("./provider-handoff.ts").ProviderServiceOwnership; check(): void };
   type LocalFallbackScope = { identity: Readonly<Record<string, string | number>>; source: LocalProviderBinding & {service?: import("./provider-service.ts").DeploymentProviderService}; target: LocalProviderBinding & {service?: import("./provider-service.ts").DeploymentProviderService}; projectsBefore: string; check(): void };
   const localProviders = new Map<string, LocalProviderBinding>();
@@ -4935,7 +4936,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     }
   };
   const withLocalFallbackScope = async <T>(item: EvacuationProject, plan: NodeEvacuationPlan, targetNodeId: string, assertCurrent: () => void, callback: (scope: LocalFallbackScope) => Promise<T>, coldResume?: {journal:string;authentication:string}): Promise<T> => {
-    if(closing||closed)throw new Error("Original platform is closing and cannot admit a new fallback operation.");
+    evacuationAdmissionScope.assertAllowed(closing,closed);
     const source=localProviders.get(plan.nodeId),target=localProviders.get(targetNodeId);
     if(!source||!target||target===source)throw new PlatformError(409,"LOCAL_PROVIDER_REQUIRED","Native evacuation requires its exact bound source and target providers.");
     const row=storage.internal.prepare("SELECT projects,lease_id,lease_until FROM clank_platform_evacuations WHERE id=?").get(plan.id),projectLease=projectLeaseAssertions.get(item.projectId);
@@ -9479,9 +9480,10 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         if (input.confirmation !== plan.id) throw new PlatformError(422, "CONFIRMATION_REQUIRED", "Pass the exact evacuation plan ID as confirmation.");
         if (operation === "cancel") return api({ ok: true, plan: evacuations.cancel(plan.id, evacuationHooks(auth)) });
         if (operation !== "run") throw new PlatformError(404, "NOT_FOUND", "Evacuation operation not found.");
+        if(closing||closed)throw new Error("Original platform is closing and cannot admit a new evacuation.");
         // Platform close must drain the durable plan and its completion audit,
         // not just the nested provider fallback scope.
-        const evacuationRequest=(async()=>{const completed=await evacuations.run(plan.id,evacuationHooks(auth));audit(storage.internal,auth.user!.id,null,null,"runner.evacuation.complete",{id:plan.id,nodeId});return api({ok:true,plan:completed});})();
+        const evacuationRequest=evacuationAdmissionScope.run(async()=>{const completed=await evacuations.run(plan.id,evacuationHooks(auth));audit(storage.internal,auth.user!.id,null,null,"runner.evacuation.complete",{id:plan.id,nodeId});return api({ok:true,plan:completed});});
         activeEvacuationOperations.add(evacuationRequest);
         try{return await evacuationRequest;}finally{activeEvacuationOperations.delete(evacuationRequest);}
       }

@@ -14,6 +14,20 @@ export class PlatformLocalProviderCloseError extends AggregateError {
   }
 }
 
+/** Allow nested scopes to finish only inside an evacuation admitted before close. */
+export function createEvacuationAdmissionScope(AsyncLocalStorage: new () => {
+  getStore(): unknown;
+  run<T>(store: object, callback: () => T): T;
+}) {
+  const scope = new AsyncLocalStorage();
+  return Object.freeze({
+    run<T>(callback: () => T): T { return scope.run(Object.freeze({}), callback); },
+    assertAllowed(closing: boolean, closed: boolean): void {
+      if ((closing || closed) && !scope.getStore()) throw new Error("Original platform is closing and cannot admit a new fallback operation.");
+    },
+  });
+}
+
 /** Wait for the captured fallback operations before beginning owned cleanup. */
 export async function drainPlatformLocalFallbackOperations<T>(
   operations: Iterable<Promise<unknown>>,
