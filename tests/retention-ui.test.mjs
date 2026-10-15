@@ -56,3 +56,28 @@ test('holds and rules retry unchanged input, retain version fences and serialize
   await settle(); await select(root); field(root, 'Reason').value = 'Evidence'; await button(root, 'Save hold').fire('click'); await button(root, 'Save hold').fire('click'); assert.deepEqual(holds[0], holds[1]); assert.equal(holds[0][2], 0);
   await button(root, 'Load rules').fire('click'); await button(root, 'Edit rule').fire('click'); await button(root, 'Save rule').fire('click'); await button(root, 'Save rule').fire('click'); assert.equal(button(root, 'Save rule').disabled, true); await button(root, 'Save rule').fire('click'); assert.equal(saved.length, 2); assert.deepEqual(saved[0], saved[1]); assert.equal(saved[0].input.expectedVersion, 4); pending({ version: 5 }); await settle(); assert.match(root.textContent, /Cleanup rule saved/); dispose();
 });
+
+
+test('editing a saved cleanup rule preserves its deletion bound when saving unchanged', async () => {
+  const root = fixture(), saved = [];
+  const dispose = mountRetentionAdministration(root, { client: { inventory: async () => inventory(), schedules: async () => [{ ...rule, maxDeletes: 7 }], saveSchedule: async (input, id) => { saved.push({ input, id }); return { ...input, version: 5 }; } }, currentUser: () => 'actor', scope: () => 'one', kinds: ['import'] });
+  try {
+    await settle(); await button(root, 'Load rules').fire('click'); await button(root, 'Edit rule').fire('click');
+    assert.equal(field(root, 'Maximum records per batch').value, '7');
+    await button(root, 'Save rule').fire('click');
+    assert.equal(saved.length, 1); assert.equal(saved[0].input.maxDeletes, 7); assert.equal(saved[0].input.expectedVersion, 4);
+  } finally { dispose(); }
+});
+
+test('editing a rule with a different deletion bound invalidates the previous purge review', async () => {
+  const root = fixture(); let accepts = 0;
+  const dispose = mountRetentionAdministration(root, { client: { inventory: async () => inventory(), preview: async selection => preview(selection), schedules: async () => [{ ...rule, maxDeletes: 7 }], accept: async () => { accepts++; return { records: 3 }; } }, currentUser: () => 'actor', scope: () => 'one', kinds: ['import'] });
+  try {
+    await settle(); await select(root); await button(root, 'Review purge').fire('click');
+    assert.equal(button(root, 'Accept reviewed purge').disabled, false);
+    await button(root, 'Load rules').fire('click'); await button(root, 'Edit rule').fire('click');
+    assert.equal(button(root, 'Accept reviewed purge').disabled, true);
+    assert.doesNotMatch(root.textContent, /Review retirement of/);
+    await button(root, 'Accept reviewed purge').fire('click'); assert.equal(accepts, 0);
+  } finally { dispose(); }
+});
