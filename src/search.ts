@@ -460,7 +460,8 @@ export function mountSearchBrowsing(container: HTMLElement, options: { client: S
   sort.value = "relevance";
   const selects = new Map<string, HTMLSelectElement>();
   for (const field of fields) { const label = document.createElement("label"), select = document.createElement("select"); label.append(document.createTextNode(field + " "), select); select.setAttribute("aria-label", "Filter " + field); selects.set(field, select); facets.append(label); }
-  let closed = false, busy = false, generation = 0, cursor: string | null = null, selected: SavedSearch | null = null, focusAfter: HTMLElement | null = null;
+  // Saved-search operations fence replies without replacing the visible result page.
+  let closed = false, busy = false, generation = 0, resultGeneration = 0, cursor: string | null = null, selected: SavedSearch | null = null, focusAfter: HTMLElement | null = null;
   const actor = () => JSON.stringify([options.currentUser(), options.scope()]); let identity = actor();
   const creations = new Map<string, string>();
   const definition = (): SearchDefinition => ({ text: words.value, sort: sort.value as SearchDefinition["sort"], filters: [...selects].filter(([, select]) => select.value !== "").map(([field, select]) => ({ field, value: JSON.parse(select.value) })) });
@@ -469,7 +470,7 @@ export function mountSearchBrowsing(container: HTMLElement, options: { client: S
     const choices = [...values]; if (desired && !choices.some(choice => JSON.stringify(choice.value) === desired)) choices.push({ value: JSON.parse(desired), count: 0 });
     for (const choice of choices) { const item = document.createElement("option"); item.value = JSON.stringify(choice.value); item.textContent = `${choice.value === null ? "Empty" : String(choice.value)} (${choice.count})`; select.append(item); } select.value = desired;
   };
-  const clear = () => { results.replaceChildren(); saved.replaceChildren(); words.value = ""; name.value = ""; sort.value = "relevance"; selected = null; cursor = null; next.disabled = true; creations.clear(); for (const field of fields) setChoices(field, []); };
+  const clear = () => { resultGeneration++; results.replaceChildren(); saved.replaceChildren(); words.value = ""; name.value = ""; sort.value = "relevance"; selected = null; cursor = null; next.disabled = true; creations.clear(); for (const field of fields) setChoices(field, []); };
   const sync = () => { const current = actor(); if (current !== identity) { generation++; identity = current; clear(); status.textContent = "Account or scope changed. Search again."; } return Boolean(options.currentUser()); };
   const button = (label: string, action: () => Promise<void>) => { const node = document.createElement("button"); node.type = "button"; node.textContent = label; node.addEventListener("click", () => { void run(action); }); return node; };
   const current = (expected: number, snapshot: string) => !closed && generation === expected && actor() === snapshot;
@@ -479,16 +480,16 @@ export function mountSearchBrowsing(container: HTMLElement, options: { client: S
     const controls = [...panel.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement>("input,button,select")], disabled = controls.map(node => node.disabled); controls.forEach(node => { node.disabled = true; });
     try { await action(); }
     catch (error) {
-      if (current(expected, snapshot)) { const code = (error as { status?: number }).status; if ([401, 403, 404].includes(code ?? 0)) { clear(); status.textContent = "Search access revoked."; } else { cursor = null; results.replaceChildren(); status.textContent = "Search changed or unavailable. Search again, or retry the same saved change."; } }
+      if (current(expected, snapshot)) { const code = (error as { status?: number }).status; if ([401, 403, 404].includes(code ?? 0)) { clear(); status.textContent = "Search access revoked."; } else { resultGeneration++; cursor = null; results.replaceChildren(); status.textContent = "Search changed or unavailable. Search again, or retry the same saved change."; } }
     } finally {
       busy = false; if (!closed) { const changed = actor() !== snapshot; if (changed) sync(); panel.removeAttribute("aria-busy"); controls.forEach((node, index) => { node.disabled = disabled[index]!; }); next.disabled = !cursor; if (document.activeElement === document.body && focused && controls.includes(focused as HTMLInputElement)) { const target = focusAfter ?? (focused.isConnected && !(focused as HTMLInputElement).disabled ? focused : submit); target.focus(); } }
     }
   };
   const showPage = async (nextPage = false) => {
-    const expected = generation, snapshot = identity, scope = options.scope(), requested = definition();
+    const expected = generation, expectedResult = ++resultGeneration, snapshot = identity, scope = options.scope(), requested = definition();
     const page = await options.client.browse(scope, requested, { limit: pageSize, ...(nextPage && cursor ? { cursor } : {}) }); if (!current(expected, snapshot)) return;
     results.replaceChildren(); cursor = page.nextCursor;
-    for (const hit of page.hits) { const item = document.createElement("li"), open = document.createElement("button"), snippet = document.createElement("p"); open.type = "button"; open.textContent = hit.title; snippet.textContent = hit.snippet; open.addEventListener("click", () => { if (closed || !sync() || !current(expected, snapshot)) return; options.open(hit.id); }); item.append(open, snippet); results.append(item); }
+    for (const hit of page.hits) { const item = document.createElement("li"), open = document.createElement("button"), snippet = document.createElement("p"); open.type = "button"; open.textContent = hit.title; snippet.textContent = hit.snippet; open.addEventListener("click", () => { if (closed || busy || !sync() || resultGeneration !== expectedResult || actor() !== snapshot) return; options.open(hit.id); }); item.append(open, snippet); results.append(item); }
     for (const field of fields) setChoices(field, page.facets.find(facet => facet.field === field)?.values ?? [], requested.filters.find(filter => filter.field === field) ? JSON.stringify(requested.filters.find(filter => filter.field === field)!.value) : "");
     status.textContent = `${page.total} authorized results; showing ${page.hits.length}.`; next.disabled = !cursor;
   };
@@ -503,7 +504,7 @@ export function mountSearchBrowsing(container: HTMLElement, options: { client: S
   };
   const submit = document.createElement("button"); submit.type = "submit"; submit.textContent = "Search";
   const next = button("Next results", async () => { if (cursor) await showPage(true); }); next.disabled = true;
-  const invalidate = () => { if (closed || !sync()) return; generation++; cursor = null; next.disabled = true; results.replaceChildren(); status.textContent = "Search changed. Search again."; };
+  const invalidate = () => { if (closed || !sync()) return; generation++; resultGeneration++; cursor = null; next.disabled = true; results.replaceChildren(); status.textContent = "Search changed. Search again."; };
   words.addEventListener("input", invalidate); sort.addEventListener("change", invalidate); for (const select of selects.values()) select.addEventListener("change", invalidate);
   form.addEventListener("submit", event => { event.preventDefault(); void run(async () => { cursor = null; await showPage(); }); });
   const save = button("Save search", async () => {
