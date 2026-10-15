@@ -22,7 +22,7 @@ import { createAuthCollaborationHub } from "@clank.run/framework/collaboration";
 
 const collaboration = createAuthCollaborationHub(auth, {
   async authorizeRoom(session, { room, operation }) {
-    // Recheck membership on every connect, stream, update, signal, and heartbeat.
+    // Recheck membership on every request and before delivering room events.
     return await canAccessDocument(session.requireUser().id, room);
   },
   displayName: (user) => user.profile.name ?? "Collaborator"
@@ -88,6 +88,7 @@ The reactive surface is:
 `update()` replaces this connection's entire presence object. Replacement avoids stale cursor or
 typing keys surviving after a UI mode changes. Keep a local presence signal when updates are
 assembled by multiple components.
+After reconnecting, the client republishes its latest replacement presence.
 
 Use a signal for transient notification:
 
@@ -131,7 +132,8 @@ Defaults are conservative and configurable:
 
 Data is JSON-only, five levels deep, with bounded keys, arrays, strings, bodies, and SSE events.
 Origins are same-origin, cross-site Fetch Metadata is rejected, responses are `no-store`, mutation
-rates are bounded, and stream access rechecks both the principal and room.
+rates are bounded, and stream delivery rechecks both the principal and room. Pending delivery
+checks are bounded and ordered; revoked or slow recipients are disconnected.
 
 Presence is visible to every authorized participant in the room. Do not put passwords, tokens,
 private drafts, email addresses, or hidden database fields in it. Connection IDs are opaque routing

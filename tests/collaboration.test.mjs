@@ -291,6 +291,168 @@ test("auth collaboration adapter reuses session and CSRF checks plus room author
   hub.close();
 });
 
+test("room revocation closes an existing stream before it receives another participant's content", async () => {
+  const members = new Set(["alice", "bob"]);
+  const { hub } = testHub({
+    authorize(request) {
+      const id = request.headers.get("x-user");
+      return members.has(id) ? { id, name: id } : null;
+    },
+  });
+  try {
+    const alice = await connect(hub, "alice");
+    const bob = await connect(hub, "bob");
+    const reader = await stream(hub, "alice", "document-1", alice.connection);
+    await event(reader);
+    members.delete("alice");
+    assert.equal((await post(hub, "alice", { operation: "heartbeat", room: "document-1", connection: alice.connection })).response.status, 401);
+    const sent = await post(hub, "bob", { operation: "signal", room: "document-1", connection: bob.connection, channel: "new.content", payload: { text: "After revocation" } });
+    assert.equal(sent.response.status, 200);
+    assert.equal((await reader.read()).done, true, "a denied recipient cannot receive new room content");
+    assert.equal(hub.diagnostics().participants, 1);
+  } finally { hub.close(); }
+});
+
+test("rejected connects do not reserve empty rooms", async () => {
+  const { hub } = testHub({ limits: { maxRooms: 1 } });
+  try {
+    const rejected = await post(hub, "alice", { operation: "connect", room: "invalid", presence: { oversized: "x".repeat(1025) } });
+    assert.equal(rejected.response.status, 400);
+    assert.equal(hub.diagnostics().rooms, 0);
+    await connect(hub, "alice", "valid");
+  } finally { hub.close(); }
+
+  const limited = testHub({ limits: { maxRooms: 2, maxConnectionsPerPrincipal: 1 } }).hub;
+  try {
+    await connect(limited, "alice", "first");
+    assert.equal((await post(limited, "alice", { operation: "connect", room: "rejected", presence: {} })).response.status, 429);
+    assert.equal(limited.diagnostics().rooms, 1);
+    await connect(limited, "bob", "second");
+  } finally { limited.close(); }
+});
+
+test("reconnecting publishes the latest replacement presence after a hub restart", async () => {
+  const makeHub = () => createCollaborationHub({ authorize: () => ({ id: "client", name: "Client" }), verifyCsrf: () => true });
+  let hub = makeHub(), connects = 0;
+  const client = createCollaborationClient({
+    url: `${origin}/__clank/collaboration`, room: "room", csrfToken: "token", initialPresence: { cursor: 0, typing: true },
+    fetch(input, init) {
+      if (init?.method === "POST" && JSON.parse(init.body).operation === "connect") connects++;
+      return hub.handle(new Request(input, init));
+    },
+  });
+  try {
+    await client.connect();
+    await client.update({ cursor: 9 });
+    await eventually(() => client.participants.value[0]?.data.cursor === 9);
+    hub.close(); hub = makeHub();
+    await eventually(() => connects === 2 && client.state.value === "connected");
+    assert.deepEqual(client.participants.value[0].data, { cursor: 9 });
+  } finally { await client.disconnect(); hub.close(); }
+});
+
+test("asynchronous delivery checks preserve room event order", async () => {
+  let blocked = false, release, entered = 0;
+  const gate = new Promise(resolve => { release = resolve; });
+  const { hub } = testHub({ async authorize(request, attempt) {
+    if (blocked && attempt.operation === "stream") { entered++; await gate; }
+    const id = request.headers.get("x-user"); return { id, name: id };
+  } });
+  try {
+    const alice = await connect(hub, "alice"), bob = await connect(hub, "bob");
+    const reader = await stream(hub, "alice", "document-1", alice.connection); await event(reader);
+    blocked = true;
+    const firstRead = event(reader), secondRead = event(reader);
+    const first = post(hub, "bob", { operation: "presence", room: "document-1", connection: bob.connection, presence: { cursor: 1 } });
+    const second = post(hub, "bob", { operation: "presence", room: "document-1", connection: bob.connection, presence: { cursor: 2 } });
+    await eventually(() => entered > 0); release();
+    assert.deepEqual((await Promise.all([firstRead, secondRead])).map(value => [value.revision, value.participant.data.cursor]), [[3, 1], [4, 2]]);
+    assert.deepEqual((await Promise.all([first, second])).map(value => value.response.status), [200, 200]);
+    await reader.cancel();
+    assert.equal(hub.diagnostics().streams, 0);
+  } finally { release(); hub.close(); }
+});
+
+test("cancelling a stream during a delivery authorization check prevents late content", async () => {
+  let blocked = false, entered = false, release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const { hub } = testHub({ async authorize(request, attempt) {
+    if (blocked && attempt.operation === "stream") { entered = true; await gate; }
+    const id = request.headers.get("x-user"); return { id, name: id };
+  } });
+  try {
+    const alice = await connect(hub, "alice"), bob = await connect(hub, "bob");
+    const reader = await stream(hub, "alice", "document-1", alice.connection); await event(reader);
+    blocked = true;
+    const read = reader.read();
+    const sent = post(hub, "bob", { operation: "signal", room: "document-1", connection: bob.connection, channel: "pending", payload: "late content" });
+    await eventually(() => entered);
+    await reader.cancel(); release();
+    assert.equal((await read).done, true);
+    assert.equal((await sent).response.status, 200);
+    assert.equal(hub.diagnostics().streams, 0);
+    assert.equal(hub.diagnostics().participants, 1);
+  } finally { release(); hub.close(); }
+});
+
+test("a stalled delivery policy cannot accumulate an unbounded recipient backlog", async () => {
+  let blocked = false, entered = false, release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const { hub } = testHub({ async authorize(request, attempt) {
+    if (blocked && attempt.operation === "stream") { entered = true; await gate; }
+    const id = request.headers.get("x-user"); return { id, name: id };
+  } });
+  try {
+    const alice = await connect(hub, "alice"), bob = await connect(hub, "bob");
+    const reader = await stream(hub, "alice", "document-1", alice.connection); await event(reader);
+    blocked = true;
+    const read = reader.read();
+    const write = cursor => post(hub, "bob", { operation: "presence", room: "document-1", connection: bob.connection, presence: { cursor } });
+    const writes = [write(1)];
+    await eventually(() => entered);
+    let accepted = false;
+    void writes[0].then(value => { assert.equal(value.response.status, 200); accepted = true; });
+    await eventually(() => accepted);
+    writes.push(write(2), write(3));
+    await eventually(() => hub.diagnostics().streams === 0);
+    assert.equal((await read).done, true, "a stalled recipient is removed before queued content can escape");
+    release();
+    assert.deepEqual((await Promise.all(writes)).map(value => value.response.status), [200, 200, 200]);
+    assert.equal(hub.diagnostics().participants, 1);
+  } finally { release(); hub.close(); }
+});
+
+test("a late stream completion cannot abort a later connection", async () => {
+  const streams = [];
+  let connections = 0;
+  const client = createCollaborationClient({
+    url: `${origin}/__clank/collaboration`, room: "room", csrfToken: "token",
+    async fetch(_input, init) {
+      if (init.method === "GET") {
+        let controller;
+        const body = new ReadableStream({ start(value) { controller = value; } });
+        streams.push({ controller, signal: init.signal });
+        return new Response(body, { headers: { "content-type": "text/event-stream" } });
+      }
+      const request = JSON.parse(init.body);
+      return Response.json(request.operation === "connect" ? {
+        protocol: "clank-collaboration-connect/1", connection: `connection-${++connections}`, heartbeatMs: 1000,
+        snapshot: { protocol: "clank-collaboration/1", room: "room", revision: 1, type: "snapshot", participants: [], at: new Date().toISOString() },
+      } : { ok: true });
+    },
+  });
+  try {
+    await client.connect(); await client.disconnect(); await client.connect();
+    streams[0].controller.close();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(streams[1].signal.aborted, false, "old-generation cleanup must not stop the new stream");
+    assert.equal(client.state.value, "connected");
+  } finally {
+    await client.disconnect();
+    for (const entry of streams) { try { entry.controller.close(); } catch {} }
+  }
+});
+
 async function eventually(predicate) {
   const deadline = Date.now() + 1_000;
   while (Date.now() < deadline) {
