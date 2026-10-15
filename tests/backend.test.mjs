@@ -29,6 +29,64 @@ async function waitFor(predicate, timeoutMs = 1_000) {
   }
 }
 
+test('return schemas omit only absent optional object fields and preserve JSON rejection boundaries', async () => {
+  const optional = s.object({ value: s.optional(s.string()) });
+  const cases = [
+    ['optional', optional, {}, {}],
+    ['coercion', s.object({ count: s.coerce.number(), value: s.optional(s.string()) }), { count: '2' }, { count: 2 }],
+    ['defaults', s.object({ nested: s.default(optional, {}) }), {}, { nested: {} }],
+    ['record', s.record(optional), { child: {} }, { child: {} }],
+    ['union', s.union([s.literal(null), optional]), {}, {}],
+    ['explicit', optional, { value: undefined }],
+    ['arraySlot', s.array(s.optional(s.string())), [undefined]],
+    ['unknown', s.object({ payload: s.unknown() }), { payload: { value: undefined } }],
+    ['unknownUnion', s.union([s.unknown(), optional]), { value: undefined }],
+    ['ambiguousUnion', s.union([optional, s.object({ other: s.optional(s.string()) })]), {}],
+    ['refinement', s.refine(optional, () => true, 'accepted'), {}],
+    ['invalidDefault', s.object({ payload: s.default(s.unknown(), { value: undefined }) }), {}],
+    ['untyped', undefined, { value: undefined }],
+  ];
+  const definition = defineBackend({ schema: defineDatabase({}) }).functions(({ publicQuery }) => Object.fromEntries(
+    cases.map(([name, returns, value]) => [name, publicQuery({ args: {}, returns, agent: false, handler: () => value })]),
+  ));
+  const runtime = await openBackend(definition, { path: ':memory:', agent: false, onError() {} });
+  try {
+    for (const [name, _returns, original, expected] of cases) {
+      const response = await runtime.handle(new Request('https://example.test/__clank/query/' + name, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+      }));
+      assert.equal(response.status, expected === undefined ? 500 : 200, name);
+      if (expected !== undefined) assert.deepEqual((await response.json()).value, expected, name);
+      if (name === 'optional') assert.deepEqual(original, {}, 'normalization does not mutate handler output');
+    }
+  } finally { runtime.close(); }
+  assert.deepEqual(optional.parse({}), { value: undefined }, 'the shared parser keeps its established result');
+});
+
+test('optional output normalization requires native schema provenance', async (t) => {
+  const optional = () => s.object({ missing: s.optional(s.string()) });
+  const custom = (parse, json) => ({ parse, safeParse(input) { return { success: true, data: parse(input) }; }, toJSONSchema: () => json });
+  const customRoot = custom(() => ({ missing: undefined }), optional().toJSONSchema());
+  const customChild = s.object({ missing: custom(() => undefined, { type: 'string', optional: true }) });
+  const modified = optional(); modified.parse = () => ({ missing: undefined });
+  const metadata = optional(); metadata.toJSONSchema = () => optional().toJSONSchema();
+  const child = s.optional(s.string()), modifiedChild = s.object({ missing: child }); child.parse = () => undefined;
+  const cases = [['customRoot', customRoot, 500], ['customChild', customChild, 500], ['modified', modified, 500], ['metadata', metadata, 500], ['modifiedChild', modifiedChild, 500],
+    ['validCustom', custom(() => ({ accepted: true }), { type: 'object' }), 200]];
+  const definition = defineBackend({ schema: defineDatabase({}) }).functions(({ publicQuery }) => Object.fromEntries(
+    cases.map(([name, returns]) => [name, publicQuery({ args: {}, returns, agent: false, handler: () => ({}) })]),
+  ));
+  const runtime = await openBackend(definition, { path: ':memory:', agent: false, onError() {} });
+  try {
+    for (const [name, _returns, status] of cases) await t.test(name, async () => {
+      const response = await runtime.handle(new Request('https://example.test/__clank/query/' + name, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+      }));
+      assert.equal(response.status, status);
+    });
+  } finally { runtime.close(); }
+});
+
 test("anonymous in-process callers expose the complete auth guard contract", async () => {
   const definition = defineBackend({ schema: defineDatabase({}), auth: defineAuth() })
     .functions(({ publicQuery }) => ({

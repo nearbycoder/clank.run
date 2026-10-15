@@ -1,5 +1,6 @@
 import { batch, computed, signal, type Computed, type ReactiveSignal } from "./core.ts";
 import type { Component } from "./dom.ts";
+import { registerBuiltinSchema } from "./schema-internal.ts";
 import {
   RequestInputError,
   publicValidationIssues,
@@ -34,15 +35,14 @@ declare const DOCUMENT_ID_TABLE: unique symbol;
 export type DocumentId<Table extends string> = string & { readonly [DOCUMENT_ID_TABLE]: Table };
 
 type Parser<T> = (input: unknown, path: Array<string | number>) => T;
+const schemaState = new WeakMap<object, { parser: Parser<any>; json: Record<string, unknown> }>();
 
 class SchemaValue<T> implements Schema<T> {
-  declare private readonly parser: Parser<T>;
-  declare private readonly json: Record<string, unknown>;
   declare readonly description?: string;
-  constructor(parser: Parser<T>, json: Record<string, unknown>, description?: string) { this.parser = parser; this.json = json; this.description = description; }
+  constructor(parser: Parser<T>, json: Record<string, unknown>, description?: string) { schemaState.set(this, { parser, json }); this.description = description; }
 
   parse(input: unknown): T {
-    return this.parser(input, []);
+    return schemaState.get(this)!.parser(input, []);
   }
 
   safeParse(input: unknown): { success: true; data: T } | { success: false; error: ValidationError } {
@@ -54,7 +54,7 @@ class SchemaValue<T> implements Schema<T> {
   }
 
   toJSONSchema(): Record<string, unknown> {
-    const output = structuredClone(this.json);
+    const output = structuredClone(schemaState.get(this)!.json);
     return this.description ? { ...output, description: this.description } : output;
   }
 }
@@ -63,8 +63,10 @@ function issue(path: Array<string | number>, message: string, expected?: string,
   throw new ValidationError([{ path, message, expected, received }]);
 }
 
-function schemaValue<T>(parser: Parser<T>, json: Record<string, unknown>, description?: string): Schema<T> {
-  return new SchemaValue(parser, json, description);
+function schemaValue<T>(parser: Parser<T>, json: Record<string, unknown>, description?: string, children: readonly Schema[] | false = []): Schema<T> {
+  const schema = new SchemaValue(parser, json, description);
+  if (children) registerBuiltinSchema(schema, children);
+  return schema;
 }
 
 export type InferSchema<S> = S extends Schema<infer T> ? T : never;
@@ -108,7 +110,8 @@ export const s = {
       type: "string",
       ...(settings.min === undefined ? {} : { minLength: settings.min }),
       ...(settings.max === undefined ? {} : { maxLength: settings.max }),
-      ...(settings.pattern ? { pattern: settings.pattern.source } : {}),
+      ...(settings.pattern ? { pattern: settings.pattern.source,
+        ...(settings.pattern.flags ? { "x-clank-pattern-flags": settings.pattern.flags } : {}) } : {}),
     }, settings.description);
   },
 
@@ -201,7 +204,7 @@ export const s = {
   },
 
   unknown(description?: string): Schema<unknown> {
-    return schemaValue((input) => input, {}, description);
+    return schemaValue((input) => input, { optional: true }, description);
   },
 
   array<T>(item: Schema<T>, options: { description?: string; min?: number; max?: number } = {}): Schema<T[]> {
@@ -226,7 +229,7 @@ export const s = {
       items: item.toJSONSchema(),
       ...(settings.min === undefined ? {} : { minItems: settings.min }),
       ...(settings.max === undefined ? {} : { maxItems: settings.max }),
-    }, settings.description);
+    }, settings.description, [item]);
   },
 
   record<T>(
@@ -260,8 +263,9 @@ export const s = {
     }, {
       type: "object",
       additionalProperties: value.toJSONSchema(),
-      ...(keyPattern ? { propertyNames: { pattern: keyPattern.source } } : {}),
-    }, options.description);
+      ...(keyPattern ? { propertyNames: { pattern: keyPattern.source,
+        ...(keyPattern.flags ? { "x-clank-pattern-flags": keyPattern.flags } : {}) } } : {}),
+    }, options.description, [value]);
   },
 
   object<S extends Shape>(shape: S, options: { description?: string; strict?: boolean } = {}): Schema<InferShape<S>> {
@@ -297,15 +301,19 @@ export const s = {
       properties,
       required,
       additionalProperties: settings.strict === false,
-    }, settings.description);
+    }, settings.description, Object.values(safeShape));
   },
 
   optional<T>(inner: Schema<T>): Schema<T | undefined> {
-    return schemaValue((input, path) => input === undefined ? undefined : parseAt(inner, input, path), { ...inner.toJSONSchema(), optional: true });
+    return schemaValue((input, path) => input === undefined ? undefined : parseAt(inner, input, path), { ...inner.toJSONSchema(), optional: true }, undefined, [inner]);
   },
 
   nullable<T>(inner: Schema<T>): Schema<T | null> {
-    return schemaValue((input, path) => input === null ? null : parseAt(inner, input, path), { anyOf: [inner.toJSONSchema(), { type: "null" }] });
+    const json = { ...inner.toJSONSchema() }, optional = json.optional === true;
+    delete json.optional;
+    return schemaValue((input, path) => input === null ? null : parseAt(inner, input, path), {
+      anyOf: [json, { type: "null" }], ...(optional ? { optional: true } : {}),
+    }, undefined, [inner]);
   },
 
   default<T>(inner: Schema<T>, fallback: T): Schema<T> {
@@ -314,6 +322,7 @@ export const s = {
       (input, path) => input === undefined ? structuredClone(snapshot) : parseAt(inner, input, path),
       { ...inner.toJSONSchema(), default: structuredClone(snapshot), optional: true },
       inner.description,
+      [inner],
     );
   },
 
@@ -334,11 +343,13 @@ export const s = {
         throw new TypeError("s.refine() predicates must return booleans synchronously.");
       }
       return approved ? value : issue(path, message);
-    }, { ...inner.toJSONSchema(), "x-clank-refinement": true }, description ?? inner.description);
+    }, { ...inner.toJSONSchema(), "x-clank-refinement": true }, description ?? inner.description, false);
   },
 
   union<T extends readonly Schema[]>(members: T, description?: string): Schema<Infer<T[number]>> {
     const alternatives = Object.freeze([...members]) as readonly Schema[];
+    const schemas = alternatives.map(member => ({ ...member.toJSONSchema() })), optional = schemas.some(schema => schema.optional === true);
+    for (const schema of schemas) delete schema.optional;
     return schemaValue((input, path) => {
       const errors: ValidationIssue[] = [];
       for (const member of alternatives) {
@@ -346,7 +357,7 @@ export const s = {
         catch (error) { if (error instanceof ValidationError) errors.push(...error.issues); else throw error; }
       }
       return issue(path, `Did not match any union member (${errors.map((entry) => entry.message).join("; ")}).`, "union", input);
-    }, { anyOf: alternatives.map((member) => member.toJSONSchema()) }, description);
+    }, { anyOf: schemas, ...(optional ? { optional: true } : {}) }, description, alternatives);
   },
 
   coerce: {

@@ -264,6 +264,7 @@
   "dist/saved-views.js",
   "dist/schedules.d.ts",
   "dist/schedules.js",
+  "dist/schema-internal.js",
   "dist/search.d.ts",
   "dist/search.js",
   "dist/secret-rotation.d.ts",
