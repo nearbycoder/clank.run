@@ -29,6 +29,7 @@ export function runProviderFallbackWatchdogWorker(): void {
   let activeCreate: Promise<string> | undefined;
   let creating: { name: string; sequence: number } | undefined;
   const records = new Map<string, { configuration: string; process?: { pid: number; birth: string; cgroup: string } }>();
+  const pendingRetains = new Set<string>();
   const now = () => process.hrtime.bigint() as bigint, deadline = () => cleanupDeadline ?? BigInt(frame.stopAt);
   const check = () => { if (now() >= deadline()) throw new Error("Fallback watchdog deadline expired."); };
   const command = async (args: string[], allowFailure = false) => { check(); return (await runProviderDockerClient(client, args, { timeoutMs: Math.max(1, Math.min(15000, Number((deadline() - now()) / 1000000n))), maxOutputBytes: 1024 * 1024, allowFailure, ...(ending ? {} : { signal: ordinaryAbort.signal }) })).stdout; };
@@ -89,7 +90,23 @@ export function runProviderFallbackWatchdogWorker(): void {
     try {
       if (frame && client) {
         // This is a reserve inside the original deadline, never a new lifetime.
-        cleanupDeadline = BigInt(frame.deadline); await domain(); await removeRetained();
+        cleanupDeadline = BigInt(frame.deadline);
+        // Drain frames already accepted from the parent before taking the final
+        // roster. In particular, retain() must finish its exact-CID inspection
+        // and enrollment before cleanup can decide that there is nothing to do.
+        // ending suppresses new frames; the queue's catch sees ending and does
+        // not recursively start another cleanup.
+        await tail.catch(() => {});
+        // An ordinary Docker request may have been aborted when EOF arrived.
+        // Resolve every already-authorized exact CID again under cleanup mode,
+        // and enroll it only after proving the original never-started labels.
+        for (const cid of pendingRetains) {
+          const native = await inspect(cid), labels = native?.Config?.Labels;
+          if (!native || native.State?.Status !== "created" || native.State.Running !== false || native.State.Pid !== 0 || native.State.StartedAt !== "0001-01-01T00:00:00Z" || labels?.["run.clank.managed"] !== "provider-runtime" || labels["run.clank.owner"] !== frame.owner || labels["run.clank.project"] !== frame.projectId || labels["run.clank.release"] !== frame.releaseId || labels["run.clank.generation"] !== String(frame.generation) || !["web", "worker", "scheduler"].includes(labels["run.clank.role"])) throw new Error("Fallback watchdog pending retain identity differs.");
+          records.set(cid, { configuration: configuration(native) });
+          pendingRetains.delete(cid);
+        }
+        await domain(); await removeRetained();
         // A create awaiting acknowledgment cannot be started by the parent.
         // Remove acknowledged writers first; then resolve this unstarted orphan.
         if (creating) { await activeCreate?.catch(() => {}); await retainUncertainCreate(); await removeRetained(); }
@@ -103,7 +120,7 @@ export function runProviderFallbackWatchdogWorker(): void {
   process.stdout.on("error", () => {}); process.stderr.on("error", () => {});
   let tail = Promise.resolve();
   process.stdin.setEncoding("utf8"); process.stdin.on("data", (chunk: string) => { input += chunk; if (input.length > 2097152) { void cleanup(); return; } for (;;) { const at = input.indexOf("\n"); if (at < 0) break; const line = input.slice(0, at); input = input.slice(at + 1); tail = tail.then(async () => {
-    if (ending || committed) return; const row = JSON.parse(line);
+    const row = JSON.parse(line); if (committed || ending && row.action === "commit") return;
     if (!frame) {
       frame = row; if (row.action !== "initialize" || typeof row.deadline !== "string" || !/^\d{1,24}$/u.test(row.deadline) || BigInt(row.deadline) <= now() || BigInt(row.deadline) > now() + 30000000000n || typeof row.stopAt !== "string" || !/^\d{1,24}$/u.test(row.stopAt) || BigInt(row.stopAt) <= now() || BigInt(row.stopAt) >= BigInt(row.deadline) || typeof row.daemonId !== "string" || typeof row.nonce !== "string" || typeof row.executable !== "string" || !row.environment || typeof row.environment !== "object" || Object.keys(row.environment).length > 128) throw new Error("Fallback watchdog initialization differs.");
       for (const key of Object.keys(process.env)) delete process.env[key]; Object.assign(process.env, row.environment); client = providerDockerClient({ executable: row.executable, dockerEnvironment: row.environment });
@@ -122,13 +139,14 @@ export function runProviderFallbackWatchdogWorker(): void {
     }
     if (row.action === "retain") {
       if (!/^[a-f0-9]{64}$/u.test(row.cid) || records.has(row.cid) || records.size >= 34) throw new Error("Fallback watchdog role roster differs.");
+      pendingRetains.add(row.cid);
       await domain(); const native = await inspect(row.cid), labels = native?.Config?.Labels;
       if (!native || native.State?.Status !== "created" || native.State.Pid !== 0 || labels?.["run.clank.managed"] !== "provider-runtime" || labels["run.clank.owner"] !== frame.owner || labels["run.clank.project"] !== frame.projectId || labels["run.clank.release"] !== frame.releaseId || labels["run.clank.generation"] !== String(frame.generation) || !["web", "worker", "scheduler"].includes(labels["run.clank.role"])) throw new Error("Fallback watchdog requires its original never-started role.");
-      records.set(row.cid, { configuration: configuration(native) }); check(); if (!ending) process.stdout.write(JSON.stringify({ nonce: frame.nonce, sequence: row.sequence, event: "retained" }) + "\n"); return;
+      records.set(row.cid, { configuration: configuration(native) }); pendingRetains.delete(row.cid); check(); if (!ending) process.stdout.write(JSON.stringify({ nonce: frame.nonce, sequence: row.sequence, event: "retained" }) + "\n"); return;
     }
     if (row.action !== "commit" || !records.size) throw new Error("Fallback watchdog cannot release an empty role roster.");
     check(); committed = true; clearTimeout(timer); process.stdin.pause(); process.stdout.write(JSON.stringify({ nonce: frame.nonce, sequence: row.sequence, event: "committed" }) + "\n", () => process.exit(0));
-  }).catch(() => cleanup()); } });
+  }); void tail.catch(() => cleanup()); } });
   process.stdin.on("end", () => { void cleanup(); }); process.stdin.on("error", () => { void cleanup(); });
   setTimeout(() => { if (!frame) process.exit(1); }, 2000).unref();
 }
