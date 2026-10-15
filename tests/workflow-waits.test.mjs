@@ -30,6 +30,94 @@ function submission(ticket, overrides = {}) {
     idempotencyKey: 'wait-operation-00001', choice: 'resume', result: { value: 'accepted' }, ...overrides };
 }
 
+async function reconciliationFixture(count = 100, compensations = false) {
+  const schema = defineDatabase({ events: defineTable({ value: s.string() }) });
+  const jobs = defineJobs({ schema }).jobs(({ job }) => ({
+    echo: job({ args: { value: s.string() }, returns: s.string(), agent: { idempotent: true }, handler: (_, { value }) => value }),
+    fail: job({ args: {}, retry: { maxAttempts: 1 }, handler: () => { throw new Error('Forward failure'); } }),
+  }));
+  const waiting = timeoutMs => defineWorkflow({ args: {}, graph: ({ wait }) => ({
+    gate: wait({ mode: 'event', timeoutMs, returns: s.string(), request: () => ({ title: 'Wait' }) }),
+  }) });
+  const long = waiting(60_000), short = waiting(1_000);
+  const chain = defineWorkflow({ args: {}, graph: ({ step }) => {
+    const first = step(jobs.jobs.echo, { args: () => ({ value: 'first' }) });
+    const second = step(jobs.jobs.echo, { needs: [first], args: ctx => ({ value: `${ctx.result(first)}-second` }) });
+    return { first, second };
+  } });
+  const recovery = defineWorkflow({ args: {}, graph: ({ step }) => {
+    const first = step(jobs.jobs.echo, { args: () => ({ value: 'forward' }),
+      compensate: { job: jobs.jobs.echo, args: () => ({ value: 'undo' }) } });
+    const second = step(jobs.jobs.fail, { needs: [first], args: () => ({}) });
+    return { first, second };
+  } });
+  const definition = defineWorkflows(jobs, { long, short, chain, ...(compensations ? { recovery } : {}) });
+  const database = await openSQLite(schema, { path: ':memory:', changePollIntervalMs: 0 });
+  let clock = 10_000;
+  const runtime = openJobs(definition, { database, now: () => clock, workflowWaits: policy });
+  const older = Array.from({ length: count }, () => runtime.startWorkflow(long, {}));
+  clock++;
+  return { runtime, database, older, short, chain, recovery, setTime(value) { clock = value; },
+    close() { runtime.close(); database.close(); } };
+}
+
+test('bounded reconciliation reaches later deadlines behind a full batch of pending waits', async () => {
+  const f = await reconciliationFixture(); try {
+    const run = f.runtime.startWorkflow(f.short, {}), ticket = f.runtime.getWorkflowWait(run.id, 'gate');
+    f.setTime(ticket.deadline);
+    for (let index = 0; index < 10; index++) f.runtime.advanceWorkflows();
+    assert.equal(f.runtime.getWorkflowWait(run.id, 'gate').state, 'timed-out');
+    assert.equal(f.runtime.getWorkflow(run.id).state, 'failed');
+    assert.ok(f.older.every(run => f.runtime.getWorkflowWait(run.id, 'gate').state === 'pending'));
+  } finally { f.close(); }
+});
+
+test('bounded reconciliation advances later job dependencies and compensation behind pending waits', async () => {
+  const f = await reconciliationFixture(100, true); try {
+    const chain = f.runtime.startWorkflow(f.chain, {}), recovery = f.runtime.startWorkflow(f.recovery, {});
+    for (let index = 0; index < 12; index++) await f.runtime.workOnce();
+    assert.equal(f.runtime.getWorkflow(chain.id).state, 'succeeded');
+    assert.deepEqual(f.runtime.getWorkflow(chain.id).output, { first: 'first', second: 'first-second' });
+    const failed = f.runtime.getWorkflow(recovery.id);
+    assert.equal(failed.state, 'failed');
+    assert.equal(failed.compensation.state, 'succeeded');
+    assert.equal(failed.compensation.steps[0].result, 'undo');
+    assert.ok(f.older.every(run => f.runtime.getWorkflowWait(run.id, 'gate').state === 'pending'));
+  } finally { f.close(); }
+});
+
+test('bounded reconciliation respects its limit and idle waits do not report progress', async () => {
+  const f = await reconciliationFixture(5); try {
+    const before = f.older.map(run => f.runtime.getWorkflowWait(run.id, 'gate'));
+    const events = f.database[internal].prepare('SELECT count(*) AS count FROM clank_workflow_events').get().count;
+    for (let index = 0; index < 12; index++) {
+      assert.equal(f.runtime.advanceWorkflows({ limit: 1 }), 0);
+      assert.equal(await f.runtime.workOnce(), false);
+    }
+    assert.deepEqual(f.older.map(run => f.runtime.getWorkflowWait(run.id, 'gate')), before);
+    assert.equal(f.database[internal].prepare('SELECT count(*) AS count FROM clank_workflow_events').get().count, events);
+    f.setTime(before[0].deadline);
+    for (let count = 1; count <= f.older.length; count++) {
+      f.runtime.advanceWorkflows({ limit: 1 });
+      assert.equal(f.older.filter(run => f.runtime.getWorkflow(run.id).state === 'failed').length, count);
+    }
+    assert.equal(f.runtime.advanceWorkflows({ limit: 1 }), 0);
+  } finally { f.close(); }
+});
+
+test('bounded reconciliation revisits earlier deadlines while new workflows keep arriving', async () => {
+  const f = await reconciliationFixture(1); try {
+    assert.equal(f.runtime.advanceWorkflows({ limit: 1 }), 0);
+    const deadline = f.runtime.getWorkflowWait(f.older[0].id, 'gate').deadline;
+    for (let index = 0; index < 5; index++) {
+      f.setTime(deadline + index);
+      f.runtime.startWorkflow(f.short, {});
+      f.runtime.advanceWorkflows({ limit: 1 });
+    }
+    assert.equal(f.runtime.getWorkflowWait(f.older[0].id, 'gate').state, 'timed-out');
+  } finally { f.close(); }
+});
+
 test('durable waits release job slots, preserve their deadline across restart, and resume a typed dependency once', async () => {
   const f = await fixture(); try {
     const run = f.runtime.startWorkflow(f.workflow, { label: 'Confirm delivery' });

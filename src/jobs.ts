@@ -1576,17 +1576,47 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
     return internal.inTransaction ? reconcile() : internal.transaction(reconcile);
   };
 
+  // A finite sweep prevents idle runs or continuous new arrivals from starving
+  // earlier deadlines. Cursor movement is not progress for worker polling.
+  type WorkflowPosition = { updatedAt: number; id: string };
+  let workflowCursor: WorkflowPosition | undefined;
+  let workflowSweepEnd: WorkflowPosition | undefined;
+  const workflowCandidates = `state = 'running' ${compensationsEnabled ? `OR EXISTS(SELECT 1 FROM clank_workflow_compensation_runs c
+    WHERE c.workflow_id=clank_workflow_runs.id AND (c.state IN ('dormant','waiting','running')
+      OR c.state='manual' AND EXISTS(SELECT 1 FROM clank_workflow_steps s JOIN clank_jobs j ON j.id=s.job_id
+        WHERE s.workflow_id=c.workflow_id AND s.state IN ('queued','running') AND j.state NOT IN ('queued','retry','running'))))` : ""}`;
   const advanceWorkflows = (advanceOptions: { limit?: number } = {}): number => {
     ensureOpen();
     const limit = integer(advanceOptions.limit ?? 100, "workflow advance limit", 1, 1_000);
-    const rows = internal.prepare(`SELECT id FROM clank_workflow_runs
-      WHERE state = 'running' ${compensationsEnabled ? `OR EXISTS(SELECT 1 FROM clank_workflow_compensation_runs c
-        WHERE c.workflow_id=clank_workflow_runs.id AND (c.state IN ('dormant','waiting','running')
-          OR c.state='manual' AND EXISTS(SELECT 1 FROM clank_workflow_steps s JOIN clank_jobs j ON j.id=s.job_id
-            WHERE s.workflow_id=c.workflow_id AND s.state IN ('queued','running') AND j.state NOT IN ('queued','retry','running'))))` : ""}
-      ORDER BY updated_at ASC, id ASC LIMIT ?`).all(limit);
+    const beginSweep = () => {
+      const last = internal.prepare(`SELECT id,updated_at FROM clank_workflow_runs WHERE ${workflowCandidates}
+        ORDER BY updated_at DESC,id DESC LIMIT 1`).get();
+      workflowCursor = undefined;
+      workflowSweepEnd = last ? { updatedAt: Number(last.updated_at), id: String(last.id) } : undefined;
+    };
+    const batch = (after: WorkflowPosition | undefined, end: WorkflowPosition) => internal.prepare(`SELECT id,updated_at FROM clank_workflow_runs
+      WHERE (${workflowCandidates})
+      ${after ? "AND (updated_at > ? OR (updated_at = ? AND id > ?))" : ""}
+      AND (updated_at < ? OR (updated_at = ? AND id <= ?))
+      ORDER BY updated_at ASC, id ASC LIMIT ?`).all(...(after ? [after.updatedAt, after.updatedAt, after.id] : []),
+        end.updatedAt, end.updatedAt, end.id, limit);
+    if (!workflowSweepEnd) beginSweep();
+    if (!workflowSweepEnd) return 0;
+    let rows = batch(workflowCursor, workflowSweepEnd);
+    if (rows.length === 0 && workflowCursor) {
+      beginSweep();
+      if (!workflowSweepEnd) return 0;
+      rows = batch(undefined, workflowSweepEnd);
+    }
     let changed = 0;
-    for (const row of rows) changed += reconcileWorkflow(String(row.id));
+    for (const row of rows) {
+      workflowCursor = { updatedAt: Number(row.updated_at), id: String(row.id) };
+      changed += reconcileWorkflow(workflowCursor.id);
+    }
+    if (rows.length < limit || workflowCursor?.updatedAt === workflowSweepEnd.updatedAt && workflowCursor.id === workflowSweepEnd.id) {
+      workflowCursor = undefined;
+      workflowSweepEnd = undefined;
+    }
     return changed;
   };
 
