@@ -414,6 +414,13 @@ export async function commitProviderDockerRoleLease(lease: object, target: objec
 }
 
 const MAX_ENCODED_ENVIRONMENT_BYTES = 4 * 1024 * 1024;
+const coldFallbackLaunchers = new WeakMap<object, { token: object; selected: boolean; owner: string; root: string; check(): void; verifyStopped(): Promise<void> }>();
+/** @internal Only a real launcher that completed authenticated cold admission can attest its stopped state. */
+export function providerColdFallbackLauncherContext(launcher: object, token: object) {
+  const held = coldFallbackLaunchers.get(launcher);
+  if (!held || held.token !== token) throw new Error("A genuine completed cold fallback launcher admission is required.");
+  held.check(); return Object.freeze({ ...held });
+}
 const MAX_RUNTIME_LOG_BYTES = 128 * 1024;
 const MAX_RUNTIME_LOG_ENTRIES = 1_000;
 const MAX_RUNTIME_LOG_LINE = 16 * 1024;
@@ -673,8 +680,8 @@ export async function openDockerDeploymentRuntimeLauncher(
       await execute(["container", "rm", "--force", ...ids], { allowFailure: true });
     }
     const exact = await listRuntimeContainers(execute, owner, record.candidate);
-    if (fallbackDeadline !== undefined && exact.some(id => !ids.includes(id))) throw new Error("Fallback refuses cleanup authority over an unretained role.");
-    if (fallbackDeadline === undefined && exact.length > 0) {
+    if ((fallbackDeadline !== undefined || coldResumeRecovered || coldNoSweepAdmitted) && exact.some(id => !ids.includes(id))) throw new Error("Fallback refuses cleanup authority over an unretained role.");
+    if (fallbackDeadline === undefined && !coldResumeRecovered && !coldNoSweepAdmitted && exact.length > 0) {
       await execute(["container", "rm", "--force", ...exact], { allowFailure: true });
     }
     if ((await listRuntimeContainers(execute, owner, record.candidate)).length > 0) {
@@ -1329,11 +1336,13 @@ export async function openDockerDeploymentRuntimeLauncher(
         }
       }
       try {
-        const remaining = await listOwnedContainers(docker, owner);
+        // Cold admission owns only authenticated/locally tracked role CIDs. An
+        // unrelated container with the same provider owner must survive close.
+        const remaining = coldResumeRecovered || coldNoSweepAdmitted ? [] : await listOwnedContainers(docker, owner);
         if (remaining.length > 0) {
           await docker(["container", "rm", "--force", ...remaining]);
         }
-        if ((await listOwnedContainers(docker, owner)).length > 0) {
+        if (!coldResumeRecovered && !coldNoSweepAdmitted && (await listOwnedContainers(docker, owner)).length > 0) {
           throw new Error("Docker runtime cleanup did not converge during close.");
         }
       } catch (error) {
@@ -1560,6 +1569,20 @@ export async function openDockerDeploymentRuntimeLauncher(
       } catch (error) { fallbackReservations.delete(projectId); close(); throw error; }
     });
   } });
+  if (coldResumeRecovered || coldNoSweepAdmitted) {
+    const token = coldResumeRecovered ? coldResumeToken! : options.coldFallbackNoSweepSelection!;
+    const check = () => {
+      if (closed || records.size || candidates.size || resumeTracking.size || fallbackReservations.size || fallbackWatchdogs.size) throw new Error("Cold fallback launcher is no longer pristine.");
+      if (coldResumeRecovered) coldResume!.check(); else coldNoSweep!.check();
+    };
+    coldFallbackLaunchers.set(launcher, { token, selected: coldResumeRecovered, owner, root, check, async verifyStopped() {
+      check();
+      if (coldResumeRecovered) await cleanupColdFallbackRoles({ evidence: coldResumeEvidence, record: coldResumeRecord, owner, root, docker, check,
+        stopTimeoutSeconds: Math.ceil(stopTimeoutMs / 1000), nativeFs, path });
+      else if (JSON.parse((await docker(["info", "--format", "{{json .ID}}"])).stdout) !== coldNoSweep!.daemonId) throw new Error("Cold fallback counterpart Docker daemon identity changed.");
+      check();
+    } });
+  }
   return Object.freeze(launcher);
 }
 

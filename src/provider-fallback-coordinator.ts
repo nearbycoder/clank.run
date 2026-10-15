@@ -1,5 +1,5 @@
 /** Private all-role downtime protocol. No captured-writer receipt is accepted. */
-import { platformProviderFallbackContext, platformProviderHandoffContext, assertPlatformFallbackParticipant, type PlatformFallbackParticipant, type PlatformRuntime } from "./platform.ts";
+import { platformProviderFallbackContext, platformProviderHandoffContext, platformColdFallbackResumeSelection, platformColdFallbackNoSweepSelection, assertPlatformFallbackParticipant, type PlatformFallbackParticipant, type PlatformRuntime } from "./platform.ts";
 import { providerFallbackOrchestrationContext, type ClaimedDeploymentOperation } from "./orchestration.ts";
 import { prepareDockerProviderFallbackSource, providerFallbackSourceContext, probeDockerProviderFallbackEndpoint, providerFallbackEndpointContext, stageDockerProviderFallbackTarget, providerFallbackTargetContext, closeProviderFallbackTarget, type ProviderFallbackSource, type DeploymentProviderService } from "./provider-service.ts";
 import { decodeDeploymentRuntimeCapsule, type DeploymentRuntimeCapsule } from "./runtime-placement.ts";
@@ -58,8 +58,9 @@ export function providerFallbackResumeCleanupContext(permit:object){
   held.deadline??=nowMono()+30000000000n;
   const check=()=>{if(nowMono()>=held.deadline!)throw new Error("Fallback resume cleanup deadline expired.");held.check();};check();return Object.freeze({...held,deadline:held.deadline,check});
 }
-type RetiredResume={runtime:object;journal:string;authentication:string;input:Record<string,any>;selected:"source"|"target";service:DeploymentProviderService;owner:object;placement:string;handoff:string;attempt?:number;busy?:boolean;fence?:number;authority:ReturnType<ReturnType<typeof platformProviderFallbackContext>["recovery"]>};
+type RetiredResume={runtime:object;journal:string;authentication:string;input:Record<string,any>;selected:"source"|"target";service:DeploymentProviderService;owner:object;placement:string;handoff:string;attempt?:number;busy?:boolean;fence?:number;admitCold?:()=>void;authority:ReturnType<ReturnType<typeof platformProviderFallbackContext>["recovery"]>};
 const retiredResumes=new WeakMap<object,Map<string,RetiredResume>>();
+const consumedColdSelections=new WeakSet<object>();
 export function providerFallbackRecoveryFinalizationContext(permit:object){
   const held=recoveryFinalizations.get(permit);if(!held)throw new Error("A genuine coordinator recovery finalization capability is required.");held.check();return Object.freeze({...held});
 }
@@ -411,10 +412,51 @@ export function providerFallbackResumeReady(runtime:object,service:object,operat
   platformProviderFallbackContext(runtime);const held=retiredResumes.get(service)?.get(operationId);return !!held&&held.runtime===runtime;
 }
 
+/** Rehydrate only a genuine, natively cleaned, authenticated STOPPED attempt. */
+export async function rehydrateColdProviderFallback(runtime:object,selectionToken:object,counterpartToken:object,sourceService:DeploymentProviderService,targetService:DeploymentProviderService):Promise<void>{
+  const selection=platformColdFallbackResumeSelection(selectionToken),counterpart=platformColdFallbackNoSweepSelection(counterpartToken);
+  if(selection.runtime!==runtime||consumedColdSelections.has(selectionToken)||sourceService===targetService)throw new Error("Cold fallback resume selection is foreign or already consumed.");
+  selection.check();
+  const input=JSON.parse(selection.predecessorJournal),record=JSON.parse(selection.resumeJournal),selected: "source"|"target"=["stopping","stopped"].includes(input.phase)?"source":"target";
+  if(record.phase!=="stopped"||record.selected!==selected||counterpart.side===selected||counterpart.projectId!==selection.projectId||counterpart.operationId!==selection.operationId||counterpart.resumeId!==selection.resumeId||counterpart.revision!==selection.revision)throw new Error("Cold fallback selected and counterpart admissions differ.");
+  const module=await import("./provider-service.ts");selection.check();
+  const source=module.providerColdFallbackServiceContext(sourceService,selected==="source"?selectionToken:counterpartToken),target=module.providerColdFallbackServiceContext(targetService,selected==="target"?selectionToken:counterpartToken);
+  const service=selected==="source"?sourceService:targetService,native=selected==="source"?source:target;
+  if(!native.selected||(selected==="source"?target:source).selected||source.owner===target.owner)throw new Error("Cold fallback requires its exact selected and counterpart native services.");
+  const authority=platformProviderFallbackContext(runtime).recovery(selection.predecessorJournal,selection.predecessorAuthentication),catalog=providerFallbackOrchestrationContext(authority.orchestrator),handoff=JSON.stringify(selected==="source"?input.cancelledReservation:input.committedReservation);
+  const check=()=>{
+    selection.check();authority.cleanupCheck();catalog.check();source.check();target.check();
+    if(consumedColdSelections.has(selectionToken)||retiredResumes.get(service)?.has(selection.operationId)
+      ||image(catalog,"clank_deployment_handoffs","handoff_id",selection.operationId)!==handoff
+      ||image(catalog,"clank_deployment_placements","project_id",selection.projectId)!==record.settlement.placement
+      ||Number(catalog.internal.prepare("SELECT fence FROM clank_deployment_project_fences WHERE project_id=?").get(selection.projectId)?.fence)!==record.fence)
+      throw new Error("Cold fallback exact STOPPED authority changed before consumption.");
+    for(const [side,context,nodeId] of [["source",source,input.identity.sourceNodeId],["target",target,input.identity.targetNodeId]] as const){
+      const endpoint=input.endpointBindings[side];if(context.ownerLabel!==endpoint.owner||context.owner.root!==endpoint.root||context.owner.serviceDirectory!==endpoint.serviceDirectory||JSON.stringify(catalog.internal.prepare("SELECT id,region,endpoint,capacity,labels,token_hash FROM clank_deployment_nodes WHERE id=?").get(nodeId))!==input.reservation[side+"_node_json"])throw new Error("Cold fallback native service or original node identity changed.");
+    }
+  };
+  check();await native.verifyStopped();check();
+  // The selected launcher proved its latest attempt; the original predecessor
+  // source and target rosters/paths must independently remain natively absent.
+  const permit=Object.freeze({});recoveries.set(permit,{journal:selection.predecessorJournal,authentication:selection.predecessorAuthentication,input,check});
+  const recovery=await import("./provider-fallback-recovery.ts"),proof=await recovery.verifyProviderFallbackRecovery(permit,source.owner,target.owner,source.client);
+  try{
+    const physical=recovery.providerFallbackNativeRecoveryContext(proof);await physical.verifyStopped();check();
+    await native.restoreStopped();check();await physical.verifyStopped();check();
+    const admitCold=()=>{selection.check();authority.cleanupCheck();source.check();target.check();};
+    const ready=retiredResumes.get(service)??new Map<string,RetiredResume>();
+    ready.set(selection.operationId,{runtime,journal:selection.predecessorJournal,authentication:selection.predecessorAuthentication,input,selected,service,owner:native.owner,placement:record.settlement.placement,handoff,fence:record.fence,attempt:record.attempt,authority,admitCold});
+    retiredResumes.set(service,ready);consumedColdSelections.add(selectionToken);
+  }finally{recovery.closeProviderFallbackNativeRecovery(proof);}
+}
+
 /** A later ordinary writer attempt requires the exact same-process finalized recovery. */
 export async function resumeDockerProviderFallback(runtime:object,service:DeploymentProviderService,operationId:string,nodeToken:string){
   platformProviderFallbackContext(runtime);
   const ready=retiredResumes.get(service)?.get(operationId);if(!ready||ready.runtime!==runtime||ready.busy)throw new Error("A genuine idle original finalized same-process fallback recovery is required for resume.");
+  // The old STOPPED selector is consumed before a new planned head intentionally
+  // supersedes it; subsequent lifecycle checks use the new signed attempt.
+  ready.admitCold?.();ready.admitCold=undefined;
   const {input,authority}=ready,id=input.identity,catalog=providerFallbackOrchestrationContext(authority.orchestrator),deadline=nowMono()+30000000000n,controller=new AbortController(),timer=setTimeout(()=>controller.abort(new Error("Ordinary fallback resume deadline expired.")),30000);
   const selectedSource=ready.selected==="source",nodeId=selectedSource?id.sourceNodeId:id.targetNodeId,generation=selectedSource?id.sourceGeneration:id.targetGeneration;
   if(selectedSource&&!["stopping","stopped"].includes(input.phase))throw new Error("Source resume requires its authenticated stopped predecessor.");

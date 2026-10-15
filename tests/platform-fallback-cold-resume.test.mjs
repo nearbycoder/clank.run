@@ -6,7 +6,9 @@ import {join,resolve} from 'node:path';
 import {createHash,createHmac,randomBytes} from 'node:crypto';
 import {openPlatform,platformProviderFallbackContext,platformProviderHandoffContext,platformColdFallbackResumeSelection,platformColdFallbackNoSweepSelection} from '../dist/platform.js';
 import {providerFallbackOrchestrationContext} from '../dist/orchestration.js';
-import {openDockerDeploymentRuntimeLauncher} from '../dist/provider-docker.js';
+import {openDockerDeploymentRuntimeLauncher,providerColdFallbackLauncherContext} from '../dist/provider-docker.js';
+import {providerColdFallbackServiceContext} from '../dist/provider-service.js';
+import {rehydrateColdProviderFallback,providerFallbackResumeReady} from '../dist/provider-fallback-coordinator.js';
 
 const digest=value=>createHash('sha256').update(value).digest('base64url');
 const sign=(key,domain,value)=>createHmac('sha256',key).update(domain+'\n').update(value).digest('hex');
@@ -68,6 +70,22 @@ test('cold STOPPED resume selection authenticates an exact retained chain withou
  }finally{await f.runtime.close();await rm(f.root,{recursive:true,force:true});}
 });
 
+test('cold rehydration requires genuine native service completion in addition to signed platform selections',async()=>{
+ const f=await fixture();try{
+  const forged=new Proxy({},{get(){throw new Error('A forged capability getter must not run.');}});
+  assert.throws(()=>providerColdFallbackLauncherContext(forged,forged),/genuine completed cold fallback launcher/);
+  assert.throws(()=>providerColdFallbackServiceContext(forged,forged),/genuine cold fallback provider service/);
+  await assert.rejects(rehydrateColdProviderFallback(f.runtime,forged,forged,forged,{}),/genuine original platform cold STOPPED/);
+  const token=f.platform.coldStoppedResume(f.journal,f.authentication),counterpart=f.platform.coldStoppedResumeCounterpart(token,'cold-source-owner',join(f.root,'source-provider'));
+  await assert.rejects(rehydrateColdProviderFallback({},token,counterpart,forged,{}),/foreign or already consumed/);
+  // This read-only selector fixture deliberately pairs a source-phase
+  // predecessor with a target attempt; it must never become writer authority.
+  await assert.rejects(rehydrateColdProviderFallback(platformColdFallbackResumeSelection(token).runtime,token,counterpart,forged,{}),/selected and counterpart admissions differ/);
+  assert.equal(providerFallbackResumeReady(f.runtime,forged,f.operationId),false);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS count FROM clank_deployment_operations WHERE project_id=?').get(f.projectId).count,0);
+ }finally{await f.runtime.close();await rm(f.root,{recursive:true,force:true});}
+});
+
 test('platform-owned lazy provider bindings close idempotently and reject post-close rebinding',async()=>{
  const root=await mkdtemp(join(tmpdir(),'clank-cold-factory-close-')),runtime=await openPlatform({dataDirectory:root,publicUrl:'http://127.0.0.1:48961',masterKey:randomBytes(32),hostingProfile:'trusted',sqliteIsolation:'trusted-process',signup:'bootstrap',appPortStart:48961,appPortEnd:48965,backups:{intervalMs:false},previews:{cleanupIntervalMs:false},scaleToZero:{sweepIntervalMs:false},ingress:{baseDomain:'apps.example.test'},deploymentAgents:{registrationToken:'cold-factory-test-registration-1234567890',localFallback:true,placement:{}}});
  try{
@@ -78,17 +96,49 @@ test('platform-owned lazy provider bindings close idempotently and reject post-c
  }finally{await runtime.close();await rm(root,{recursive:true,force:true});}
 });
 
-test('counterpart cold admission is exact, authenticated, and suppresses only read-only startup sweep',async t=>{
- await t.test('valid opposite endpoint performs daemon identity read and no owner sweep',async()=>{
+async function ownerInventoryDocker(root){
+ const audit=join(root,'owner-inventory-audit.jsonl'),executable=join(root,'owner-inventory-docker.mjs'),inventory=join(root,'owner-inventory.json');
+ await writeFile(inventory,'[]');
+ await writeFile(executable,`#!${process.execPath}
+import {appendFile,readFile,writeFile} from 'node:fs/promises';
+const args=process.argv.slice(2),inventory=${JSON.stringify(inventory)};
+await appendFile(${JSON.stringify(audit)},JSON.stringify(args)+'\\n');
+const rows=JSON.parse(await readFile(inventory,'utf8'));
+if(args[0]==='info')process.stdout.write(JSON.stringify('daemon-source'));
+else if(args[0]==='container'&&args[1]==='ls'){
+ const filters=args.flatMap((arg,index)=>arg==='--filter'?[args[index+1]]:[]);
+ const matching=rows.filter(row=>filters.every(filter=>{
+  if(!filter.startsWith('label='))throw new Error('Unexpected inventory filter');
+  const [name,...value]=filter.slice(6).split('=');return row.Config.Labels[name]===value.join('=');
+ }));
+ process.stdout.write(matching.map(row=>row.Id+'\\n').join(''));
+}else if(args[0]==='container'&&args[1]==='rm'){
+ const ids=args.slice(2).filter(arg=>arg!=='--force');
+ if(!ids.length||ids.some(id=>!/^[a-f0-9]{64}$/.test(id)))throw new Error('Unexpected removal identity');
+ await writeFile(inventory,JSON.stringify(rows.filter(row=>!ids.includes(row.Id))));
+}else process.exit(9);
+`,{mode:0o700});await chmod(executable,0o700);
+ return {audit,executable,inventory};
+}
+
+test('counterpart cold admission is exact, authenticated, and preserves unrelated owner containers through close',async t=>{
+ await t.test('valid opposite endpoint preserves an unrelated same-owner CID on startup and close',async()=>{
   const f=await fixture();try{
    const token=f.platform.coldStoppedResume(f.journal,f.authentication),root=join(f.root,'source-provider'),owner='cold-source-owner';
    const admission=f.platform.coldStoppedResumeCounterpart(token,owner,root),held=platformColdFallbackNoSweepSelection(admission);
    assert.equal(held.side,'source');assert.equal(held.owner,owner);assert.equal(held.root,root);assert.throws(()=>platformColdFallbackNoSweepSelection({}),/genuine original platform cold fallback counterpart/);
-   const audit=join(f.root,'counterpart-audit'),executable=join(f.root,'counterpart-docker.mjs');
-   await writeFile(executable,`#!${process.execPath}\nimport {appendFile} from 'node:fs/promises';const args=process.argv.slice(2);await appendFile(${JSON.stringify(audit)},JSON.stringify(args)+'\\n');if(args[0]==='info')process.stdout.write(JSON.stringify('daemon-source'));else if(args[0]==='container'&&args[1]==='ls'){}else process.exit(9);\n`,{mode:0o700});await chmod(executable,0o700);
+   const {audit,executable,inventory}=await ownerInventoryDocker(f.root);
+   const unrelated={Id:'f'.repeat(64),Config:{Labels:{'run.clank.managed':'provider-runtime','run.clank.owner':owner,'run.clank.project':'unrelated-project'}},State:{Status:'running',Running:true,Pid:4242},Mounts:[]};
+   await writeFile(inventory,JSON.stringify([unrelated]));
    const launcher=await openDockerDeploymentRuntimeLauncher({rootDirectory:root,owner,image:'clank-test@sha256:'+'d'.repeat(64),executable,commandTimeoutMs:5000,coldFallbackNoSweepSelection:admission});
+   assert.equal(providerColdFallbackLauncherContext(launcher,admission).selected,false);
+   const mismatchedAdmission=f.platform.coldStoppedResumeCounterpart(token,owner,root);
+   assert.throws(()=>providerColdFallbackLauncherContext(launcher,mismatchedAdmission),/genuine completed cold fallback/);
+   assert.deepEqual(JSON.parse(await readFile(inventory,'utf8')),[unrelated]);
    await launcher.close();
-   const commands=(await readFile(audit,'utf8')).trim().split('\n').map(JSON.parse);assert.deepEqual(commands[0],['info','--format','{{json .ID}}']);assert.ok(commands.length<=3);assert.ok(commands.filter(args=>args[0]==='container'&&args[1]==='ls').length<=2);assert.ok(!commands.some(args=>args[0]==='container'&&args[1]==='rm'));
+   assert.throws(()=>providerColdFallbackLauncherContext(launcher,admission),/no longer pristine/);
+   const commands=(await readFile(audit,'utf8')).trim().split('\n').map(JSON.parse);assert.deepEqual(commands[0],['info','--format','{{json .ID}}']);assert.ok(!commands.some(args=>args[0]==='container'&&args[1]==='rm'));
+   assert.deepEqual(JSON.parse(await readFile(inventory,'utf8')),[unrelated]);
   }finally{await f.runtime.close();await rm(f.root,{recursive:true,force:true});}
  });
  await t.test('selected cleanup owner cannot receive counterpart admission and forged admission does not access Docker',async()=>{
@@ -109,6 +159,22 @@ test('counterpart cold admission is exact, authenticated, and suppresses only re
    await assert.rejects(readFile(audit),{code:'ENOENT'});
   }finally{await f.runtime.close();await rm(f.root,{recursive:true,force:true});}
  });
+});
+
+test('ordinary Docker launcher close still sweeps its owner inventory',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'clank-ordinary-close-'));let launcher;
+ try{
+  const {audit,executable,inventory}=await ownerInventoryDocker(root),owner='ordinary-owner';
+  await mkdir(join(root,'provider'),{mode:0o700});
+  launcher=await openDockerDeploymentRuntimeLauncher({rootDirectory:join(root,'provider'),owner,image:'clank-test@sha256:'+'d'.repeat(64),executable,commandTimeoutMs:5000});
+  const owned={Id:'a'.repeat(64),Config:{Labels:{'run.clank.managed':'provider-runtime','run.clank.owner':owner}}};
+  const other={Id:'b'.repeat(64),Config:{Labels:{'run.clank.managed':'provider-runtime','run.clank.owner':'another-owner'}}};
+  await writeFile(inventory,JSON.stringify([owned,other]));
+  await launcher.close();
+  const commands=(await readFile(audit,'utf8')).trim().split('\n').map(JSON.parse),removals=commands.filter(args=>args[0]==='container'&&args[1]==='rm');
+  assert.deepEqual(removals,[['container','rm','--force',owned.Id]]);
+  assert.deepEqual(JSON.parse(await readFile(inventory,'utf8')),[other]);
+ }finally{await launcher?.close();await rm(root,{recursive:true,force:true});}
 });
 
 async function coldDockerAdmissionFixture(f){

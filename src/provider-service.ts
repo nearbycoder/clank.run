@@ -1,4 +1,5 @@
 import { providerFallbackReservationContext, providerFallbackCancellationContext, providerFallbackEndpointProbeContext, providerFallbackRetirementContext, providerFallbackResumeContext, providerFallbackResumeCleanupContext, providerFallbackCancelledSourceContext } from "./provider-fallback-coordinator.ts";
+import { platformColdFallbackResumeSelection } from "./platform.ts";
 import { acquireProviderServiceOwnership, admitProviderService, providerServiceRestartFiles, type ProviderServiceOwnership } from "./provider-handoff.ts";
 import * as providerHandoff from "./provider-handoff.ts";
 import {providerSourceLaunchIngressContext,launchProviderSourceContainer} from "./provider-source-launch.ts";
@@ -14,7 +15,7 @@ import {
 } from "./provider-data.ts";
 import {
   DEPLOYMENT_PROVIDER_DOCKER_DIAGNOSTICS_PROTOCOL,
-  openDockerDeploymentRuntimeLauncher,
+  openDockerDeploymentRuntimeLauncher, providerColdFallbackLauncherContext,
   captureProviderDockerRoleLease, providerDockerRoleLeaseContext, stopProviderDockerRoleLease, closeProviderDockerRoleLease, commitProviderDockerRoleLease, cleanupProviderDockerRoleLease, armProviderDockerFallbackTarget, closeProviderDockerFallbackTarget, cancelProviderDockerRoleLease, isCurrentProviderDockerRoleLease, stageProviderDockerFallbackTarget, activateProviderDockerFallbackTarget,
   retireProviderDockerFallbackRecovery, retireProviderDockerFallbackCancellation, verifyProviderDockerFallbackResumed, beginProviderDockerFallbackResume, cleanupProviderDockerFallbackResume, completeProviderDockerFallbackResume, finishProviderDockerFallbackResumeCleanup, type ProviderDockerRoleLease,
   type DockerDeploymentRuntimeDiagnostics,
@@ -329,6 +330,15 @@ export async function prepareDockerProviderFallbackSource(service: DeploymentPro
 }
 
 const nativeSourceAdmissions=new WeakMap<object,{client:ReturnType<typeof providerDockerClient>;owner:string;image:string;compatible:boolean}>();
+const coldFallbackServices=new WeakMap<object,(token:object)=>Promise<void>>();
+/** @internal Native cold completion must belong to this exact service and launcher. */
+export function providerColdFallbackServiceContext(service: object, token: object) {
+  const ordinary=ordinarySourceAdmissions.get(service),restore=coldFallbackServices.get(service);
+  if(!ordinary||!restore)throw new Error("A genuine cold fallback provider service is required.");
+  const native=providerFallbackServiceContext(service),launcher=providerColdFallbackLauncherContext(ordinary.runtimes,token);
+  if(launcher.root!==native.owner.root||launcher.owner!==native.ownerLabel)throw new Error("Cold fallback service and launcher ownership differ.");
+  return Object.freeze({...native,selected:launcher.selected,check(){native.check();launcher.check();},verifyStopped:launcher.verifyStopped,restoreStopped:()=>restore(token)});
+}
 /** Private original-service identity for the platform's local evacuation registration. */
 export function providerFallbackServiceContext(service: object) {
   const ordinary=ordinarySourceAdmissions.get(service),native=nativeSourceAdmissions.get(service);
@@ -594,6 +604,7 @@ async function openOwnedDeploymentProviderService(
   const controls = new Map<string, ProviderControlBinding>();
   const resumeFlights = new Map<string, object>();
   const resumeStoppedReceipts = new Map<string, { state: string; data: string; request: DeploymentProviderRequest; recoveryOperationId: string; selected: "source" | "target"; tombstone?: object }>();
+  const coldStoppedReceipts = new Map<string, { state:string; data:string; recoveryOperationId:string; selected:"source"|"target"; fence:number; generation:number; releaseId:string; capsuleSha256:string }>();
   const sourceResumeReceipts = new Map<string, { operationId: string; journal: string; authentication: string; state: string; data: string; identity: FallbackSourceIngressIdentity; tombstone?: object }>();
   const cancelledSourceRetirements = new Map<string, { journal: string; authentication: string; source: ProviderFallbackSource }>();
   const canaryOptions = normalizeProviderCanaryOptions(options.canaries);
@@ -2123,6 +2134,30 @@ async function openOwnedDeploymentProviderService(
       } finally { fallbackRetirementBindings.delete(permit); }
     });
   } });
+  coldFallbackServices.set(service,async token=>{
+    const selection=platformColdFallbackResumeSelection(token),native=providerColdFallbackLauncherContext(runtimes,token);
+    if(!native.selected)throw new Error("Cold fallback stopped receipt requires its selected native launcher.");
+    const record=JSON.parse(selection.resumeJournal),predecessor=JSON.parse(selection.predecessorJournal),projectId=selection.projectId;
+    const endpoint=predecessor.endpointBindings?.[record.selected];
+    if(!['source','target'].includes(record.selected)||!endpoint||native.root!==endpoint.root||native.owner!==endpoint.owner||record.intent?.owner!==native.owner)throw new Error("Cold fallback stopped receipt selected endpoint differs from its native launcher.");
+    await exclusive(projectId,async()=>{
+      const check=()=>{selection.check();native.check();providerHandoff.assertProviderServiceOwnership(ownership);if(closed||resumeFlights.has(projectId)||coldStoppedReceipts.has(projectId)||resumeStoppedReceipts.has(projectId)||controls.has(projectId)||ingress.inspect().some(row=>row.projectId===projectId)||runtimes.inspect().some(row=>row.projectId===projectId))throw new Error("Cold fallback service is not pristine and stopped.");};
+      check();if(await readEvacuation(projectId))throw new Error("Cold fallback service still has an evacuation barrier.");check();
+      const [state,committed]=await Promise.all([readProjectState(projectId),data.inspect(projectId)]);check();
+      const operation=record.settlement?.operation?JSON.parse(record.settlement.operation):undefined;
+      if(record.phase!=="stopped"||!operation||!['cancelled','succeeded'].includes(operation.state)||operation.lease_token_hash!==null||operation.lease_expires_at!==null
+        ||operation.project_id!==projectId||operation.idempotency_key!==record.resumeId||operation.fence!==record.fence
+        ||!state||state.projectId!==projectId||state.phase!=="stopped"||state.state!=="stopped"||state.releaseId!==null||state.capsuleSha256!==null||state.operationId!==operation.id||state.fence!==record.fence||state.generation!==record.generation
+        ||!committed||committed.projectId!==projectId||committed.generation!==record.generation||committed.releaseId!==record.identity.releaseId||committed.capsuleSha256!==record.capsuleSha256||committed.fence>record.fence)
+        throw new Error("Cold fallback service or data differs from its authenticated STOPPED operation.");
+      const projectRoot=path.join(ownership.root,"projects",projectId),release=path.resolve(projectRoot,committed.releaseDirectory),database=path.resolve(projectRoot,committed.databasePath);
+      if(!record.intent?.paths?.some((pin:any)=>pin.path===release)||!record.intent.paths.some((pin:any)=>pin.path===path.dirname(database)))throw new Error("Cold fallback service data paths differ from its authenticated native intent.");
+      const nativeFs=(globalThis as any).process.getBuiltinModule("node:fs");
+      for(const pin of record.intent.paths){const stat=nativeFs.lstatSync(pin.path);if(!stat.isDirectory()||stat.isSymbolicLink()||stat.dev!==pin.dev||stat.ino!==pin.ino||stat.uid!==pin.uid||stat.mode&0o022||nativeFs.realpathSync(pin.path)!==pin.path)throw new Error("Cold fallback service native data or release identity changed.");}
+      const databaseStat=nativeFs.lstatSync(database);if(!databaseStat.isFile()||databaseStat.isSymbolicLink()||databaseStat.nlink!==1||databaseStat.uid!==(globalThis as any).process.getuid()||databaseStat.mode&0o022||nativeFs.realpathSync(database)!==database)throw new Error("Cold fallback service database path is not its original private file.");
+      check();coldStoppedReceipts.set(projectId,{state:JSON.stringify(state),data:JSON.stringify(committed),recoveryOperationId:selection.operationId,selected:record.selected,fence:record.fence,generation:record.generation,releaseId:record.identity.releaseId,capsuleSha256:record.capsuleSha256});
+    });
+  });
   fallbackResumeServices.set(service, { async begin(permit) {
     const authority = providerFallbackResumeContext(permit), request = authority.request, projectId = request.operation.projectId;
     if (authority.service !== service || authority.owner !== ownership || request.desired.state !== "running" || !request.runtime) throw new Error("Fallback resume lifecycle authority differs.");
@@ -2136,15 +2171,18 @@ async function openOwnedDeploymentProviderService(
       const receipt = resumeStoppedReceipts.get(projectId);
       const retry = receipt && receipt.recoveryOperationId === authority.recoveryOperationId && receipt.selected === authority.selected && JSON.stringify(prior) === receipt.state && JSON.stringify(committed) === receipt.data && prior?.phase === "stopped" && prior.state === "stopped" && prior.generation === request.desired.generation && prior.fence === receipt.request.operation.fence && prior.fence < request.operation.fence
         && receipt.request.desired.releaseId === request.desired.releaseId && receipt.request.runtime?.sha256 === request.runtime!.sha256 && matchesData(committed, request) && committed!.fence <= receipt.request.operation.fence;
+      const coldReceipt=coldStoppedReceipts.get(projectId),coldRetry=!retry&&coldReceipt&&coldReceipt.recoveryOperationId===authority.recoveryOperationId&&coldReceipt.selected===authority.selected
+        &&JSON.stringify(prior)===coldReceipt.state&&JSON.stringify(committed)===coldReceipt.data&&request.operation.fence>coldReceipt.fence
+        &&request.desired.generation===coldReceipt.generation&&request.desired.releaseId===coldReceipt.releaseId&&runtime.sha256===coldReceipt.capsuleSha256;
       const sourceReceipt = sourceResumeReceipts.get(projectId);
-      const sourceResume = !retry && authority.selected === "source" && sourceReceipt && sourceReceipt.operationId === authority.recoveryOperationId
+      const sourceResume = !retry && !coldRetry && authority.selected === "source" && sourceReceipt && sourceReceipt.operationId === authority.recoveryOperationId
         && JSON.stringify(prior) === sourceReceipt.state && JSON.stringify(committed) === sourceReceipt.data && prior?.phase === "stopped" && prior.state === "stopped"
         && request.operation.fence > sourceReceipt.identity.minimumFence && request.desired.generation === sourceReceipt.identity.generation && request.desired.releaseId === sourceReceipt.identity.releaseId
         && runtime.sha256 === sourceReceipt.identity.capsuleSha256 && runtime.manifest.ingress.route === sourceReceipt.identity.route && runtime.manifest.ingress.token === sourceReceipt.identity.token;
-      if (authority.selected === "source" && !retry && !sourceResume) throw new Error("Fallback source resume requires its exact finalized source STOPPED receipt.");
-      const stoppedState = retry ? receipt!.state : sourceResume ? sourceReceipt!.state : null, stoppedData = retry ? receipt!.data : sourceResume ? sourceReceipt!.data : null;
+      if (authority.selected === "source" && !retry && !coldRetry && !sourceResume) throw new Error("Fallback source resume requires its exact finalized source STOPPED receipt.");
+      const stoppedState = retry ? receipt!.state : coldRetry ? coldReceipt!.state : sourceResume ? sourceReceipt!.state : null, stoppedData = retry ? receipt!.data : coldRetry ? coldReceipt!.data : sourceResume ? sourceReceipt!.data : null;
       const tombstone = retry ? receipt!.tombstone : sourceResume ? sourceReceipt!.tombstone : undefined;
-      const current = () => { providerHandoff.assertProviderServiceOwnership(ownership); if (closed || resumeFlights.get(projectId) !== permit || retry && resumeStoppedReceipts.get(projectId) !== receipt || sourceResume && sourceResumeReceipts.get(projectId) !== sourceReceipt) throw new Error("Fallback resume original service lifecycle or stopped receipt changed."); };
+      const current = () => { providerHandoff.assertProviderServiceOwnership(ownership); if (closed || resumeFlights.get(projectId) !== permit || retry && resumeStoppedReceipts.get(projectId) !== receipt || coldRetry && coldStoppedReceipts.get(projectId)!==coldReceipt || sourceResume && sourceResumeReceipts.get(projectId) !== sourceReceipt) throw new Error("Fallback resume original service lifecycle or stopped receipt changed."); };
       // inspect() exposes validated paths relative to its original project root;
       // the native launcher pins the same absolute paths as preparedData().
       const projectDirectory = path.join(ownership.root, "projects", projectId);
@@ -2172,6 +2210,7 @@ async function openOwnedDeploymentProviderService(
       finally { fallbackIngressStopped.delete(permit); }
       finishProviderDockerFallbackResumeCleanup(runtimes, permit); check();
       resumeStoppedReceipts.set(projectId, { state: JSON.stringify(stored), data: JSON.stringify(committed), request, recoveryOperationId: authority.recoveryOperationId, selected: authority.selected, ...(tombstone ? { tombstone } : {}) });
+      coldStoppedReceipts.delete(projectId);
       controls.delete(projectId); resumeFlights.delete(projectId); fallbackResumeLifecycles.delete(permit);
     });
   }, async complete(permit) {
@@ -2183,7 +2222,7 @@ async function openOwnedDeploymentProviderService(
       // The original coordinator publishes the terminal durable result inside
       // completeResume. No fallible admission check may follow that point.
       await completeProviderDockerFallbackResume(runtimes, permit);
-      resumeStoppedReceipts.delete(projectId); sourceResumeReceipts.delete(projectId); resumeFlights.delete(projectId); fallbackResumeLifecycles.delete(permit);
+      resumeStoppedReceipts.delete(projectId); coldStoppedReceipts.delete(projectId); sourceResumeReceipts.delete(projectId); resumeFlights.delete(projectId); fallbackResumeLifecycles.delete(permit);
     });
   }, async verify(permit) {
     const authority = providerFallbackResumeContext(permit), request = authority.request, deadline = authority.deadline;

@@ -4989,6 +4989,13 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     const results=await Promise.allSettled([open("source",source),open("target",target)]);
     const rejected=results.find((result):result is PromiseRejectedResult=>result.status==="rejected");
     if(rejected){const cleanup=await Promise.allSettled(opened.map(async({binding,service})=>{await service.close();if(binding.service===service)binding.service=undefined;binding.ownership=undefined;factoryNativeChecks.delete(binding);}));const cleanupError=cleanup.find((result):result is PromiseRejectedResult=>result.status==="rejected");if(cleanupError)throw new AggregateError([rejected.reason,cleanupError.reason],"Cold fallback factory admission failed and an opened service could not be retired.");throw rejected.reason;}
+    try{
+      scope.check();const {rehydrateColdProviderFallback}=await import("./provider-fallback-coordinator.ts");scope.check();
+      await rehydrateColdProviderFallback(runtime,token,noSweep,source.service!,target.service!);scope.check();
+    }catch(error){
+      const cleanup=await Promise.allSettled(opened.map(async({binding,service})=>{await service.close();if(binding.service===service)binding.service=undefined;binding.ownership=undefined;factoryNativeChecks.delete(binding);}));
+      const failed=cleanup.find((result):result is PromiseRejectedResult=>result.status==="rejected");if(failed)throw new AggregateError([error,failed.reason],"Cold fallback rehydration failed and an opened service could not be retired.");throw error;
+    }
     scope.check();
   };
   const resumeLocalProvider = async (item: EvacuationProject, plan: NodeEvacuationPlan, operationId: string, assertCurrent: () => void) => {
