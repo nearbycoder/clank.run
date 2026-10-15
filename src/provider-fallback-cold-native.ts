@@ -1,7 +1,12 @@
 /** Exact-role cleanup for an authenticated cold fallback STOPPED selection. */
-type DockerResult = { code: number; stdout: string; stderr: string };
+type DockerResult = { code: number | null; stdout: string; stderr: string };
 type Docker = (arguments_: readonly string[], options?: { allowFailure?: boolean }) => Promise<DockerResult>;
-type ColdEvidence = Record<string, any>;
+type ColdRole = { role: "web" | "worker" | "scheduler"; instance: number; containerId: string; configurationSha256: string };
+type ColdProcessRole = ColdRole & { pid: number; birth: string; cgroup: string };
+type ColdPath = { path: string; dev: number; ino: number; uid: number };
+type ColdRunning = { protocol: string; owner: string; projectId: string; releaseId: string; generation: number; capsuleSha256: string; daemonId: string; imageId: string; policySha256: string; roles: ColdProcessRole[]; paths: ColdPath[] };
+type ColdEvidence = { protocol: string; owner: string; projectId: string; releaseId: string; generation: number; capsuleSha256: string; daemonId: string; imageId: string; policySha256: string; roles: ColdRole[]; paths: ColdPath[] };
+type ColdRecord = { projectId: string; generation: number; identity: { releaseId: string }; running?: ColdRunning };
 
 const ID = /^[a-f0-9]{64}$/u;
 const MAX_CONTAINERS = 1000;
@@ -18,7 +23,7 @@ const decodeMountPath = (value: string) => value.replace(/\\([0-7]{3})/gu, (_mat
  */
 export async function cleanupColdFallbackRoles(input: {
   readonly evidence: ColdEvidence;
-  readonly record: ColdEvidence;
+  readonly record: ColdRecord;
   readonly owner: string;
   readonly root: string;
   readonly docker: Docker;
@@ -38,7 +43,7 @@ export async function cleanupColdFallbackRoles(input: {
   const running = record.running;
   let processes = new Map<string, { pid: number; birth: string; cgroup: string }>();
   if (running !== undefined) {
-    const sameRoster = (rows: any[]) => JSON.stringify(rows.map(row => [row.role, row.instance, row.containerId, row.configurationSha256]).sort((a,b) => JSON.stringify(a).localeCompare(JSON.stringify(b))));
+    const sameRoster = (rows: ColdRole[]) => JSON.stringify(rows.map(row => [row.role, row.instance, row.containerId, row.configurationSha256]).sort((a,b) => JSON.stringify(a).localeCompare(JSON.stringify(b))));
     if (!running || running.protocol !== "clank-provider-fallback-roles/1" || running.owner !== evidence.owner || running.projectId !== evidence.projectId
       || running.releaseId !== evidence.releaseId || running.generation !== evidence.generation || running.capsuleSha256 !== evidence.capsuleSha256
       || running.daemonId !== evidence.daemonId || running.imageId !== evidence.imageId || running.policySha256 !== evidence.policySha256
@@ -201,7 +206,8 @@ export async function cleanupColdFallbackRoles(input: {
       continue;
     }
     const role = roleById.get(cid), labels = row.Config?.Labels, host = row.HostConfig;
-    if (!role || row.Image !== evidence.imageId || !host || !row.Config || !Array.isArray(row.Mounts)
+    if (!role) throw new Error("Cold fallback exact role identity differs from its signed intent.");
+    if (row.Image !== evidence.imageId || !host || !row.Config || !Array.isArray(row.Mounts)
       || labels?.["run.clank.managed"] !== "provider-runtime" || labels["run.clank.owner"] !== owner || labels["run.clank.project"] !== record.projectId
       || labels["run.clank.release"] !== record.identity.releaseId || labels["run.clank.generation"] !== String(record.generation)
       || labels["run.clank.role"] !== role.role || labels["run.clank.instance"] !== String(role.instance))
@@ -217,7 +223,8 @@ export async function cleanupColdFallbackRoles(input: {
       fail("Cold fallback exact role state is ambiguous.");
     const process = processes.get(cid);
     if (row.State.Running) {
-      if (!process || row.State.Pid !== process.pid || statBirth(process.pid) !== process.birth) fail("Cold fallback running role lacks its original signed process identity.");
+      if (!process) throw new Error("Cold fallback running role lacks its original signed process identity.");
+      if (row.State.Pid !== process.pid || statBirth(process.pid) !== process.birth) fail("Cold fallback running role lacks its original signed process identity.");
       const groups = readBounded(`/proc/${process.pid}/cgroup`, 16 * 1024);
       if (!cgroupMatches(groups, cid) || !groups.split("\n").some(line => line.endsWith(process.cgroup.slice("/sys/fs/cgroup".length))))
         fail("Cold fallback running role cgroup differs from its signed process identity.");

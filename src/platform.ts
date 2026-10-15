@@ -5000,11 +5000,13 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     return withLocalFallbackScope(item,plan,targetNodeId,assertCurrent,async scope=>{
       const coordinator=await import("./provider-fallback-coordinator.ts"),module=await import("./provider-service.ts");scope.check();
       platformProviderFallbackContext(runtime).recovery(stored.journal as string,stored.authentication as string);
-      const source=module.providerFallbackServiceContext(scope.source.service),target=module.providerFallbackServiceContext(scope.target.service);
+      const sourceService=scope.source.service,targetService=scope.target.service;if(!sourceService||!targetService)throw new Error("Cold fallback source and target services are unavailable inside the authenticated scope.");
+      const source=module.providerFallbackServiceContext(sourceService),target=module.providerFallbackServiceContext(targetService);
       const early=["reserved","stopping","stopped"].includes(locator.phase),selected=early?scope.source:scope.target;
-      if(locator.phase==="reserved"||!coordinator.providerFallbackResumeReady(runtime,selected.service,operationId))await coordinator.recoverProviderFallback(runtime,stored.journal as string,stored.authentication as string,source.owner,target.owner,source.client,{sourceService:scope.source.service,targetService:scope.target.service});scope.check();
+      const selectedService=early?sourceService:targetService;
+      if(locator.phase==="reserved"||!coordinator.providerFallbackResumeReady(runtime,selectedService,operationId))await coordinator.recoverProviderFallback(runtime,stored.journal as string,stored.authentication as string,source.owner,target.owner,source.client,{sourceService,targetService});scope.check();
       if(locator.phase==="reserved")return {nodeId:plan.nodeId,generation:item.generation,sourceRestored:true};
-      const result=await coordinator.resumeDockerProviderFallback(runtime,selected.service,operationId,selected.token);scope.check();
+      const result=await coordinator.resumeDockerProviderFallback(runtime,selectedService,operationId,selected.token);scope.check();
       return result;
     },{journal:stored.journal as string,authentication:stored.authentication as string});
   };
@@ -5038,7 +5040,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       if(!wire)throw new Error("Native evacuation original source capsule is unavailable.");
       try{
         scope.check();const {transferDockerProviderFallback}=await import("./provider-fallback-coordinator.ts");scope.check();
-        await transferDockerProviderFallback(runtime,scope.source.service,scope.target.service,wire.bytes,{projectId:item.projectId,operationId,targetNodeId:targetNodeId!,targetNodeToken:scope.target.token,maximumDowntimeMs:30000});scope.check();
+        const sourceService=scope.source.service,targetService=scope.target.service;if(!sourceService||!targetService)throw new Error("Native fallback source and target services are unavailable inside the authenticated scope.");
+        await transferDockerProviderFallback(runtime,sourceService,targetService,wire.bytes,{projectId:item.projectId,operationId,targetNodeId:targetNodeId!,targetNodeToken:scope.target.token,maximumDowntimeMs:30000});scope.check();
         const current=evacuations.get(plan.id).projects.find(value=>value.projectId===item.projectId);
         if(!current?.backupId||current.targetNodeId!==targetNodeId||current.targetGeneration!==item.generation+1||current.fallbackOperationId!==operationId||current.fallbackState!=="running")throw new Error("Native evacuation publication did not commit its exact plan progress.");
         return current.backupId;
@@ -13011,7 +13014,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         throw new Error("Cold fallback resume contains an unaffiliated journal record.");
       type ResumeRow = Record<string, any>;
       const allowed: Record<string, readonly string[]> = { planned: ["claimed", "stopped"], claimed: ["staged", "stopped"], staged: ["running", "stopped"], running: ["published", "stopped"], published: ["stopped"], stopped: [] };
-      let selected: PlatformColdFallbackResumeSelection | undefined;
+      type ColdResumeSelectionData=Omit<PlatformColdFallbackResumeSelection,"runtime"|"check">;
+      let selected: ColdResumeSelectionData | undefined;
       for (let index = 0; index < heads.length; index++) {
         const head = heads[index] as ResumeRow, attempt = index + 1;
         if (Number(head.attempt) !== attempt || head.predecessor_id !== operationId || head.project_id !== projectId || head.resume_id !== "fallback_resume_" + operationId + "_" + attempt
@@ -13052,7 +13056,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           if (last.phase !== "stopped" || !settlement || typeof settlement.placement !== "string" || !Object.hasOwn(settlement, "operation"))
             throw new Error("Cold fallback resume latest attempt is not an exact STOPPED settlement.");
           const placement = storage.internal.prepare("SELECT * FROM clank_deployment_placements WHERE project_id=?").get(projectId);
-          if (JSON.stringify(placement) !== settlement.placement || placement?.project_id !== projectId || placement.observed_state !== "stopped" || placement.observed_release_id !== null)
+          if (!placement || JSON.stringify(placement) !== settlement.placement || placement.project_id !== projectId || placement.observed_state !== "stopped" || placement.observed_release_id !== null)
             throw new Error("Cold fallback resume STOPPED placement image changed.");
           const fence = Number(storage.internal.prepare("SELECT fence FROM clank_deployment_project_fences WHERE project_id=?").get(projectId)?.fence ?? 0);
           if (fence !== last.fence || !Number.isSafeInteger(last.fence) || last.fence < last.initialFence) throw new Error("Cold fallback resume STOPPED fence differs.");
