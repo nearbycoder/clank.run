@@ -1,0 +1,64 @@
+✖ status history and inbox reads use scoped ordered indexes, including upgrades of an existing catalog (33.004356ms)
+✖ replacement tokenizes each input once and rejects aggregate capacity without disturbing a warm index (9.25026ms)
+✖ prefix expansion seeks its bounded range and sorts unchanged vocabulary only once (18.052462ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 0
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 107.980534
+
+✖ failing tests:
+
+test at tests/customer-status-controller.test.mjs:25:1
+✖ status history and inbox reads use scoped ordered indexes, including upgrades of an existing catalog (33.004356ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /SEARCH .* USING INDEX clank_platform_status_updates_page_scope_sequence/. Input:
+  
+  'SCAN clank_platform_status_updates'
+  
+      at TestContext.<anonymous> (file:///var/tmp/clank-performance-review-20261016/tests/customer-status-controller.test.mjs:53:266)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'SCAN clank_platform_status_updates',
+    expected: /SEARCH .* USING INDEX clank_platform_status_updates_page_scope_sequence/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at tests/local-search.test.mjs:22:1
+✖ replacement tokenizes each input once and rejects aggregate capacity without disturbing a warm index (9.25026ms)
+  AssertionError [ERR_ASSERTION]: Expected one tokenization pass, observed 800 normalized tokens.
+      at TestContext.<anonymous> (file:///var/tmp/clank-performance-review-20261016/tests/local-search.test.mjs:26:38)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at tests/local-search.test.mjs:32:1
+✖ prefix expansion seeks its bounded range and sorts unchanged vocabulary only once (18.052462ms)
+  AssertionError [ERR_ASSERTION]: Prefix lookup examined 951 terms outside its bounded range.
+      at TestContext.<anonymous> (file:///var/tmp/clank-performance-review-20261016/tests/local-search.test.mjs:38:156)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

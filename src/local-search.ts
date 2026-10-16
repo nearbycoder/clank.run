@@ -22,6 +22,7 @@ export function createLocalSearchIndex(options: LocalSearchOptions = {}): LocalS
   if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > 50000 || !Number.isSafeInteger(byteLimit) || byteLimit < 1024 || byteLimit > 64 * 1024 * 1024) throw new TypeError("Invalid local search limits.");
   let documents = new Map<string, { document: SearchDocument; bytes: number; terms: Map<string, number> }>();
   let inverted = new Map<string, Map<string, number>>(), bytes = 0;
+  let vocabulary: string[] | undefined;
   const prepare = (input: SearchDocument) => {
     if (!input || typeof input.id !== "string" || !input.id || input.id.length > 200 || typeof input.title !== "string" || !input.title.trim() || input.title.length > 300 || typeof input.body !== "string" || input.body.length > 32768) throw new TypeError("A search document needs an ID, title, and bounded body.");
     const document = { id: input.id, title: input.title, body: input.body }, size = encoder.encode(JSON.stringify(document)).length;
@@ -32,14 +33,14 @@ export function createLocalSearchIndex(options: LocalSearchOptions = {}): LocalS
   };
   const remove = (id: string) => {
     const existing = documents.get(id); if (!existing) return false;
-    for (const term of existing.terms.keys()) { const entries = inverted.get(term)!; entries.delete(id); if (!entries.size) inverted.delete(term); }
+    for (const term of existing.terms.keys()) { const entries = inverted.get(term)!; entries.delete(id); if (!entries.size) { inverted.delete(term); vocabulary = undefined; } }
     bytes -= existing.bytes; documents.delete(id); return true;
   };
   const upsert = (input: SearchDocument) => {
     const entry = prepare(input), previous = documents.get(entry.document.id);
     if ((!previous && documents.size >= maximum) || bytes - (previous?.bytes ?? 0) + entry.bytes > byteLimit) throw new RangeError("Local search capacity exceeded.");
     remove(entry.document.id); documents.set(entry.document.id, entry); bytes += entry.bytes;
-    for (const [term, weight] of entry.terms) { let entries = inverted.get(term); if (!entries) { entries = new Map(); inverted.set(term, entries); } entries.set(entry.document.id, weight); }
+    for (const [term, weight] of entry.terms) { let entries = inverted.get(term); if (!entries) { entries = new Map(); inverted.set(term, entries); vocabulary = undefined; } entries.set(entry.document.id, weight); }
   };
   const highlight = (text: string, matched: Set<string>, snippet: boolean): readonly SearchHighlight[] => {
     const all = tokens(text), first = all.find(token => matched.has(token.term));
@@ -57,10 +58,20 @@ export function createLocalSearchIndex(options: LocalSearchOptions = {}): LocalS
     upsert, remove, get size() { return documents.size; },
     replace(inputs) {
       if (!Array.isArray(inputs) || inputs.length > maximum || new Set(inputs.map(input => input?.id)).size !== inputs.length) throw new TypeError("Replacement documents must have unique IDs within the limit.");
-      const replacement = createLocalSearchIndex(options); for (const input of inputs) replacement.upsert(input);
-      const oldDocuments = documents, oldInverted = inverted, oldBytes = bytes;
-      documents = new Map(); inverted = new Map(); bytes = 0;
-      try { for (const input of inputs) upsert(input); } catch (error) { documents = oldDocuments; inverted = oldInverted; bytes = oldBytes; throw error; }
+      const nextDocuments = new Map<string, ReturnType<typeof prepare>>(), nextInverted = new Map<string, Map<string, number>>();
+      let nextBytes = 0;
+      for (const input of inputs) {
+        const entry = prepare(input);
+        if (nextDocuments.has(entry.document.id)) throw new TypeError("Replacement documents must have unique IDs within the limit.");
+        if (nextDocuments.size >= maximum || nextBytes + entry.bytes > byteLimit) throw new RangeError("Local search capacity exceeded.");
+        nextDocuments.set(entry.document.id, entry); nextBytes += entry.bytes;
+        for (const [term, weight] of entry.terms) {
+          let entries = nextInverted.get(term);
+          if (!entries) { entries = new Map(); nextInverted.set(term, entries); }
+          entries.set(entry.document.id, weight);
+        }
+      }
+      documents = nextDocuments; inverted = nextInverted; bytes = nextBytes; vocabulary = undefined;
     },
     search(query, settings = {}) {
       if (typeof query !== "string" || query.length > 200) throw new TypeError("Search at most 200 characters.");
@@ -73,8 +84,15 @@ export function createLocalSearchIndex(options: LocalSearchOptions = {}): LocalS
       const matched = new Set<string>();
       for (let position = 0; position < terms.length; position++) {
         const term = terms[position]!, expansions = [term];
-        if (settings.prefix !== false && position === terms.length - 1) for (const known of [...inverted.keys()].sort()) {
-          if (known !== term && known.startsWith(term)) { if (expansions.length >= 50) { truncated = true; break; } expansions.push(known); }
+        if (settings.prefix !== false && position === terms.length - 1) {
+          const sorted = vocabulary ??= [...inverted.keys()].sort();
+          let low = 0, high = sorted.length;
+          while (low < high) { const middle = (low + high) >>> 1; if (sorted[middle]! < term) low = middle + 1; else high = middle; }
+          for (let at = low; at < sorted.length; at++) {
+            const known = sorted[at]!;
+            if (!known.startsWith(term)) break;
+            if (known !== term) { if (expansions.length >= 50) { truncated = true; break; } expansions.push(known); }
+          }
         }
         const matches = new Map<string, number>();
         for (const expanded of expansions) {

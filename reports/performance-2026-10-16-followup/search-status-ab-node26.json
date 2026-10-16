@@ -1,0 +1,1558 @@
+{
+  "protocol": "clank-search-status-performance/1",
+  "node": "v26.10.0",
+  "machine": {
+    "platform": "linux",
+    "arch": "x64",
+    "cpu": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S"
+  },
+  "rounds": 5,
+  "profiles": [
+    {
+      "name": "replace-1000",
+      "samples": [
+        {
+          "round": 1,
+          "variant": "baseline",
+          "iterations": 10,
+          "elapsedMs": 140.6076820000001,
+          "cpuMs": 205.39700000000002,
+          "p50Ms": 14.281573000000037,
+          "p95Ms": 17.833748000000014,
+          "checksum": 10000
+        },
+        {
+          "round": 1,
+          "variant": "candidate",
+          "iterations": 10,
+          "elapsedMs": 66.68182300000007,
+          "cpuMs": 96.90100000000001,
+          "p50Ms": 6.733873000000017,
+          "p95Ms": 9.351607000000001,
+          "checksum": 10000
+        },
+        {
+          "round": 2,
+          "variant": "candidate",
+          "iterations": 10,
+          "elapsedMs": 76.54161199999999,
+          "cpuMs": 102.718,
+          "p50Ms": 7.78774199999998,
+          "p95Ms": 11.825503999999967,
+          "checksum": 10000
+        },
+        {
+          "round": 2,
+          "variant": "baseline",
+          "iterations": 10,
+          "elapsedMs": 122.07496999999978,
+          "cpuMs": 158.386,
+          "p50Ms": 12.127014999999915,
+          "p95Ms": 16.540395999999987,
+          "checksum": 10000
+        },
+        {
+          "round": 3,
+          "variant": "baseline",
+          "iterations": 10,
+          "elapsedMs": 122.44215299999985,
+          "cpuMs": 160.118,
+          "p50Ms": 13.146414999999934,
+          "p95Ms": 24.48010499999998,
+          "checksum": 10000
+        },
+        {
+          "round": 3,
+          "variant": "candidate",
+          "iterations": 10,
+          "elapsedMs": 54.002991000000065,
+          "cpuMs": 78.219,
+          "p50Ms": 4.533277999999996,
+          "p95Ms": 9.285238999999933,
+          "checksum": 10000
+        },
+        {
+          "round": 4,
+          "variant": "candidate",
+          "iterations": 10,
+          "elapsedMs": 48.15238199999976,
+          "cpuMs": 62.259,
+          "p50Ms": 3.8389779999999973,
+          "p95Ms": 7.294176999999991,
+          "checksum": 10000
+        },
+        {
+          "round": 4,
+          "variant": "baseline",
+          "iterations": 10,
+          "elapsedMs": 102.50820399999998,
+          "cpuMs": 143.07,
+          "p50Ms": 10.66607799999997,
+          "p95Ms": 13.219532999999956,
+          "checksum": 10000
+        },
+        {
+          "round": 5,
+          "variant": "baseline",
+          "iterations": 10,
+          "elapsedMs": 94.53862700000013,
+          "cpuMs": 125.41900000000001,
+          "p50Ms": 9.87651199999982,
+          "p95Ms": 12.095637000000124,
+          "checksum": 10000
+        },
+        {
+          "round": 5,
+          "variant": "candidate",
+          "iterations": 10,
+          "elapsedMs": 48.56496899999979,
+          "cpuMs": 65.356,
+          "p50Ms": 5.084471000000121,
+          "p95Ms": 7.426952999999912,
+          "checksum": 10000
+        }
+      ],
+      "medians": {
+        "baseline": {
+          "elapsedMs": 122.07496999999978,
+          "cpuMs": 158.386,
+          "p50Ms": 12.127014999999915,
+          "p95Ms": 16.540395999999987
+        },
+        "candidate": {
+          "elapsedMs": 54.002991000000065,
+          "cpuMs": 78.219,
+          "p50Ms": 5.084471000000121,
+          "p95Ms": 9.285238999999933
+        }
+      },
+      "elapsedReductionPercent": 55.76243762337181
+    },
+    {
+      "name": "replace-10000",
+      "samples": [
+        {
+          "round": 1,
+          "variant": "baseline",
+          "iterations": 10,
+          "elapsedMs": 1139.3011940000004,
+          "cpuMs": 1546.1770000000001,
+          "p50Ms": 114.24227100000007,
+          "p95Ms": 126.11371400000007,
+          "checksum": 100000
+        },
+        {
+          "round": 1,
+          "variant": "candidate",
+          "iterations": 10,
+          "elapsedMs": 547.8802489999998,
+          "cpuMs": 749.2379999999999,
+          "p50Ms": 54.87842599999976,
+          "p95Ms": 60.47181300000011,
+          "checksum": 100000
+        },
+        {
+          "round": 2,
+          "variant": "candidate",
+          "iterations": 10,
+          "elapsedMs": 572.7607979999984,
+          "cpuMs": 772.8240000000001,
+          "p50Ms": 56.6151949999994,
+          "p95Ms": 64.6346709999998,
+          "checksum": 100000
+        },
+        {
+          "round": 2,
+          "variant": "baseline",
+          "iterations": 10,
+          "elapsedMs": 1252.5114350000003,
+          "cpuMs": 1694.0860000000002,
+          "p50Ms": 120.3921819999996,
+          "p95Ms": 161.9919260000006,
+          "checksum": 100000
+        },
+        {
+          "round": 3,
+          "variant": "baseline",
+          "iterations": 10,
+          "elapsedMs": 1204.2912749999996,
+          "cpuMs": 1637.827,
+          "p50Ms": 114.986989,
+          "p95Ms": 162.06309399999918,
+          "checksum": 100000
+        },
+        {
+          "round": 3,
+          "variant": "candidate",
+          "iterations": 10,
+          "elapsedMs": 614.7195170000014,
+          "cpuMs": 842.275,
+          "p50Ms": 58.73926399999982,
+          "p95Ms": 80.5541460000004,
+          "checksum": 100000
+        },
+        {
+          "round": 4,
+          "variant": "candidate",
+          "iterations": 10,
+          "elapsedMs": 676.7094620000007,
+          "cpuMs": 880.3580000000001,
+          "p50Ms": 66.31383199999982,
+          "p95Ms": 81.57390599999962,
+          "checksum": 100000
+        },
+        {
+          "round": 4,
+          "variant": "baseline",
+          "iterations": 10,
+          "elapsedMs": 1251.0878079999984,
+          "cpuMs": 1699.3830000000003,
+          "p50Ms": 123.11864199999945,
+          "p95Ms": 155.12780600000042,
+          "checksum": 100000
+        },
+        {
+          "round": 5,
+          "variant": "baseline",
+          "iterations": 10,
+          "elapsedMs": 1151.862105000002,
+          "cpuMs": 1579.137,
+          "p50Ms": 114.9231609999988,
+          "p95Ms": 136.24765800000023,
+          "checksum": 100000
+        },
+        {
+          "round": 5,
+          "variant": "candidate",
+          "iterations": 10,
+          "elapsedMs": 611.4509319999943,
+          "cpuMs": 819.714,
+          "p50Ms": 57.40201199999865,
+          "p95Ms": 88.10049499999877,
+          "checksum": 100000
+        }
+      ],
+      "medians": {
+        "baseline": {
+          "elapsedMs": 1204.2912749999996,
+          "cpuMs": 1637.827,
+          "p50Ms": 114.986989,
+          "p95Ms": 155.12780600000042
+        },
+        "candidate": {
+          "elapsedMs": 611.4509319999943,
+          "cpuMs": 819.714,
+          "p50Ms": 57.40201199999865,
+          "p95Ms": 80.5541460000004
+        }
+      },
+      "elapsedReductionPercent": 49.22732193671382
+    },
+    {
+      "name": "warm-prefix-10000",
+      "samples": [
+        {
+          "round": 1,
+          "variant": "baseline",
+          "iterations": 300,
+          "elapsedMs": 487.61960999999974,
+          "cpuMs": 503.7479999999997,
+          "p50Ms": 1.609773000000132,
+          "p95Ms": 1.7999580000014248,
+          "checksum": 14800
+        },
+        {
+          "round": 1,
+          "variant": "candidate",
+          "iterations": 300,
+          "elapsedMs": 13.272290000011708,
+          "cpuMs": 21.27500000000003,
+          "p50Ms": 0.04373899999882269,
+          "p95Ms": 0.0628580000011425,
+          "checksum": 14800
+        },
+        {
+          "round": 2,
+          "variant": "candidate",
+          "iterations": 300,
+          "elapsedMs": 10.93457399998988,
+          "cpuMs": 21.136000000000006,
+          "p50Ms": 0.042499000001043896,
+          "p95Ms": 0.04775800000061281,
+          "checksum": 14800
+        },
+        {
+          "round": 2,
+          "variant": "baseline",
+          "iterations": 300,
+          "elapsedMs": 471.5607970000019,
+          "cpuMs": 481.90700000000044,
+          "p50Ms": 1.5654239999985293,
+          "p95Ms": 1.6334619999997813,
+          "checksum": 14800
+        },
+        {
+          "round": 3,
+          "variant": "baseline",
+          "iterations": 300,
+          "elapsedMs": 476.3007980000093,
+          "cpuMs": 482.6400000000001,
+          "p50Ms": 1.5888729999987845,
+          "p95Ms": 1.6363019999989774,
+          "checksum": 14800
+        },
+        {
+          "round": 3,
+          "variant": "candidate",
+          "iterations": 300,
+          "elapsedMs": 13.92444300000352,
+          "cpuMs": 21.792999999999978,
+          "p50Ms": 0.05916799999977229,
+          "p95Ms": 0.06605800000033923,
+          "checksum": 14800
+        },
+        {
+          "round": 4,
+          "variant": "candidate",
+          "iterations": 300,
+          "elapsedMs": 10.312317000021721,
+          "cpuMs": 16.623999999999985,
+          "p50Ms": 0.03937900000164518,
+          "p95Ms": 0.044459000000642845,
+          "checksum": 14800
+        },
+        {
+          "round": 4,
+          "variant": "baseline",
+          "iterations": 300,
+          "elapsedMs": 473.3567000000039,
+          "cpuMs": 482.1440000000005,
+          "p50Ms": 1.5683140000001004,
+          "p95Ms": 1.6386420000017097,
+          "checksum": 14800
+        },
+        {
+          "round": 5,
+          "variant": "baseline",
+          "iterations": 300,
+          "elapsedMs": 469.8702109999249,
+          "cpuMs": 474.6360000000001,
+          "p50Ms": 1.5648939999991853,
+          "p95Ms": 1.6152619999993476,
+          "checksum": 14800
+        },
+        {
+          "round": 5,
+          "variant": "candidate",
+          "iterations": 300,
+          "elapsedMs": 14.446376999982022,
+          "cpuMs": 18.89999999999999,
+          "p50Ms": 0.05513799999971525,
+          "p95Ms": 0.07966799999849172,
+          "checksum": 14800
+        }
+      ],
+      "medians": {
+        "baseline": {
+          "elapsedMs": 473.3567000000039,
+          "cpuMs": 482.1440000000005,
+          "p50Ms": 1.5683140000001004,
+          "p95Ms": 1.6363019999989774
+        },
+        "candidate": {
+          "elapsedMs": 13.272290000011708,
+          "cpuMs": 21.136000000000006,
+          "p50Ms": 0.04373899999882269,
+          "p95Ms": 0.0628580000011425
+        }
+      },
+      "elapsedReductionPercent": 97.19613348664726
+    },
+    {
+      "name": "cold-prefix-10000",
+      "samples": [
+        {
+          "round": 1,
+          "variant": "baseline",
+          "iterations": 10,
+          "elapsedMs": 16.84306800000195,
+          "cpuMs": 16.907,
+          "p50Ms": 1.6637709999995423,
+          "p95Ms": 2.0513599999976577,
+          "checksum": 503
+        },
+        {
+          "round": 1,
+          "variant": "candidate",
+          "iterations": 10,
+          "elapsedMs": 18.636835000004794,
+          "cpuMs": 20.512999999999998,
+          "p50Ms": 1.8438360000000102,
+          "p95Ms": 2.260592999999062,
+          "checksum": 503
+        },
+        {
+          "round": 2,
+          "variant": "candidate",
+          "iterations": 10,
+          "elapsedMs": 17.920806000001903,
+          "cpuMs": 18.936,
+          "p50Ms": 1.8166970000020228,
+          "p95Ms": 1.9074039999977686,
+          "checksum": 503
+        },
+        {
+          "round": 2,
+          "variant": "baseline",
+          "iterations": 10,
+          "elapsedMs": 20.02709600000162,
+          "cpuMs": 23.275999999999996,
+          "p50Ms": 2.019651000002341,
+          "p95Ms": 2.3912899999995716,
+          "checksum": 503
+        },
+        {
+          "round": 3,
+          "variant": "baseline",
+          "iterations": 10,
+          "elapsedMs": 18.85483000000022,
+          "cpuMs": 20.729999999999997,
+          "p50Ms": 1.8517160000010335,
+          "p95Ms": 2.426378999996814,
+          "checksum": 503
+        },
+        {
+          "round": 3,
+          "variant": "candidate",
+          "iterations": 10,
+          "elapsedMs": 17.167498999999225,
+          "cpuMs": 18.994,
+          "p50Ms": 1.7126299999981711,
+          "p95Ms": 1.8594750000011118,
+          "checksum": 503
+        },
+        {
+          "round": 4,
+          "variant": "candidate",
+          "iterations": 10,
+          "elapsedMs": 16.777698999998393,
+          "cpuMs": 18.112000000000002,
+          "p50Ms": 1.6936900000000605,
+          "p95Ms": 1.7752379999983532,
+          "checksum": 503
+        },
+        {
+          "round": 4,
+          "variant": "baseline",
+          "iterations": 10,
+          "elapsedMs": 25.897961999999097,
+          "cpuMs": 34.099000000000004,
+          "p50Ms": 2.122588000001997,
+          "p95Ms": 6.033032999999705,
+          "checksum": 503
+        },
+        {
+          "round": 5,
+          "variant": "baseline",
+          "iterations": 10,
+          "elapsedMs": 18.379713999998785,
+          "cpuMs": 18.683999999999997,
+          "p50Ms": 1.8439159999979893,
+          "p95Ms": 1.9440340000001015,
+          "checksum": 503
+        },
+        {
+          "round": 5,
+          "variant": "candidate",
+          "iterations": 10,
+          "elapsedMs": 16.818637000000308,
+          "cpuMs": 18.434,
+          "p50Ms": 1.694020000002638,
+          "p95Ms": 1.8515559999977995,
+          "checksum": 503
+        }
+      ],
+      "medians": {
+        "baseline": {
+          "elapsedMs": 18.85483000000022,
+          "cpuMs": 20.729999999999997,
+          "p50Ms": 1.8517160000010335,
+          "p95Ms": 2.3912899999995716
+        },
+        "candidate": {
+          "elapsedMs": 17.167498999999225,
+          "cpuMs": 18.936,
+          "p50Ms": 1.7126299999981711,
+          "p95Ms": 1.8594750000011118
+        }
+      },
+      "elapsedReductionPercent": 8.949065040634018
+    },
+    {
+      "name": "public-history-small",
+      "samples": [
+        {
+          "round": 1,
+          "variant": "baseline",
+          "iterations": 200,
+          "updates": 40,
+          "notifications": 25,
+          "elapsedMs": 38.59625199997754,
+          "cpuMs": 46.726,
+          "p50Ms": 0.18283399999927497,
+          "p95Ms": 0.23923300000024028,
+          "checksum": 4000,
+          "seed": {
+            "elapsedMs": 0.22042399999918416,
+            "cpuMs": 0.259
+          },
+          "queryPlan": [
+            "SCAN clank_platform_status_updates"
+          ]
+        },
+        {
+          "round": 1,
+          "variant": "candidate",
+          "iterations": 200,
+          "updates": 40,
+          "notifications": 25,
+          "elapsedMs": 37.832234999961656,
+          "cpuMs": 43.404,
+          "p50Ms": 0.182184999997844,
+          "p95Ms": 0.21187400000053458,
+          "checksum": 4000,
+          "seed": {
+            "elapsedMs": 0.16301499999826774,
+            "cpuMs": 0.164
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_updates USING INDEX clank_platform_status_updates_page_scope_sequence (page_id=? AND scope=?)"
+          ]
+        },
+        {
+          "round": 2,
+          "variant": "candidate",
+          "iterations": 200,
+          "updates": 40,
+          "notifications": 25,
+          "elapsedMs": 37.77901700000075,
+          "cpuMs": 43.285,
+          "p50Ms": 0.1823149999981979,
+          "p95Ms": 0.237422999998671,
+          "checksum": 4000,
+          "seed": {
+            "elapsedMs": 0.16247500000099535,
+            "cpuMs": 0.163
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_updates USING INDEX clank_platform_status_updates_page_scope_sequence (page_id=? AND scope=?)"
+          ]
+        },
+        {
+          "round": 2,
+          "variant": "baseline",
+          "iterations": 200,
+          "updates": 40,
+          "notifications": 25,
+          "elapsedMs": 37.70351800001299,
+          "cpuMs": 41.468,
+          "p50Ms": 0.18512399999963236,
+          "p95Ms": 0.20603399999890826,
+          "checksum": 4000,
+          "seed": {
+            "elapsedMs": 0.14567600000009406,
+            "cpuMs": 0.148
+          },
+          "queryPlan": [
+            "SCAN clank_platform_status_updates"
+          ]
+        },
+        {
+          "round": 3,
+          "variant": "baseline",
+          "iterations": 200,
+          "updates": 40,
+          "notifications": 25,
+          "elapsedMs": 37.21647299997858,
+          "cpuMs": 43.22,
+          "p50Ms": 0.1820350000016333,
+          "p95Ms": 0.20833399999901303,
+          "checksum": 4000,
+          "seed": {
+            "elapsedMs": 0.14646599999832688,
+            "cpuMs": 0.179
+          },
+          "queryPlan": [
+            "SCAN clank_platform_status_updates"
+          ]
+        },
+        {
+          "round": 3,
+          "variant": "candidate",
+          "iterations": 200,
+          "updates": 40,
+          "notifications": 25,
+          "elapsedMs": 37.202733999991324,
+          "cpuMs": 43.122,
+          "p50Ms": 0.18232500000158325,
+          "p95Ms": 0.19926399999894784,
+          "checksum": 4000,
+          "seed": {
+            "elapsedMs": 0.15918599999713479,
+            "cpuMs": 0.192
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_updates USING INDEX clank_platform_status_updates_page_scope_sequence (page_id=? AND scope=?)"
+          ]
+        },
+        {
+          "round": 4,
+          "variant": "candidate",
+          "iterations": 200,
+          "updates": 40,
+          "notifications": 25,
+          "elapsedMs": 37.16714399994453,
+          "cpuMs": 45.777,
+          "p50Ms": 0.1817239999982121,
+          "p95Ms": 0.20977399999901536,
+          "checksum": 4000,
+          "seed": {
+            "elapsedMs": 0.15875600000072154,
+            "cpuMs": 0.159
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_updates USING INDEX clank_platform_status_updates_page_scope_sequence (page_id=? AND scope=?)"
+          ]
+        },
+        {
+          "round": 4,
+          "variant": "baseline",
+          "iterations": 200,
+          "updates": 40,
+          "notifications": 25,
+          "elapsedMs": 37.43842699999732,
+          "cpuMs": 48.427,
+          "p50Ms": 0.17918400000053225,
+          "p95Ms": 0.2410829999971611,
+          "checksum": 4000,
+          "seed": {
+            "elapsedMs": 0.14688599999863072,
+            "cpuMs": 0.148
+          },
+          "queryPlan": [
+            "SCAN clank_platform_status_updates"
+          ]
+        },
+        {
+          "round": 5,
+          "variant": "baseline",
+          "iterations": 200,
+          "updates": 40,
+          "notifications": 25,
+          "elapsedMs": 37.33284800000911,
+          "cpuMs": 41.289,
+          "p50Ms": 0.18148499999733758,
+          "p95Ms": 0.2067139999999199,
+          "checksum": 4000,
+          "seed": {
+            "elapsedMs": 0.14699599999948987,
+            "cpuMs": 0.149
+          },
+          "queryPlan": [
+            "SCAN clank_platform_status_updates"
+          ]
+        },
+        {
+          "round": 5,
+          "variant": "candidate",
+          "iterations": 200,
+          "updates": 40,
+          "notifications": 25,
+          "elapsedMs": 37.45924499998364,
+          "cpuMs": 41.034,
+          "p50Ms": 0.18271500000264496,
+          "p95Ms": 0.20818399999916437,
+          "checksum": 4000,
+          "seed": {
+            "elapsedMs": 0.15814599999794154,
+            "cpuMs": 0.159
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_updates USING INDEX clank_platform_status_updates_page_scope_sequence (page_id=? AND scope=?)"
+          ]
+        }
+      ],
+      "medians": {
+        "baseline": {
+          "elapsedMs": 37.43842699999732,
+          "cpuMs": 43.22,
+          "p50Ms": 0.1820350000016333,
+          "p95Ms": 0.20833399999901303
+        },
+        "candidate": {
+          "elapsedMs": 37.45924499998364,
+          "cpuMs": 43.285,
+          "p50Ms": 0.1823149999981979,
+          "p95Ms": 0.20977399999901536
+        }
+      },
+      "elapsedReductionPercent": -0.055605968665095595
+    },
+    {
+      "name": "public-history-populated",
+      "samples": [
+        {
+          "round": 1,
+          "variant": "baseline",
+          "iterations": 200,
+          "updates": 10000,
+          "notifications": 50000,
+          "elapsedMs": 88.90031200001977,
+          "cpuMs": 91.821,
+          "p50Ms": 0.43768700000146055,
+          "p95Ms": 0.4569969999975001,
+          "checksum": 4000,
+          "seed": {
+            "elapsedMs": 155.84260600000198,
+            "cpuMs": 163.668
+          },
+          "queryPlan": [
+            "SCAN clank_platform_status_updates"
+          ]
+        },
+        {
+          "round": 1,
+          "variant": "candidate",
+          "iterations": 200,
+          "updates": 10000,
+          "notifications": 50000,
+          "elapsedMs": 38.52753500000472,
+          "cpuMs": 41.304,
+          "p50Ms": 0.1856149999985064,
+          "p95Ms": 0.20413399999961257,
+          "checksum": 4000,
+          "seed": {
+            "elapsedMs": 173.73622199999954,
+            "cpuMs": 179.554
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_updates USING INDEX clank_platform_status_updates_page_scope_sequence (page_id=? AND scope=?)"
+          ]
+        },
+        {
+          "round": 2,
+          "variant": "candidate",
+          "iterations": 200,
+          "updates": 10000,
+          "notifications": 50000,
+          "elapsedMs": 38.09642600002917,
+          "cpuMs": 39.566,
+          "p50Ms": 0.18521500000133528,
+          "p95Ms": 0.19628500000180793,
+          "checksum": 4000,
+          "seed": {
+            "elapsedMs": 174.81228099999862,
+            "cpuMs": 175.898
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_updates USING INDEX clank_platform_status_updates_page_scope_sequence (page_id=? AND scope=?)"
+          ]
+        },
+        {
+          "round": 2,
+          "variant": "baseline",
+          "iterations": 200,
+          "updates": 10000,
+          "notifications": 50000,
+          "elapsedMs": 90.89287399998648,
+          "cpuMs": 92.385,
+          "p50Ms": 0.44723700000031386,
+          "p95Ms": 0.4899860000004992,
+          "checksum": 4000,
+          "seed": {
+            "elapsedMs": 152.23172099999647,
+            "cpuMs": 156.113
+          },
+          "queryPlan": [
+            "SCAN clank_platform_status_updates"
+          ]
+        },
+        {
+          "round": 3,
+          "variant": "baseline",
+          "iterations": 200,
+          "updates": 10000,
+          "notifications": 50000,
+          "elapsedMs": 91.62207099999432,
+          "cpuMs": 97.228,
+          "p50Ms": 0.45405699999901117,
+          "p95Ms": 0.47120600000198465,
+          "checksum": 4000,
+          "seed": {
+            "elapsedMs": 161.4822810000005,
+            "cpuMs": 161.811
+          },
+          "queryPlan": [
+            "SCAN clank_platform_status_updates"
+          ]
+        },
+        {
+          "round": 3,
+          "variant": "candidate",
+          "iterations": 200,
+          "updates": 10000,
+          "notifications": 50000,
+          "elapsedMs": 39.62461199997415,
+          "cpuMs": 44.905,
+          "p50Ms": 0.18412499999976717,
+          "p95Ms": 0.22006300000066403,
+          "checksum": 4000,
+          "seed": {
+            "elapsedMs": 185.4464709999993,
+            "cpuMs": 185.29
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_updates USING INDEX clank_platform_status_updates_page_scope_sequence (page_id=? AND scope=?)"
+          ]
+        },
+        {
+          "round": 4,
+          "variant": "candidate",
+          "iterations": 200,
+          "updates": 10000,
+          "notifications": 50000,
+          "elapsedMs": 38.05246900000566,
+          "cpuMs": 39.507,
+          "p50Ms": 0.18409499999688705,
+          "p95Ms": 0.1962439999988419,
+          "checksum": 4000,
+          "seed": {
+            "elapsedMs": 171.43389000000025,
+            "cpuMs": 173.043
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_updates USING INDEX clank_platform_status_updates_page_scope_sequence (page_id=? AND scope=?)"
+          ]
+        },
+        {
+          "round": 4,
+          "variant": "baseline",
+          "iterations": 200,
+          "updates": 10000,
+          "notifications": 50000,
+          "elapsedMs": 89.8021949999893,
+          "cpuMs": 90.988,
+          "p50Ms": 0.4452869999986433,
+          "p95Ms": 0.4592059999995399,
+          "checksum": 4000,
+          "seed": {
+            "elapsedMs": 148.5429490000024,
+            "cpuMs": 149.563
+          },
+          "queryPlan": [
+            "SCAN clank_platform_status_updates"
+          ]
+        },
+        {
+          "round": 5,
+          "variant": "baseline",
+          "iterations": 200,
+          "updates": 10000,
+          "notifications": 50000,
+          "elapsedMs": 92.21322600000713,
+          "cpuMs": 93.833,
+          "p50Ms": 0.45573700000022654,
+          "p95Ms": 0.4749660000015865,
+          "checksum": 4000,
+          "seed": {
+            "elapsedMs": 159.8225190000012,
+            "cpuMs": 160.803
+          },
+          "queryPlan": [
+            "SCAN clank_platform_status_updates"
+          ]
+        },
+        {
+          "round": 5,
+          "variant": "candidate",
+          "iterations": 200,
+          "updates": 10000,
+          "notifications": 50000,
+          "elapsedMs": 40.728699000013876,
+          "cpuMs": 42.219,
+          "p50Ms": 0.19991400000071735,
+          "p95Ms": 0.21002399999997579,
+          "checksum": 4000,
+          "seed": {
+            "elapsedMs": 187.5102599999991,
+            "cpuMs": 187.869
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_updates USING INDEX clank_platform_status_updates_page_scope_sequence (page_id=? AND scope=?)"
+          ]
+        }
+      ],
+      "medians": {
+        "baseline": {
+          "elapsedMs": 90.89287399998648,
+          "cpuMs": 92.385,
+          "p50Ms": 0.44723700000031386,
+          "p95Ms": 0.47120600000198465
+        },
+        "candidate": {
+          "elapsedMs": 38.52753500000472,
+          "cpuMs": 41.304,
+          "p50Ms": 0.18521500000133528,
+          "p95Ms": 0.20413399999961257
+        }
+      },
+      "elapsedReductionPercent": 57.61215010099643
+    },
+    {
+      "name": "inbox-tail-small",
+      "samples": [
+        {
+          "round": 1,
+          "variant": "baseline",
+          "iterations": 200,
+          "updates": 40,
+          "notifications": 25,
+          "elapsedMs": 31.34846300000936,
+          "cpuMs": 32.413,
+          "p50Ms": 0.15638599999874714,
+          "p95Ms": 0.16642599999977392,
+          "checksum": 1000,
+          "seed": {
+            "elapsedMs": 0.14582599999994272,
+            "cpuMs": 0.149
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_notifications USING INTEGER PRIMARY KEY (rowid>?)"
+          ]
+        },
+        {
+          "round": 1,
+          "variant": "candidate",
+          "iterations": 200,
+          "updates": 40,
+          "notifications": 25,
+          "elapsedMs": 32.041924000004656,
+          "cpuMs": 35.698,
+          "p50Ms": 0.1565760000012233,
+          "p95Ms": 0.16735500000140746,
+          "checksum": 1000,
+          "seed": {
+            "elapsedMs": 0.16823599999770522,
+            "cpuMs": 0.17
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_notifications USING INDEX clank_platform_status_notifications_page_subscriber_sequence (page_id=? AND subscriber_id=? AND sequence>?)"
+          ]
+        },
+        {
+          "round": 2,
+          "variant": "candidate",
+          "iterations": 200,
+          "updates": 40,
+          "notifications": 25,
+          "elapsedMs": 31.727351999954408,
+          "cpuMs": 34.289,
+          "p50Ms": 0.1560349999999744,
+          "p95Ms": 0.16613499999948544,
+          "checksum": 1000,
+          "seed": {
+            "elapsedMs": 0.16665500000090105,
+            "cpuMs": 0.168
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_notifications USING INDEX clank_platform_status_notifications_page_subscriber_sequence (page_id=? AND subscriber_id=? AND sequence>?)"
+          ]
+        },
+        {
+          "round": 2,
+          "variant": "baseline",
+          "iterations": 200,
+          "updates": 40,
+          "notifications": 25,
+          "elapsedMs": 31.427651000009064,
+          "cpuMs": 33.867,
+          "p50Ms": 0.1551949999993667,
+          "p95Ms": 0.1621049999994284,
+          "checksum": 1000,
+          "seed": {
+            "elapsedMs": 0.15174499999920954,
+            "cpuMs": 0.153
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_notifications USING INTEGER PRIMARY KEY (rowid>?)"
+          ]
+        },
+        {
+          "round": 3,
+          "variant": "baseline",
+          "iterations": 200,
+          "updates": 40,
+          "notifications": 25,
+          "elapsedMs": 31.37154399998326,
+          "cpuMs": 31.767,
+          "p50Ms": 0.1544160000012198,
+          "p95Ms": 0.1616360000007262,
+          "checksum": 1000,
+          "seed": {
+            "elapsedMs": 0.150366000001668,
+            "cpuMs": 0.152
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_notifications USING INTEGER PRIMARY KEY (rowid>?)"
+          ]
+        },
+        {
+          "round": 3,
+          "variant": "candidate",
+          "iterations": 200,
+          "updates": 40,
+          "notifications": 25,
+          "elapsedMs": 31.79944000001342,
+          "cpuMs": 33.454,
+          "p50Ms": 0.15707499999916763,
+          "p95Ms": 0.16391500000099768,
+          "checksum": 1000,
+          "seed": {
+            "elapsedMs": 0.16840500000034808,
+            "cpuMs": 0.169
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_notifications USING INDEX clank_platform_status_notifications_page_subscriber_sequence (page_id=? AND subscriber_id=? AND sequence>?)"
+          ]
+        },
+        {
+          "round": 4,
+          "variant": "candidate",
+          "iterations": 200,
+          "updates": 40,
+          "notifications": 25,
+          "elapsedMs": 31.81446000004871,
+          "cpuMs": 32.315,
+          "p50Ms": 0.15748600000006263,
+          "p95Ms": 0.16317500000150176,
+          "checksum": 1000,
+          "seed": {
+            "elapsedMs": 0.1789649999991525,
+            "cpuMs": 0.18
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_notifications USING INDEX clank_platform_status_notifications_page_subscriber_sequence (page_id=? AND subscriber_id=? AND sequence>?)"
+          ]
+        },
+        {
+          "round": 4,
+          "variant": "baseline",
+          "iterations": 200,
+          "updates": 40,
+          "notifications": 25,
+          "elapsedMs": 31.46196000002601,
+          "cpuMs": 31.829,
+          "p50Ms": 0.15522599999894737,
+          "p95Ms": 0.1608249999990221,
+          "checksum": 1000,
+          "seed": {
+            "elapsedMs": 0.15178500000183703,
+            "cpuMs": 0.153
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_notifications USING INTEGER PRIMARY KEY (rowid>?)"
+          ]
+        },
+        {
+          "round": 5,
+          "variant": "baseline",
+          "iterations": 200,
+          "updates": 40,
+          "notifications": 25,
+          "elapsedMs": 32.120302000017546,
+          "cpuMs": 35.987,
+          "p50Ms": 0.1557059999977355,
+          "p95Ms": 0.16917499999908614,
+          "checksum": 1000,
+          "seed": {
+            "elapsedMs": 0.15229500000350527,
+            "cpuMs": 0.153
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_notifications USING INTEGER PRIMARY KEY (rowid>?)"
+          ]
+        },
+        {
+          "round": 5,
+          "variant": "candidate",
+          "iterations": 200,
+          "updates": 40,
+          "notifications": 25,
+          "elapsedMs": 32.03517400000783,
+          "cpuMs": 35.348,
+          "p50Ms": 0.15930500000104075,
+          "p95Ms": 0.16717500000231666,
+          "checksum": 1000,
+          "seed": {
+            "elapsedMs": 0.16717500000231666,
+            "cpuMs": 0.168
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_notifications USING INDEX clank_platform_status_notifications_page_subscriber_sequence (page_id=? AND subscriber_id=? AND sequence>?)"
+          ]
+        }
+      ],
+      "medians": {
+        "baseline": {
+          "elapsedMs": 31.427651000009064,
+          "cpuMs": 32.413,
+          "p50Ms": 0.15522599999894737,
+          "p95Ms": 0.1621049999994284
+        },
+        "candidate": {
+          "elapsedMs": 31.81446000004871,
+          "cpuMs": 34.289,
+          "p50Ms": 0.15707499999916763,
+          "p95Ms": 0.16613499999948544
+        }
+      },
+      "elapsedReductionPercent": -1.2307919546374446
+    },
+    {
+      "name": "inbox-tail-populated",
+      "samples": [
+        {
+          "round": 1,
+          "variant": "baseline",
+          "iterations": 200,
+          "updates": 10000,
+          "notifications": 50000,
+          "elapsedMs": 370.87194400002045,
+          "cpuMs": 371.335,
+          "p50Ms": 1.7436889999989944,
+          "p95Ms": 2.4191090000022086,
+          "checksum": 1000,
+          "seed": {
+            "elapsedMs": 160.12608999999793,
+            "cpuMs": 173.993
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_notifications USING INTEGER PRIMARY KEY (rowid>?)"
+          ]
+        },
+        {
+          "round": 1,
+          "variant": "candidate",
+          "iterations": 200,
+          "updates": 10000,
+          "notifications": 50000,
+          "elapsedMs": 31.516078999997262,
+          "cpuMs": 32.358,
+          "p50Ms": 0.1549460000023828,
+          "p95Ms": 0.16139499999917462,
+          "checksum": 1000,
+          "seed": {
+            "elapsedMs": 182.4292490000007,
+            "cpuMs": 189.329
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_notifications USING INDEX clank_platform_status_notifications_page_subscriber_sequence (page_id=? AND subscriber_id=? AND sequence>?)"
+          ]
+        },
+        {
+          "round": 2,
+          "variant": "candidate",
+          "iterations": 200,
+          "updates": 10000,
+          "notifications": 50000,
+          "elapsedMs": 29.00521199992363,
+          "cpuMs": 29.277,
+          "p50Ms": 0.1421360000022105,
+          "p95Ms": 0.14682499999616994,
+          "checksum": 1000,
+          "seed": {
+            "elapsedMs": 175.93017900000268,
+            "cpuMs": 176.121
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_notifications USING INDEX clank_platform_status_notifications_page_subscriber_sequence (page_id=? AND subscriber_id=? AND sequence>?)"
+          ]
+        },
+        {
+          "round": 2,
+          "variant": "baseline",
+          "iterations": 200,
+          "updates": 10000,
+          "notifications": 50000,
+          "elapsedMs": 358.798535000009,
+          "cpuMs": 358.304,
+          "p50Ms": 1.737089999995078,
+          "p95Ms": 2.2234649999954854,
+          "checksum": 1000,
+          "seed": {
+            "elapsedMs": 154.70466899999883,
+            "cpuMs": 154.479
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_notifications USING INTEGER PRIMARY KEY (rowid>?)"
+          ]
+        },
+        {
+          "round": 3,
+          "variant": "baseline",
+          "iterations": 200,
+          "updates": 10000,
+          "notifications": 50000,
+          "elapsedMs": 342.2707260000607,
+          "cpuMs": 341.879,
+          "p50Ms": 1.671500999997079,
+          "p95Ms": 2.1335279999984778,
+          "checksum": 1000,
+          "seed": {
+            "elapsedMs": 159.63056499999948,
+            "cpuMs": 159.791
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_notifications USING INTEGER PRIMARY KEY (rowid>?)"
+          ]
+        },
+        {
+          "round": 3,
+          "variant": "candidate",
+          "iterations": 200,
+          "updates": 10000,
+          "notifications": 50000,
+          "elapsedMs": 31.23801700003969,
+          "cpuMs": 33.04,
+          "p50Ms": 0.15266600000177277,
+          "p95Ms": 0.16036500000336673,
+          "checksum": 1000,
+          "seed": {
+            "elapsedMs": 187.79777199999808,
+            "cpuMs": 187.564
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_notifications USING INDEX clank_platform_status_notifications_page_subscriber_sequence (page_id=? AND subscriber_id=? AND sequence>?)"
+          ]
+        },
+        {
+          "round": 4,
+          "variant": "candidate",
+          "iterations": 200,
+          "updates": 10000,
+          "notifications": 50000,
+          "elapsedMs": 31.062891999958083,
+          "cpuMs": 31.308,
+          "p50Ms": 0.15368599999783328,
+          "p95Ms": 0.15888600000471342,
+          "checksum": 1000,
+          "seed": {
+            "elapsedMs": 188.66021599999658,
+            "cpuMs": 188.839
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_notifications USING INDEX clank_platform_status_notifications_page_subscriber_sequence (page_id=? AND subscriber_id=? AND sequence>?)"
+          ]
+        },
+        {
+          "round": 4,
+          "variant": "baseline",
+          "iterations": 200,
+          "updates": 10000,
+          "notifications": 50000,
+          "elapsedMs": 344.28160799998295,
+          "cpuMs": 343.637,
+          "p50Ms": 1.6658910000041942,
+          "p95Ms": 2.1270080000031157,
+          "checksum": 1000,
+          "seed": {
+            "elapsedMs": 161.89436900000146,
+            "cpuMs": 161.747
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_notifications USING INTEGER PRIMARY KEY (rowid>?)"
+          ]
+        },
+        {
+          "round": 5,
+          "variant": "baseline",
+          "iterations": 200,
+          "updates": 10000,
+          "notifications": 50000,
+          "elapsedMs": 464.1797250000018,
+          "cpuMs": 465.901,
+          "p50Ms": 1.954262999999628,
+          "p95Ms": 5.023043000001053,
+          "checksum": 1000,
+          "seed": {
+            "elapsedMs": 148.8581600000034,
+            "cpuMs": 149.148
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_notifications USING INTEGER PRIMARY KEY (rowid>?)"
+          ]
+        },
+        {
+          "round": 5,
+          "variant": "candidate",
+          "iterations": 200,
+          "updates": 10000,
+          "notifications": 50000,
+          "elapsedMs": 30.392281000007642,
+          "cpuMs": 34.751,
+          "p50Ms": 0.14362500000424916,
+          "p95Ms": 0.17274499999621185,
+          "checksum": 1000,
+          "seed": {
+            "elapsedMs": 184.59367499999644,
+            "cpuMs": 184.269
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_notifications USING INDEX clank_platform_status_notifications_page_subscriber_sequence (page_id=? AND subscriber_id=? AND sequence>?)"
+          ]
+        }
+      ],
+      "medians": {
+        "baseline": {
+          "elapsedMs": 358.798535000009,
+          "cpuMs": 358.304,
+          "p50Ms": 1.737089999995078,
+          "p95Ms": 2.2234649999954854
+        },
+        "candidate": {
+          "elapsedMs": 31.062891999958083,
+          "cpuMs": 32.358,
+          "p50Ms": 0.15266600000177277,
+          "p95Ms": 0.16036500000336673
+        }
+      },
+      "elapsedReductionPercent": 91.34252540915271
+    },
+    {
+      "name": "inbox-empty-populated",
+      "samples": [
+        {
+          "round": 1,
+          "variant": "baseline",
+          "iterations": 200,
+          "updates": 10000,
+          "notifications": 50000,
+          "elapsedMs": 409.4894619999541,
+          "cpuMs": 420.72,
+          "p50Ms": 1.9784030000009807,
+          "p95Ms": 2.7227099999945494,
+          "checksum": 0,
+          "seed": {
+            "elapsedMs": 154.76985699999932,
+            "cpuMs": 154.843
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_notifications USING INTEGER PRIMARY KEY (rowid>?)"
+          ]
+        },
+        {
+          "round": 1,
+          "variant": "candidate",
+          "iterations": 200,
+          "updates": 10000,
+          "notifications": 50000,
+          "elapsedMs": 30.546666999951412,
+          "cpuMs": 31.739,
+          "p50Ms": 0.1498460000002524,
+          "p95Ms": 0.15763600000354927,
+          "checksum": 0,
+          "seed": {
+            "elapsedMs": 194.43766699999833,
+            "cpuMs": 200.565
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_notifications USING INDEX clank_platform_status_notifications_page_subscriber_sequence (page_id=? AND subscriber_id=? AND sequence>?)"
+          ]
+        },
+        {
+          "round": 2,
+          "variant": "candidate",
+          "iterations": 200,
+          "updates": 10000,
+          "notifications": 50000,
+          "elapsedMs": 29.36165099999198,
+          "cpuMs": 29.318,
+          "p50Ms": 0.14698499999940395,
+          "p95Ms": 0.15212599999358645,
+          "checksum": 0,
+          "seed": {
+            "elapsedMs": 189.70577600000252,
+            "cpuMs": 192.862
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_notifications USING INDEX clank_platform_status_notifications_page_subscriber_sequence (page_id=? AND subscriber_id=? AND sequence>?)"
+          ]
+        },
+        {
+          "round": 2,
+          "variant": "baseline",
+          "iterations": 200,
+          "updates": 10000,
+          "notifications": 50000,
+          "elapsedMs": 347.8941249999916,
+          "cpuMs": 348.524,
+          "p50Ms": 1.6546409999937168,
+          "p95Ms": 2.211905999996816,
+          "checksum": 0,
+          "seed": {
+            "elapsedMs": 155.19560400000046,
+            "cpuMs": 154.648
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_notifications USING INTEGER PRIMARY KEY (rowid>?)"
+          ]
+        },
+        {
+          "round": 3,
+          "variant": "baseline",
+          "iterations": 200,
+          "updates": 10000,
+          "notifications": 50000,
+          "elapsedMs": 344.75885400001425,
+          "cpuMs": 343.86,
+          "p50Ms": 1.6746409999977914,
+          "p95Ms": 2.0166409999947064,
+          "checksum": 0,
+          "seed": {
+            "elapsedMs": 147.94131699999707,
+            "cpuMs": 147.992
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_notifications USING INTEGER PRIMARY KEY (rowid>?)"
+          ]
+        },
+        {
+          "round": 3,
+          "variant": "candidate",
+          "iterations": 200,
+          "updates": 10000,
+          "notifications": 50000,
+          "elapsedMs": 27.428107999963686,
+          "cpuMs": 27.496,
+          "p50Ms": 0.13337600000522798,
+          "p95Ms": 0.13934599999629427,
+          "checksum": 0,
+          "seed": {
+            "elapsedMs": 169.1647959999973,
+            "cpuMs": 169.211
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_notifications USING INDEX clank_platform_status_notifications_page_subscriber_sequence (page_id=? AND subscriber_id=? AND sequence>?)"
+          ]
+        },
+        {
+          "round": 4,
+          "variant": "candidate",
+          "iterations": 200,
+          "updates": 10000,
+          "notifications": 50000,
+          "elapsedMs": 26.778017000004184,
+          "cpuMs": 26.74,
+          "p50Ms": 0.13312600000062957,
+          "p95Ms": 0.13881599999876926,
+          "checksum": 0,
+          "seed": {
+            "elapsedMs": 174.48576099999627,
+            "cpuMs": 174.299
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_notifications USING INDEX clank_platform_status_notifications_page_subscriber_sequence (page_id=? AND subscriber_id=? AND sequence>?)"
+          ]
+        },
+        {
+          "round": 4,
+          "variant": "baseline",
+          "iterations": 200,
+          "updates": 10000,
+          "notifications": 50000,
+          "elapsedMs": 333.30817799995566,
+          "cpuMs": 332.676,
+          "p50Ms": 1.5984230000030948,
+          "p95Ms": 2.0339999999996508,
+          "checksum": 0,
+          "seed": {
+            "elapsedMs": 145.63309400000435,
+            "cpuMs": 145.736
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_notifications USING INTEGER PRIMARY KEY (rowid>?)"
+          ]
+        },
+        {
+          "round": 5,
+          "variant": "baseline",
+          "iterations": 200,
+          "updates": 10000,
+          "notifications": 50000,
+          "elapsedMs": 343.8777500000142,
+          "cpuMs": 343.504,
+          "p50Ms": 1.6647919999959413,
+          "p95Ms": 2.1244080000033136,
+          "checksum": 0,
+          "seed": {
+            "elapsedMs": 149.96908800000529,
+            "cpuMs": 149.892
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_notifications USING INTEGER PRIMARY KEY (rowid>?)"
+          ]
+        },
+        {
+          "round": 5,
+          "variant": "candidate",
+          "iterations": 200,
+          "updates": 10000,
+          "notifications": 50000,
+          "elapsedMs": 27.81727000004321,
+          "cpuMs": 27.879,
+          "p50Ms": 0.13281600000482285,
+          "p95Ms": 0.13773599999694852,
+          "checksum": 0,
+          "seed": {
+            "elapsedMs": 170.60759400000097,
+            "cpuMs": 170.657
+          },
+          "queryPlan": [
+            "SEARCH clank_platform_status_notifications USING INDEX clank_platform_status_notifications_page_subscriber_sequence (page_id=? AND subscriber_id=? AND sequence>?)"
+          ]
+        }
+      ],
+      "medians": {
+        "baseline": {
+          "elapsedMs": 344.75885400001425,
+          "cpuMs": 343.86,
+          "p50Ms": 1.6647919999959413,
+          "p95Ms": 2.1244080000033136
+        },
+        "candidate": {
+          "elapsedMs": 27.81727000004321,
+          "cpuMs": 27.879,
+          "p50Ms": 0.13337600000522798,
+          "p95Ms": 0.13934599999629427
+        }
+      },
+      "elapsedReductionPercent": 91.93138343590095
+    }
+  ],
+  "distributions": {
+    "baseline": {
+      "directory": "/var/tmp/clank-performance-followup-baseline-20261016/dist",
+      "sha256": {
+        "local-search": "1adcb96dcafb640db5bf2e3e7e1894d95b9748f08994d6baa884f7d82af92ec5",
+        "platform-status-pages": "d4564f77dee273ff4d60efe101327379a9c680dbec1882bf69929d9325e45188"
+      }
+    },
+    "candidate": {
+      "directory": "/var/tmp/clank-performance-review-20261016/dist",
+      "sha256": {
+        "local-search": "f64dd58ae804be6b4ffeb2d108663b1f7d978bd77a886ab858cd6b10ce264ae7",
+        "platform-status-pages": "ed0a68c9bb554fa8af590680fc3d529eb0ea5ccafd391b217214d3685713bc1b"
+      }
+    }
+  }
+}
