@@ -11,11 +11,12 @@ export function isDashboardQuotaRead(sql) {
     || /SELECT created_by FROM clank_platform_organizations WHERE id = \?/u.test(sql);
 }
 
-export async function dashboardFixture(openPlatform, { projects = 10, metricBuckets = 0 } = {}) {
+export async function dashboardFixture(openPlatform, { projects = 10, metricBuckets = 0, securityPolicy = false } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'clank-dashboard-performance-'));
   const origin = 'http://127.0.0.1:4200';
   const runtime = await openPlatform({ dataDirectory: directory, publicUrl: origin, signup: true,
-    backups: { intervalMs: false }, ingress: { domainRecheckIntervalMs: false } });
+    backups: { intervalMs: false }, ingress: { domainRecheckIntervalMs: false },
+    ...(securityPolicy ? { organizationSecurity: { operatorRecovery: true } } : {}) });
   const database = new DatabaseSync(join(directory, 'control.sqlite'));
   try {
     const response = await runtime.handle(new Request(`${origin}/__clank/auth/register`, {
@@ -43,10 +44,18 @@ export async function dashboardFixture(openPlatform, { projects = 10, metricBuck
       }
     }
     database.exec('COMMIT');
+    if (securityPolicy) {
+      // Synthetic policy data, like the projects and metrics above. Requests
+      // still pass through the native session, membership and policy controller.
+      database.prepare(`INSERT INTO clank_organization_security_policies
+        (organization_id,version,requirements,updated_at,factor_at,sso_at) VALUES (?,1,?,?,NULL,NULL)`)
+        .run(organizationId, JSON.stringify({ factor: 'none', ssoOnly: false,
+          sessionMaxAgeMs: 3600000, enrollmentGraceMs: 0 }), now);
+    }
     return {
       runtime, database, user, cookie, organizationId, metricTime: now,
-      async read() {
-        const response = await runtime.handle(new Request(`${origin}/api/dashboard`, { headers: { cookie } }));
+      async read(endpoint = 'dashboard') {
+        const response = await runtime.handle(new Request(`${origin}/api/${endpoint}`, { headers: { cookie } }));
         assert.equal(response.status, 200);
         return response.json();
       },
@@ -70,9 +79,13 @@ async function main() {
     if (!match) throw new Error(`Invalid option: ${argument}`);
     return [match[1], match[2]];
   }));
-  if (Object.keys(options).some((key) => !['dist', 'projects', 'metricBuckets', 'iterations', 'warmup'].includes(key))) {
-    throw new Error('Expected --dist, --projects, --metricBuckets, --iterations, or --warmup.');
+  if (Object.keys(options).some((key) => !['dist', 'projects', 'metricBuckets', 'iterations', 'warmup', 'endpoint', 'securityPolicy'].includes(key))) {
+    throw new Error('Expected --dist, --projects, --metricBuckets, --iterations, --warmup, --endpoint, or --securityPolicy.');
   }
+  const endpoint = options.endpoint ?? 'dashboard';
+  if (!['dashboard', 'projects'].includes(endpoint)) throw new Error('Invalid endpoint.');
+  if (options.securityPolicy !== undefined && !['true', 'false'].includes(options.securityPolicy)) throw new Error('Invalid securityPolicy.');
+  const securityPolicy = options.securityPolicy === 'true';
   const bounded = (key, fallback, minimum, maximum) => {
     const value = Number(options[key] ?? fallback);
     if (!Number.isSafeInteger(value) || value < minimum || value > maximum) throw new Error(`Invalid ${key}.`);
@@ -84,7 +97,12 @@ async function main() {
   const warmup = bounded('warmup', 50, 0, 1000);
   const dist = resolve(options.dist ?? 'dist');
   const { openPlatform } = await import(pathToFileURL(join(dist, 'platform.js')));
-  const fixture = await dashboardFixture(openPlatform, { projects, metricBuckets });
+  const fixture = await dashboardFixture(openPlatform, { projects, metricBuckets, securityPolicy });
+  const read = () => fixture.read(endpoint);
+  const check = value => {
+    assert.equal(value.projects.length, projects);
+    if (endpoint === 'dashboard') assert.equal(value.totals.requests, projects * metricBuckets * 60);
+  };
   // Keep the synthetic 24-hour window stable when a trial crosses a minute.
   // Timings use performance.now()/cpuUsage(), which remain real clocks.
   const wallClock = Date.now;
@@ -100,23 +118,21 @@ async function main() {
       return original.apply(this, parameters);
     };
     let sample;
-    try { sample = await fixture.read(); }
+    try { sample = await read(); }
     finally { Object.assign(prototype, originals); }
-    assert.equal(sample.projects.length, projects);
-    assert.equal(sample.totals.requests, projects * metricBuckets * 60);
-    for (let index = 0; index < warmup; index++) await fixture.read();
+    check(sample);
+    for (let index = 0; index < warmup; index++) await read();
     const durations = [], cpu = process.cpuUsage(), started = performance.now();
     for (let index = 0; index < iterations; index++) {
       const before = performance.now();
-      const value = await fixture.read();
-      assert.equal(value.projects.length, projects);
-      assert.equal(value.totals.requests, projects * metricBuckets * 60);
+      const value = await read();
+      check(value);
       durations.push(performance.now() - before);
     }
     const elapsedMs = performance.now() - started, used = process.cpuUsage(cpu);
     durations.sort((left, right) => left - right);
     const percentile = (fraction) => durations[Math.min(durations.length - 1, Math.floor(fraction * durations.length))];
-    console.log(JSON.stringify({ dist, node: process.version, projects, metricBuckets, iterations, warmup,
+    console.log(JSON.stringify({ dist, node: process.version, endpoint, securityPolicy, projects, metricBuckets, iterations, warmup,
       quotaReadsPerRequest: quotaReads, totalReadsPerRequest: totalReads, elapsedMs,
       cpuMs: (used.user + used.system) / 1000, p50Ms: percentile(0.5), p95Ms: percentile(0.95),
       rssBytes: process.memoryUsage().rss }, null, 2));

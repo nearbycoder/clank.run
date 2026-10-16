@@ -1,0 +1,25 @@
+{
+  "baseCommit": "56f09f94ad32cc5c5720ea7f6ef6ff4ae6d0fa10",
+  "localTests": {
+    "node22.16.0": {
+      "passed": 46,
+      "failed": 0
+    },
+    "node26.10.0": {
+      "passed": 46,
+      "failed": 0
+    }
+  },
+  "baselineControl": {
+    "expected": "failure",
+    "policyProbes": 46,
+    "maximum": 2
+  },
+  "securityAudit": "passed",
+  "runtimeChanges": "Response-local workspace policy lookup on GET /api/projects and /api/dashboard only",
+  "sha256": {
+    "src/platform.ts": "4c70553d69ccf9bdbec0d464c4dc77bb9ab301874551aba4340422d883b86616",
+    "tests/platform-query-performance.test.mjs": "c593d95a1096434f7e569c34d5a943d64deede47491847ee91bd50eaca8dba8c",
+    "scripts/load/performance-platform.mjs": "b22734d7f466015c626db8724f28660250cc2a70d57550de485b1cc1795e62ee"
+  }
+}

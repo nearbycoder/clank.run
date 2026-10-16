@@ -1072,6 +1072,15 @@ function organizationPolicyAllows(internal: SQLiteInternal, principal: TokenPrin
   try {authorizeOrganizationPolicy(internal, principal, organizationId); return true;}
   catch (error) {if (error instanceof AuthError && [401,403].includes(error.status)) return false; throw error;}
 }
+// Only for synchronous read-only response construction. Each new response gets
+// fresh authority; never retain this lookup across an await or use it for writes.
+function organizationPolicyLookup(internal: SQLiteInternal, principal: TokenPrincipal): (organizationId: string) => boolean {
+  const decisions = new Map<string, boolean>();
+  return organizationId => {
+    if (!decisions.has(organizationId)) decisions.set(organizationId, organizationPolicyAllows(internal, principal, organizationId));
+    return decisions.get(organizationId)!;
+  };
+}
 function machineProjectPermission(operation: string, method: string): ProjectPermission {
   if(method==='GET' && (['', 'usage', 'releases', 'backups', 'costs', 'costs/history', 'point-in-time', 'shadow'].includes(operation) || /^shadow\/[A-Za-z0-9_-]{1,128}$/u.test(operation))) return 'read';
   if(method==='POST' && operation==='point-in-time/mcp') return 'read';
@@ -10395,7 +10404,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         if (principal.projectId && !principal.permissions.includes("read")) {
           throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "This token cannot read project metadata.");
         }
-        const rows = visibleProjectRows(storage.internal, principal.userId, principal.projectId).filter(row=>!row.organization_id || organizationPolicyAllows(storage.internal,principal,String(row.organization_id)));
+        const policyAllows = organizationPolicyLookup(storage.internal, principal);
+        const rows = visibleProjectRows(storage.internal, principal.userId, principal.projectId).filter(row=>!row.organization_id || policyAllows(String(row.organization_id)));
         const usageRows = storage.internal.prepare(`SELECT organization_id, count(*) AS count
           FROM clank_platform_projects WHERE organization_id IN (
             SELECT organization_id FROM clank_platform_memberships WHERE user_id = ?
@@ -10408,7 +10418,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
             options.maxArtifactBytes,
             limits.metricRetentionDays,
           ),
-          usage: Object.fromEntries(usageRows.filter(row=>organizationPolicyAllows(storage.internal,principal,String(row.organization_id))).map((row) => [String(row.organization_id), Number(row.count)])),
+          usage: Object.fromEntries(usageRows.filter(row=>policyAllows(String(row.organization_id))).map((row) => [String(row.organization_id), Number(row.count)])),
         });
       }
       if (url.pathname === "/api/projects" && request.method === "POST") {
@@ -17416,6 +17426,7 @@ function dashboardPayload(
   }>,
 ): Record<string, unknown> {
   const quotaSnapshot: PlatformQuotaSnapshot = { accounts: new Map(), workspaces: new Map() };
+  const policyAllows = organizationPolicyLookup(internal, principal);
   const accountLimits = accountQuotas(internal, principal.userId, defaults, quotaSnapshot);
   const organizationRows = principal.organizationId
     ? internal.prepare(`SELECT o.id, o.name, o.slug, o.created_at, o.updated_at, m.role,
@@ -17428,7 +17439,7 @@ function dashboardPayload(
       FROM clank_platform_organizations o
       JOIN clank_platform_memberships m ON m.organization_id = o.id
       WHERE m.user_id = ? ORDER BY o.created_at`).all(principal.userId);
-  const organizations = organizationRows.filter(row=>organizationPolicyAllows(internal,principal,String(row.id))).map((row) => {
+  const organizations = organizationRows.filter(row=>policyAllows(String(row.id))).map((row) => {
     const effective = workspaceQuotas(internal, String(row.id), defaults, quotaSnapshot);
     return {
       id: String(row.id),
@@ -17440,7 +17451,7 @@ function dashboardPayload(
       usage: { projects: Number(row.project_count), limit: effective.projectsPerOrganization },
     };
   });
-  const projectRows = visibleProjectRows(internal, principal.userId, principal.projectId).filter(row=>!row.organization_id || organizationPolicyAllows(internal,principal,String(row.organization_id)));
+  const projectRows = visibleProjectRows(internal, principal.userId, principal.projectId).filter(row=>!row.organization_id || policyAllows(String(row.organization_id)));
   const projectUsage = dashboardProjectUsage(internal, projectRows.map((row) => String(row.id)));
   const projects = projectRows.map((source) => {
     const project = projectRow(source);

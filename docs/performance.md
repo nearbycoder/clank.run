@@ -181,6 +181,15 @@ tenant isolation after cache eviction, dynamic query dependencies, and rendering
 permutations. See the [October 3 measurements](https://github.com/nearbycoder/clank.run/tree/main/reports/performance-2026-10-03)
 for browser layout timings, HTTP load, live-delivery/recovery checks, controls, and reproduction.
 
+Project lists and dashboards resolve each distinct workspace security policy once during
+synchronous response construction. Results expire when that response is built; subsequent
+requests read current policy, session assurance, and membership again. In a 100-project
+workspace with a configured policy, project-list database reads fall from 1,423 to 23 and
+dashboard reads from 1,530 to 130. The regression exercises policy tightening, passkey
+reauthentication, assurance changes, membership removal, and session revocation through the
+native controller. See the [October 16 measurements](https://github.com/nearbycoder/clank.run/tree/main/reports/performance-2026-10-16)
+for alternating local A/B trials, including populated metric histories.
+
 ## Complete application load budgets
 
 `clank workbench performance page.har budgets.json --baseline=before.har --json`
