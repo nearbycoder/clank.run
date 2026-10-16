@@ -190,6 +190,18 @@ reauthentication, assurance changes, membership removal, and session revocation 
 native controller. See the [October 16 measurements](https://github.com/nearbycoder/clank.run/tree/main/reports/performance-2026-10-16)
 for alternating local A/B trials, including populated metric histories.
 
+Local search builds each replacement index in one pass before atomically swapping it in.
+Prefix search lazily sorts the current vocabulary once, then uses binary search to visit only
+the matching bounded expansion range. Term additions, removals, replacement, and snapshot restore
+invalidate that vocabulary; rejected replacements retain the prior index and its limits.
+
+Public status updates use a page/ownership/sequence index, and subscriber notifications use a
+page/account/sequence index. Public history and sparse or empty inbox pages avoid scanning
+unrelated retained history. Existing catalogs gain these indexes when their controller reopens.
+See the [October 16 follow-up measurements](https://github.com/nearbycoder/clank.run/tree/main/reports/performance-2026-10-16-followup)
+for cold/warm prefix controls, replacement work counts, actual query plans, and populated-history
+comparisons, including the additional index maintenance cost.
+
 ## Complete application load budgets
 
 `clank workbench performance page.har budgets.json --baseline=before.har --json`

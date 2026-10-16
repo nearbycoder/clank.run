@@ -46,6 +46,26 @@ readers must stay quiet even after eviction. The measured time includes writes, 
 and synchronous subscriber delivery. Authentication, network latency, and persistent disk I/O
 are outside this workload; ownership and revocation are covered by the regression suite.
 
+## Local search and public status history
+
+```sh
+node scripts/load/performance-search-status.mjs --baseline=/path/to/baseline/dist \
+  --candidate=dist --rounds=5 --output=/tmp/search-status-ab.json
+```
+
+Build both distributions with the same Node version first. Nine profiles alternate A/B order
+with fresh indexes or in-memory SQLite catalogs per invocation. Search replacements use 1,000
+or 10,000 documents; prefix profiles distinguish the first query after a replacement from repeated
+selective queries on unchanged vocabulary. Cross-variant results, ranking, scores and highlights
+must agree. The generator excludes setup and warmup from the operation timings.
+
+Status profiles use native controller reads with synthetic fixture authority. Large catalogs have
+10,000 updates and 50,000 notifications, mostly for another page/account; small controls contain only
+the selected page's history. Public history, the last inbox page and an empty inbox are checked for
+ordered, isolated results and correct cursors. Reports include query plans and separate bulk-seeding
+costs to expose added index maintenance. They measure controller/database work, without HTTP,
+browser rendering, authentication latency, disk durability, or production traffic.
+
 ## A/B HTTP workloads
 
 ```sh

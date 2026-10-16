@@ -22,6 +22,38 @@ async function setup(t,options={}){
 const create=f=>f.controller.create(project,f.authority,{configuration:f.configuration,operationId:'status_native_create_01'});
 const review=(f,page,publication={kind:'page'})=>f.controller.preview(project,f.authority,{expectedVersion:page.version,publication});
 const commit=(f,preview,operationId='status_native_publish_01')=>f.controller.publish(project,f.authority,{expectedVersion:preview.expectedVersion,previewId:preview.id,previewDigest:preview.digest,operationId});
+test('status history and inbox reads use scoped ordered indexes, including upgrades of an existing catalog',async t=>{
+ const f=await setup(t);commit(f,review(f,create(f)));
+ const otherProject='project_status_other_01';f.sql.prepare('INSERT INTO clank_platform_projects VALUES(?)').run(otherProject);
+ f.controller.create(otherProject,f.authority,{configuration:{...f.configuration,slug:'other-health'},operationId:'status_other_create_01'});
+ const page=f.sql.prepare('SELECT id,scope FROM clank_platform_status_pages WHERE project_id=?').get(project),other=f.sql.prepare('SELECT id,scope FROM clank_platform_status_pages WHERE project_id=?').get(otherProject);
+ const actor={...f.authority,userId:'subscriber_index_target'},otherActor={...actor,userId:'subscriber_index_other'},at=Date.now();
+ f.sql.transaction(()=>{
+  const update=f.sql.prepare('INSERT INTO clank_platform_status_updates(id,page_id,scope,copy,incident_id,incident_version,published_at) VALUES(?,?,?,?,NULL,NULL,?)');
+  for(let i=0;i<335;i++){const target=i<35;update.run('status_index_update_'+i,target?page.id:other.id,i<30?page.scope:i<35?'retired-private-scope':other.scope,JSON.stringify(copy),at);}
+  const notify=f.sql.prepare('INSERT INTO clank_platform_status_notifications(id,page_id,subscriber_id,update_id,record,created_at) VALUES(?,?,?,?,?,?)');
+  const put=(sequence,pageId,subscriberId,updateId)=>{const record={id:'status_index_notification_'+sequence,update:{...copy,id:updateId,publishedAt:at},createdAt:at};notify.run(record.id,pageId,subscriberId,updateId,JSON.stringify(record),at);};
+  for(let i=0;i<25;i++)put(i,page.id,actor.userId,'status_index_update_'+i);
+  for(let i=0;i<25;i++)put(25+i,page.id,otherActor.userId,'status_index_update_'+i);
+  for(let i=0;i<25;i++)put(50+i,other.id,actor.userId,'status_index_update_'+(35+i));
+  for(let i=0;i<1000;i++)put(75+i,other.id,'foreign_subscriber_'+Math.floor(i/300),'status_index_update_'+(35+i%300));
+ });
+ const before=f.controller.publicPage(f.configuration.slug).updates,inbox=f.controller.notifications(f.configuration.slug,actor,0);
+ assert.deepEqual(before.map(value=>value.id),Array.from({length:20},(_,i)=>'status_index_update_'+(29-i)));
+ assert.deepEqual(inbox.notifications.map(value=>value.id),Array.from({length:20},(_,i)=>'status_index_notification_'+i));assert.ok(inbox.next);
+ const remainder=f.controller.notifications(f.configuration.slug,actor,inbox.next);assert.equal(remainder.notifications.length,5);assert.equal(remainder.next,null);
+ assert.equal(f.controller.notifications(f.configuration.slug,otherActor,0).notifications[0].id,'status_index_notification_25');
+ // Simulate the pre-index catalog. Reopening must add indexes without rewriting history.
+ f.sql.exec('DROP INDEX IF EXISTS clank_platform_status_updates_page_scope_sequence; DROP INDEX IF EXISTS clank_platform_status_notifications_page_subscriber_sequence');
+ const next=await f.fresh(),native=new DatabaseSync(f.databasePath,{readOnly:true});
+ try{
+ const reads=[],prototype=Object.getPrototypeOf(native.prepare('SELECT 1')),original=prototype.all;
+ const spy=t.mock.method(prototype,'all',function(...parameters){if(/FROM clank_platform_status_(?:updates|notifications) WHERE/u.test(this.sourceSQL))reads.push({sql:this.sourceSQL,parameters});return original.apply(this,parameters);});
+ try{assert.deepEqual(next.publicPage(f.configuration.slug).updates,before);assert.deepEqual(next.notifications(f.configuration.slug,actor,0),inbox);}finally{spy.mock.restore();}
+ assert.equal(reads.length,2);
+ for(const read of reads){const name=read.sql.includes('status_updates')?'updates_page_scope_sequence':'notifications_page_subscriber_sequence';const plan=native.prepare('EXPLAIN QUERY PLAN '+read.sql).all(...read.parameters).map(row=>row.detail).join('\n');assert.match(plan,new RegExp('SEARCH .* USING INDEX clank_platform_status_'+name));assert.doesNotMatch(plan,/SCAN|USE TEMP B-TREE/u);}
+ }finally{native.close();}
+});
 test('native public projections expose only dedicated public labels, copy and independent public update identifiers',async t=>{
  const f=await setup(t),created=create(f);assert.equal(created.published,false);assert.throws(()=>f.controller.publicPage(f.configuration.slug),e=>e.status===404);
  const page=commit(f,review(f,created));assert.equal(page.version,2);

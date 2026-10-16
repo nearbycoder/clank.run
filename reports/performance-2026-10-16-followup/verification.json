@@ -1,0 +1,34 @@
+{
+  "baseCommit": "a25395c72e2044dbc25dc95459337f6b699aaef9",
+  "localTests": {
+    "node22.16.0": {
+      "passed": 68,
+      "failed": 0
+    },
+    "node26.10.0": {
+      "passed": 68,
+      "failed": 0
+    }
+  },
+  "baselineControls": {
+    "failedAsExpected": 3,
+    "replacementNormalizedTokens": 800,
+    "replacementBudget": 400,
+    "prefixTermsExamined": 951,
+    "prefixBudget": 51,
+    "publicUpdatePlan": "SCAN clank_platform_status_updates"
+  },
+  "benchmark": {
+    "profiles": 9,
+    "trials": 90
+  },
+  "sha256": {
+    "src/local-search.ts": "0433e23a38006cb30a6bc8e9c555defc7ee4f7fa0194cbd39f1afeb2b50bfa16",
+    "src/platform-status-pages.ts": "7633b85f67486109de7e45dd4c032a77e82e54d7605099a47c88f4fb83234e0d",
+    "tests/local-search.test.mjs": "e20fc7a65d5134adf229180c60058a46ddc3302d82cc4cd3e03b6f7d1e63047f",
+    "tests/customer-status-controller.test.mjs": "8b9b1a2c12efa928fd742efb09493c7ea72206373c800ba6d5971b0b8da133a7",
+    "scripts/load/performance-search-status.mjs": "f15b7d483322128ed2e30f282aa8fddc91efd9c48ff6f59721ec958241c4481e"
+  },
+  "securityAudit": "passed",
+  "compiledNode26HashesMatchBenchmark": true
+}
