@@ -1,0 +1,29 @@
+✖ project discovery checks each workspace policy once per response and rechecks changed authority on the next request (836.629218ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 955.856864
+
+✖ failing tests:
+
+test at tests/platform-query-performance.test.mjs:32:1
+✖ project discovery checks each workspace policy once per response and rechecks changed authority on the next request (836.629218ms)
+  AssertionError [ERR_ASSERTION]: Policy reads scale with distinct visible workspaces, not project count.
+  
+  46 !== 2
+  
+      at check (file:///var/tmp/clank-performance-review-20261016/tests/platform-query-performance.test.mjs:59:14)
+      at async TestContext.<anonymous> (file:///var/tmp/clank-performance-review-20261016/tests/platform-query-performance.test.mjs:68:3)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 46,
+    expected: 2,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

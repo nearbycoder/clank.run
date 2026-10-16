@@ -106,6 +106,20 @@ at fixture creation so metric buckets cannot age out between trials; elapsed and
 real. Regression tests use the ordinary clock. This isolates dashboard computation;
 it does not measure HTTP transport, admission, running application processes, or production capacity.
 
+Use `--endpoint=projects` to measure project enumeration with the same fixture, and
+`--securityPolicy=true` to enable the native organization security controller and seed one
+synthetic workspace policy (`factor: none`, no SSO restriction, one-hour session maximum).
+The registered session and membership still pass through native policy authorization. These
+options expose repeated workspace checks when many projects share one workspace. For example:
+
+```sh
+node scripts/load/performance-platform.mjs --dist=dist --endpoint=projects \
+  --projects=100 --securityPolicy=true --iterations=500 --warmup=50
+```
+
+Policy enrollment on the first instrumented request, fixture setup, and warmup are outside timing.
+Project-list trials validate project counts; dashboard trials also validate metric totals.
+
 ## Server rendering microbenchmark
 
 ```sh

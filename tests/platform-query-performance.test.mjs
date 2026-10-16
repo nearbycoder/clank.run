@@ -1,8 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
+import { join } from 'node:path';
 import { openPlatform } from '../dist/platform.js';
 import { dashboardFixture } from '../scripts/load/performance-platform.mjs';
+import { fixture as policyFixture } from './fixtures/platform-environment-fixture.mjs';
+import { step } from './fixtures/customer-status-passkey.mjs';
 
 const origin = 'http://127.0.0.1:4200';
 
@@ -24,6 +28,59 @@ async function projectList(fixture, path, headers = { cookie: fixture.cookie }) 
   assert.equal(response.status, 200);
   return response.json();
 }
+
+test('project discovery checks each workspace policy once per response and rechecks changed authority on the next request', async t => {
+  const f = await policyFixture(t, false, { organizationSecurity: { operatorRecovery: true } });
+  const database = new DatabaseSync(join(f.options.dataDirectory, 'control.sqlite'));
+  t.after(() => database.close());
+  const member = await f.account('performance-policy-member@example.test');
+  const organizationId = f.development.organizationId, now = Date.now();
+  database.prepare("INSERT INTO clank_platform_memberships VALUES(?,?,'viewer',?,?)")
+    .run(organizationId, member.user.id, now, now);
+  const personal = (await f.call('/api/projects', { name: 'Personal', slug: 'performance-policy-personal' }, 201, undefined, member)).project;
+  const insert = database.prepare(`INSERT INTO clank_platform_projects
+    (id,owner_id,organization_id,name,slug,port,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)`);
+  for (let index = 0; index < 40; index++) {
+    const id = `policy-performance-${index}`;
+    insert.run(id, f.owner.user.id, organizationId, id, id, 16000 + index, now, now);
+  }
+  await step(f, database, f.owner);
+  const path = `/api/organizations/${organizationId}/security-policy`;
+  const requirements = factor => ({ factor, ssoOnly: false, sessionMaxAgeMs: 3600000, enrollmentGraceMs: 0 });
+  await f.call(path, { requirements: requirements('none'), expectedVersion: 0, operationId: 'performance_policy_initial_01' });
+  const check = async (admitted, workspaces = 2) => {
+    for (const endpoint of ['/api/projects', '/api/dashboard']) {
+      const { result, reads } = await inspectReads(t, database, async () => {
+        const response = await f.handle(new Request(origin + endpoint, { headers: { cookie: member.cookie } }));
+        assert.equal(response.status, 200);
+        return response.json();
+      });
+      const policies = reads.filter(({ sql }) => sql === 'SELECT 1 FROM clank_organization_security_policies WHERE organization_id=?');
+      assert.equal(policies.length, workspaces, 'Policy reads scale with distinct visible workspaces, not project count.');
+      assert.equal(new Set(policies.map(({ parameters }) => parameters[0])).size, workspaces);
+      assert.equal(result.projects.length, admitted ? 44 : 1);
+      assert.ok(result.projects.some(project => project.id === personal.id));
+      assert.equal(result.projects.some(project => project.organizationId === organizationId), admitted);
+      if (endpoint === '/api/projects') assert.equal(Object.hasOwn(result.usage, organizationId), admitted);
+      else assert.equal(result.organizations.some(organization => organization.id === organizationId), admitted);
+    }
+  };
+  await check(true);
+  await f.call(path, { requirements: requirements('passkey'), expectedVersion: 1, operationId: 'performance_policy_tighten_02' });
+  await check(false);
+  await step(f, database, member);
+  await check(true);
+  database.prepare("UPDATE clank_auth_sessions SET authentication_method='password' WHERE user_id=?").run(member.user.id);
+  await check(false);
+  await step(f, database, member);
+  await check(true);
+  database.prepare('DELETE FROM clank_platform_memberships WHERE organization_id=? AND user_id=?').run(organizationId, member.user.id);
+  await check(false, 1);
+  database.prepare('DELETE FROM clank_auth_sessions WHERE user_id=?').run(member.user.id);
+  for (const endpoint of ['/api/projects', '/api/dashboard']) {
+    assert.equal((await f.handle(new Request(origin + endpoint, { headers: { cookie: member.cookie } }))).status, 401);
+  }
+});
 
 test('project enumeration reads current roles and overrides once, including scoped preview inheritance', async t => {
   const fixture = await dashboardFixture(openPlatform, { projects: 10 });
