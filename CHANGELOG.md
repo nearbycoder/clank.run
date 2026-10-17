@@ -4,6 +4,17 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Add eight local-search capabilities: any-term matching, field filters, ID scopes, exclusions,
+  phrase matching, title/ID ordering, immutable document lookup and explicit clearing.
+- Add six virtual-collection controls: index/key scrolling, key focus, constant-time key lookup,
+  visible-range inspection and runtime overscan updates.
+- Add six application-performance diagnostics: load-time limits, per-resource limits, baseline
+  regression policies, duplicate-resource summaries, origin totals and resource-type totals.
+  Support optional policies through the existing workbench budget file.
+- Build replacement search indexes once and cache prefix vocabularies. Copy streamed body chunks
+  into bounded slabs; fail size limits without waiting for producer cancellation. Bound untrusted
+  HAR URLs, MIME metadata and diagnostic output.
+
 - Add opt-in organization security policy review, versioned changes, persistent enrollment grace and independent last-administrator recovery. Fence current browser, CLI and MCP authority, including held requests, exact refresh retries and direct reviewed actions.
 - Add reviewed customer status pages with expiring public health, dedicated incident copy, native account subscriber inboxes, version-fenced custom-domain ownership/routing and exact transactional publication receipts. Private operational payloads are never copied automatically.
 

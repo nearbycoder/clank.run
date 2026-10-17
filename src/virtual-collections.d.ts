@@ -1,4 +1,6 @@
 export type VirtualKey = string | number;
+export type VirtualAlignment = "start" | "center" | "end" | "nearest";
+export interface VirtualRange { readonly start: number; readonly end: number; }
 export interface VirtualItem<Value> { readonly key: VirtualKey; readonly index: number; readonly value: Value; readonly offset: number; }
 export interface VirtualSnapshot<Value> { readonly items: readonly VirtualItem<Value>[]; readonly count: number; readonly totalHeight: number; readonly scrollTop: number; readonly activeIndex: number; readonly rowHeight: number; }
 export interface VirtualCollection<Value> {
@@ -6,6 +8,12 @@ export interface VirtualCollection<Value> {
   setItems(items: readonly Value[]): void;
   setViewport(scrollTop: number, height: number): void;
   focus(index: number): void;
+  indexOf(key: VirtualKey): number;
+  scrollToIndex(index: number, align?: VirtualAlignment): void;
+  scrollToKey(key: VirtualKey, align?: VirtualAlignment): boolean;
+  focusKey(key: VirtualKey): boolean;
+  visibleRange(): VirtualRange;
+  setOverscan(rows: number): void;
   navigate(key: string): boolean;
   subscribe(listener: () => void): () => void;
 }

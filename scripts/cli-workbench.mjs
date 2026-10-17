@@ -56,7 +56,12 @@ export async function runWorkbench(args) {
     case "performance": {
       const [capture, budgets] = values;
       required(capture && budgets, "Usage: clank workbench performance <page.har> <budgets.json> [--baseline=<page.har>] [--page=<id>] [--json]");
-      result = assessApplicationPerformance(await jsonFile(capture), await jsonFile(budgets), { pageId: option("page"), ...(option("baseline") ? { baseline: await jsonFile(option("baseline")) } : {}) });
+      const policy = await jsonFile(budgets);
+      result = assessApplicationPerformance(await jsonFile(capture), policy, {
+        pageId: option("page"), maxLoadTimeMs: policy.maxLoadTimeMs,
+        resourceBudgets: policy.resourceBudgets, regressionBudgets: policy.regressionBudgets,
+        ...(option("baseline") ? { baseline: await jsonFile(option("baseline")) } : {}),
+      });
       break;
     }
     case "resilience":
