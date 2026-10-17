@@ -231,3 +231,35 @@ the same ID selects both captures. Requests initiated after load are excluded, w
 started before load count in full. The capture must finish those responses before export.
 The report cannot detect requests omitted by the capture tool; keep network recording enabled
 throughout navigation. Add this command to an application's CI after its browser capture step.
+
+Optional budget-file policies add load-time, exact-resource, and baseline-growth checks:
+
+```json
+{
+  "requests": 30, "bodyBytes": 300000, "javascriptBytes": 100000, "cssBytes": 30000,
+  "maxLoadTimeMs": 2000,
+  "resourceBudgets": [
+    { "resource": "https://app.example.invalid/app.js", "maxBytes": 80000, "maxRequests": 1 }
+  ],
+  "regressionBudgets": { "javascriptBytes": { "absolute": 1000, "percent": 5 } }
+}
+```
+
+A resource rule matches the exact canonical origin/path, without credentials, query or fragment.
+Missing resources measure zero. At most 100 unique resource rules are accepted. Regression
+policies require `--baseline`; absolute and percentage growth limits both apply when provided.
+Decreases pass a nonnegative growth limit. A percentage policy with a zero baseline permits no
+growth. Timing is the HAR page's completed `onLoad`, so compare equivalent environments.
+
+The programmatic `assessApplicationPerformance(har, budgets, options)` API from
+`@clank.run/framework/application-performance` accepts the same optional policies in `options`.
+Reports include `loadTimeMs`, `policyChecks`, `duplicateResources` (repeated canonical resources),
+`origins` (request and byte totals by origin), and `resourceTypes` (HTML, JavaScript, CSS, image,
+font, media and other totals). Query variants can legitimately repeat; duplicate reporting is
+advisory unless a resource request budget forbids it. Every policy check participates in `ok`.
+No new summary retains request headers, credentials, query strings, fragments or bodies.
+
+Untrusted captures are limited to 50,000 entries, 4,096 characters per URL and 8 MiB of selected
+URL characters. MIME strings are bounded to 256 characters and diagnostics to 100 distinct
+issues plus an omission notice. Entries predating navigation invalidate the capture instead of
+counting unrelated traffic. Unknown, cached and failed measurements continue to fail closed.

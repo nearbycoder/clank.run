@@ -3,11 +3,22 @@ export interface SearchHighlight { text: string; match: boolean; }
 export interface LocalSearchHit { id: string; title: readonly SearchHighlight[]; snippet: readonly SearchHighlight[]; score: number; }
 export interface LocalSearchResult { hits: readonly LocalSearchHit[]; total: number; truncated: boolean; }
 export interface LocalSearchOptions { maxDocuments?: number; maxBytes?: number; }
+export interface LocalSearchSettings {
+  offset?: number; limit?: number; prefix?: boolean;
+  mode?: "all" | "any";
+  field?: "all" | "title" | "body";
+  ids?: readonly string[];
+  exclude?: string;
+  phrase?: boolean;
+  sort?: "relevance" | "title" | "id";
+}
 export interface LocalSearchIndex {
   upsert(document: SearchDocument): void;
   remove(id: string): boolean;
   replace(documents: readonly SearchDocument[]): void;
-  search(query: string, options?: { offset?: number; limit?: number; prefix?: boolean }): LocalSearchResult;
+  search(query: string, options?: LocalSearchSettings): LocalSearchResult;
+  get(id: string): Readonly<SearchDocument> | undefined;
+  clear(): void;
   serialize(): string;
   restore(serialized: string): void;
   readonly size: number;
@@ -20,16 +31,24 @@ const encoder = new TextEncoder();
 export function createLocalSearchIndex(options: LocalSearchOptions = {}): LocalSearchIndex {
   const maximum = options.maxDocuments ?? 10000, byteLimit = options.maxBytes ?? 16 * 1024 * 1024;
   if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > 50000 || !Number.isSafeInteger(byteLimit) || byteLimit < 1024 || byteLimit > 64 * 1024 * 1024) throw new TypeError("Invalid local search limits.");
-  let documents = new Map<string, { document: SearchDocument; bytes: number; terms: Map<string, number> }>();
-  let inverted = new Map<string, Map<string, number>>(), bytes = 0;
+  type Frequency = { title: number; body: number };
+  type Entry = { document: SearchDocument; bytes: number; terms: Map<string, Frequency> };
+  let documents = new Map<string, Entry>();
+  let inverted = new Map<string, Map<string, Frequency>>(), bytes = 0;
   let vocabulary: string[] | undefined;
+  const weight = (frequency: Frequency, field: string) => field === "title" ? frequency.title * 5 : field === "body" ? frequency.body : frequency.title * 5 + frequency.body;
+  const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
   const prepare = (input: SearchDocument) => {
     if (!input || typeof input.id !== "string" || !input.id || input.id.length > 200 || typeof input.title !== "string" || !input.title.trim() || input.title.length > 300 || typeof input.body !== "string" || input.body.length > 32768) throw new TypeError("A search document needs an ID, title, and bounded body.");
     const document = { id: input.id, title: input.title, body: input.body }, size = encoder.encode(JSON.stringify(document)).length;
-    const terms = new Map<string, number>();
-    for (const [text, weight] of [[document.title, 5], [document.body, 1]] as const) for (const token of tokens(text)) terms.set(token.term, (terms.get(token.term) ?? 0) + weight);
+    const terms = new Map<string, Frequency>();
+    for (const field of ["title", "body"] as const) for (const token of tokens(document[field])) {
+      let frequency = terms.get(token.term);
+      if (!frequency) { frequency = { title: 0, body: 0 }; terms.set(token.term, frequency); }
+      frequency[field]++;
+    }
     // Charge both text and index entries so highly varied input remains bounded.
-    return { document: Object.freeze(document), bytes: size + [...terms.keys()].reduce((sum, term) => sum + encoder.encode(term).length + 64, 0), terms };
+    return { document: Object.freeze(document), bytes: size + [...terms.keys()].reduce((sum, term) => sum + encoder.encode(term).length + 96, 0), terms };
   };
   const remove = (id: string) => {
     const existing = documents.get(id); if (!existing) return false;
@@ -56,19 +75,21 @@ export function createLocalSearchIndex(options: LocalSearchOptions = {}): LocalS
   };
   const index: LocalSearchIndex = {
     upsert, remove, get size() { return documents.size; },
+    get(id) { return documents.get(id)?.document; },
+    clear() { documents.clear(); inverted.clear(); bytes = 0; vocabulary = undefined; },
     replace(inputs) {
       if (!Array.isArray(inputs) || inputs.length > maximum || new Set(inputs.map(input => input?.id)).size !== inputs.length) throw new TypeError("Replacement documents must have unique IDs within the limit.");
-      const nextDocuments = new Map<string, ReturnType<typeof prepare>>(), nextInverted = new Map<string, Map<string, number>>();
+      const nextDocuments = new Map<string, Entry>(), nextInverted = new Map<string, Map<string, Frequency>>();
       let nextBytes = 0;
       for (const input of inputs) {
         const entry = prepare(input);
         if (nextDocuments.has(entry.document.id)) throw new TypeError("Replacement documents must have unique IDs within the limit.");
         if (nextDocuments.size >= maximum || nextBytes + entry.bytes > byteLimit) throw new RangeError("Local search capacity exceeded.");
         nextDocuments.set(entry.document.id, entry); nextBytes += entry.bytes;
-        for (const [term, weight] of entry.terms) {
-          let entries = nextInverted.get(term);
-          if (!entries) { entries = new Map(); nextInverted.set(term, entries); }
-          entries.set(entry.document.id, weight);
+        for (const [term, frequency] of entry.terms) {
+          let postings = nextInverted.get(term);
+          if (!postings) { postings = new Map(); nextInverted.set(term, postings); }
+          postings.set(entry.document.id, frequency);
         }
       }
       documents = nextDocuments; inverted = nextInverted; bytes = nextBytes; vocabulary = undefined;
@@ -79,18 +100,25 @@ export function createLocalSearchIndex(options: LocalSearchOptions = {}): LocalS
       if (terms.length > 12) throw new TypeError("Search at most 12 distinct terms.");
       const offset = settings.offset ?? 0, limit = settings.limit ?? 20;
       if (!Number.isSafeInteger(offset) || offset < 0 || offset > maximum || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new RangeError("Invalid search page.");
-      if (!terms.length) return { hits: [], total: 0, truncated: false };
+      const mode = settings.mode ?? "all", field = settings.field ?? "all", sort = settings.sort ?? "relevance";
+      if (!["all", "any"].includes(mode) || !["all", "title", "body"].includes(field) || !["relevance", "title", "id"].includes(sort)
+        || (settings.prefix !== undefined && typeof settings.prefix !== "boolean") || (settings.phrase !== undefined && typeof settings.phrase !== "boolean")) throw new TypeError("Invalid local search settings.");
+      if (settings.ids !== undefined && (!Array.isArray(settings.ids) || settings.ids.length > maximum || settings.ids.some(id => typeof id !== "string" || !id || id.length > 200))) throw new TypeError("Invalid search ID scope.");
+      if (settings.exclude !== undefined && (typeof settings.exclude !== "string" || settings.exclude.length > 200)) throw new TypeError("Invalid search exclusions.");
+      const excluded = [...new Set(tokens(settings.exclude ?? "").map(token => token.term))];
+      if (excluded.length > 12) throw new TypeError("Exclude at most 12 distinct terms.");
+      const scope = settings.ids === undefined ? undefined : new Set(settings.ids);
+      if (!terms.length || scope?.size === 0) return { hits: [], total: 0, truncated: false };
       let candidates: Map<string, number> | undefined, truncated = false;
       const matched = new Set<string>();
       for (let position = 0; position < terms.length; position++) {
         const term = terms[position]!, expansions = [term];
-        if (settings.prefix !== false && position === terms.length - 1) {
-          const sorted = vocabulary ??= [...inverted.keys()].sort();
-          let low = 0, high = sorted.length;
-          while (low < high) { const middle = (low + high) >>> 1; if (sorted[middle]! < term) low = middle + 1; else high = middle; }
-          for (let at = low; at < sorted.length; at++) {
-            const known = sorted[at]!;
-            if (!known.startsWith(term)) break;
+        if (settings.prefix !== false && !settings.phrase && position === terms.length - 1) {
+          vocabulary ??= [...inverted.keys()].sort();
+          let low = 0, high = vocabulary.length;
+          while (low < high) { const middle = (low + high) >>> 1; if (vocabulary[middle]! < term) low = middle + 1; else high = middle; }
+          for (let at = low; at < vocabulary.length && vocabulary[at]!.startsWith(term); at++) {
+            const known = vocabulary[at]!;
             if (known !== term) { if (expansions.length >= 50) { truncated = true; break; } expansions.push(known); }
           }
         }
@@ -98,13 +126,29 @@ export function createLocalSearchIndex(options: LocalSearchOptions = {}): LocalS
         for (const expanded of expansions) {
           matched.add(expanded); const postings = inverted.get(expanded); if (!postings) continue;
           const rarity = 1 + Math.log((documents.size + 1) / (postings.size + 1));
-          for (const [id, weight] of postings) matches.set(id, (matches.get(id) ?? 0) + rarity * (1 + Math.log(weight)) * (expanded === term ? 1 : 0.7));
+          for (const [id, frequency] of postings) {
+            const value = weight(frequency, field);
+            if (value > 0 && (!scope || scope.has(id))) matches.set(id, (matches.get(id) ?? 0) + rarity * (1 + Math.log(value)) * (expanded === term ? 1 : 0.7));
+          }
         }
         if (!candidates) candidates = matches;
+        else if (mode === "any") for (const [id, score] of matches) candidates.set(id, (candidates.get(id) ?? 0) + score);
         else for (const [id, score] of candidates) { if (matches.has(id)) candidates.set(id, score + matches.get(id)!); else candidates.delete(id); }
-        if (!candidates.size) break;
+        if (!candidates.size && mode === "all") break;
       }
-      const ranked = [...(candidates ?? [])].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+      const phrase = settings.phrase ? tokens(query).map(token => token.term).join(" ") : undefined;
+      for (const [id] of candidates ?? []) {
+        const entry = documents.get(id)!;
+        if (excluded.some(term => { const frequency = entry.terms.get(term); return frequency && weight(frequency, field) > 0; })) { candidates!.delete(id); continue; }
+        if (phrase !== undefined && !(field === "all" ? [entry.document.title, entry.document.body] : [entry.document[field as "title" | "body"]])
+          .some(text => (` ${tokens(text).map(token => token.term).join(" ")} `).includes(` ${phrase} `))) candidates!.delete(id);
+      }
+      const titles = sort === "title" ? new Map([...(candidates ?? [])].map(([id]) => [id, normalize(documents.get(id)!.document.title)])) : undefined;
+      const ranked = [...(candidates ?? [])].sort((a, b) => {
+        if (sort === "relevance") return b[1] - a[1] || a[0].localeCompare(b[0]);
+        const titleOrder = titles ? compare(titles.get(a[0])!, titles.get(b[0])!) : 0;
+        return titleOrder || compare(a[0], b[0]);
+      });
       return { total: ranked.length, truncated, hits: ranked.slice(offset, offset + limit).map(([id, score]) => { const document = documents.get(id)!.document; return { id, score, title: highlight(document.title, matched, false), snippet: highlight(document.body, matched, true) }; }) };
     },
     serialize() { return JSON.stringify({ version: 1, documents: [...documents.values()].map(entry => entry.document) }); },

@@ -30,3 +30,39 @@ test('subscribers detach and duplicate/unbounded keys fail before publication',(
  assert.throws(()=>createVirtualCollection({items:[1],key:()=>NaN,rowHeight:40}));
  assert.throws(()=>createVirtualCollection({items:[],key:x=>x,rowHeight:0}));
 });
+
+test('scroll alignment positions the requested row independently of focus',()=>{
+ const model=create();model.setViewport(0,400);
+ for(const [align,expected] of [['start',4000],['center',3820],['end',3640]]){
+  model.scrollToIndex(100,align);assert.equal(model.snapshot().scrollTop,expected);assert.equal(model.snapshot().activeIndex,0);
+ }
+ model.scrollToIndex(100,'nearest');assert.equal(model.snapshot().scrollTop,3640);
+ model.scrollToIndex(0,'center');assert.equal(model.snapshot().scrollTop,0);
+ model.scrollToIndex(100000,'start');assert.equal(model.snapshot().scrollTop,399600);
+});
+test('stable key lookup, scrolling and focus track reorders and missing keys',()=>{
+ const model=create();model.setViewport(0,400);assert.equal(model.indexOf(100),100);
+ assert.equal(model.scrollToKey(100,'start'),true);assert.equal(model.snapshot().scrollTop,4000);
+ assert.equal(model.focusKey(103),true);assert.equal(model.snapshot().activeIndex,103);
+ model.setItems([...items].reverse());assert.equal(model.indexOf(103),9896);assert.equal(model.snapshot().activeIndex,9896);
+ const before=model.snapshot();assert.equal(model.focusKey('absent'),false);assert.equal(model.scrollToKey('absent'),false);assert.deepEqual(model.snapshot(),before);
+ assert.equal(model.indexOf('absent'),-1);
+});
+test('visible ranges are end-exclusive and exclude overscan and retained focus',()=>{
+ const model=create();model.setViewport(4005,400);assert.deepEqual(model.visibleRange(),{start:100,end:111});assert.ok(Object.isFrozen(model.visibleRange()));
+ model.setViewport(4000,400);assert.deepEqual(model.visibleRange(),{start:100,end:110});
+ model.setViewport(4000,0);assert.deepEqual(model.visibleRange(),{start:100,end:100});
+ model.setItems([]);assert.deepEqual(model.visibleRange(),{start:0,end:0});
+});
+test('runtime overscan changes notify once and remain bounded',()=>{
+ const model=create();model.setViewport(4000,400);let calls=0;const stop=model.subscribe(()=>calls++);
+ model.setOverscan(0);assert.equal(calls,1);assert.equal(model.snapshot().items.length,11);
+ model.setOverscan(0);assert.equal(calls,1);model.setOverscan(50);assert.equal(model.snapshot().items.length,111);
+ for(const rows of [-1,51,NaN,1.5])assert.throws(()=>model.setOverscan(rows));assert.equal(calls,2);stop();
+});
+test('invalid scroll targets fail atomically and empty collections accept valid targets',()=>{
+ const model=create();model.setViewport(0,400);const before=model.snapshot();
+ for(const index of [NaN,Infinity,1.5])assert.throws(()=>model.scrollToIndex(index));
+ assert.throws(()=>model.scrollToIndex(2,'bad'));assert.throws(()=>model.scrollToKey('missing','bad'));assert.deepEqual(model.snapshot(),before);
+ model.setItems([]);model.scrollToIndex(0);assert.equal(model.scrollToKey(0),false);assert.equal(model.focusKey(0),false);
+});

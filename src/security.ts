@@ -254,7 +254,7 @@ export async function readRequestBytes(request: Request, maxBytes: number): Prom
   validateByteLimit(maxBytes);
   const declared = Number(request.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > maxBytes) {
-    await request.body?.cancel("body limit exceeded").catch(() => undefined);
+    void request.body?.cancel("body limit exceeded").catch(() => undefined);
     throw new RequestInputError(413, "PAYLOAD_TOO_LARGE", `Request body exceeds ${maxBytes} bytes.`);
   }
   if (!request.body) return new Uint8Array();
@@ -270,7 +270,7 @@ export async function readResponseBytes(response: Response, maxBytes: number): P
   validateByteLimit(maxBytes);
   const declared = Number(response.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > maxBytes) {
-    await response.body?.cancel("body limit exceeded").catch(() => undefined);
+    void response.body?.cancel("body limit exceeded").catch(() => undefined);
     throw new ResponseBodyLimitError(maxBytes);
   }
   if (!response.body) return new Uint8Array();
@@ -310,16 +310,33 @@ async function readBoundedBytes(
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   let length = 0;
+  let slab: Uint8Array | undefined, used = 0;
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      length += value.byteLength;
-      if (length > maxBytes) {
-        await reader.cancel("body limit exceeded").catch(() => undefined);
+      if (!(value instanceof Uint8Array)) {
+        void reader.cancel("invalid body chunk").catch(() => undefined);
+        throw new TypeError("Body streams must contain byte chunks.");
+      }
+      if (value.byteLength > maxBytes - length) {
+        // A producer's cancellation hook cannot delay the limit error.
+        void reader.cancel("body limit exceeded").catch(() => undefined);
         throw tooLarge();
       }
-      chunks.push(value);
+      // Copy into bounded slabs. Retaining one view per chunk lets tiny chunks
+      // retain arbitrarily large backing buffers and unbounded array overhead.
+      let at = 0;
+      while (at < value.byteLength) {
+        if (!slab || used === slab.byteLength) {
+          const capacity = Math.max(256, value.byteLength - at, (slab?.byteLength ?? 0) * 2);
+          slab = new Uint8Array(Math.min(64 * 1024, maxBytes - length, capacity));
+          chunks.push(slab); used = 0;
+        }
+        const count = Math.min(slab.byteLength - used, value.byteLength - at);
+        slab.set(value.subarray(at, at + count), used);
+        at += count; used += count; length += count;
+      }
     }
   } finally {
     reader.releaseLock();
@@ -327,8 +344,9 @@ async function readBoundedBytes(
   const bytes = new Uint8Array(length);
   let offset = 0;
   for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
+    const count = Math.min(chunk.byteLength, length - offset);
+    bytes.set(chunk.subarray(0, count), offset);
+    offset += count;
   }
   return bytes;
 }

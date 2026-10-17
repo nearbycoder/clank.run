@@ -1,4 +1,6 @@
 export type VirtualKey = string | number;
+export type VirtualAlignment = "start" | "center" | "end" | "nearest";
+export interface VirtualRange { readonly start: number; readonly end: number; }
 export interface VirtualItem<Value> { readonly key: VirtualKey; readonly index: number; readonly value: Value; readonly offset: number; }
 export interface VirtualSnapshot<Value> { readonly items: readonly VirtualItem<Value>[]; readonly count: number; readonly totalHeight: number; readonly scrollTop: number; readonly activeIndex: number; readonly rowHeight: number; }
 export interface VirtualCollection<Value> {
@@ -6,15 +8,23 @@ export interface VirtualCollection<Value> {
   setItems(items: readonly Value[]): void;
   setViewport(scrollTop: number, height: number): void;
   focus(index: number): void;
+  indexOf(key: VirtualKey): number;
+  scrollToIndex(index: number, align?: VirtualAlignment): void;
+  scrollToKey(key: VirtualKey, align?: VirtualAlignment): boolean;
+  focusKey(key: VirtualKey): boolean;
+  visibleRange(): VirtualRange;
+  setOverscan(rows: number): void;
   navigate(key: string): boolean;
   subscribe(listener: () => void): () => void;
 }
 
 /** Fixed-height virtualization with stable-key scroll anchoring and a retained focused row. */
 export function createVirtualCollection<Value>(options: { items: readonly Value[]; key: (value: Value) => VirtualKey; rowHeight: number; overscan?: number }): VirtualCollection<Value> {
-  const size = options.rowHeight, overscan = options.overscan ?? 3;
+  const size = options.rowHeight;
+  let overscan = options.overscan ?? 3;
   if (!Number.isFinite(size) || size < 16 || size > 1000 || !Number.isSafeInteger(overscan) || overscan < 0 || overscan > 50 || typeof options.key !== "function") throw new TypeError("Virtual rows need a height of 16–1000 and overscan of 0–50.");
   let items: readonly Value[] = [], keys: VirtualKey[] = [];
+  let positions = new Map<VirtualKey, number>();
   let top = 0, height = 0, active = -1;
   const listeners = new Set<() => void>();
   const clamp = () => { top = Math.max(0,Math.min(top,Math.max(0,items.length*size-height))); };
@@ -34,7 +44,7 @@ export function createVirtualCollection<Value>(options: { items: readonly Value[
       const anchor = keys[Math.floor(top/size)], remainder = top%size, focused=keys[active];
       if (anchor !== undefined && nextMap.has(anchor)) top=nextMap.get(anchor)!*size+remainder;
       active = focused !== undefined && nextMap.has(focused) ? nextMap.get(focused)! : Math.min(Math.max(active,0),next.length-1);
-      items=[...next];keys=nextKeys;clamp();emit();
+      items=[...next];keys=nextKeys;positions=nextMap;clamp();emit();
     },
     setViewport(scrollTop, viewportHeight) {
       if (!Number.isFinite(scrollTop) || !Number.isFinite(viewportHeight) || viewportHeight<0 || viewportHeight>100_000) throw new TypeError("Invalid virtual viewport.");
@@ -44,6 +54,32 @@ export function createVirtualCollection<Value>(options: { items: readonly Value[
       if(!Number.isSafeInteger(index))throw new TypeError("Invalid virtual focus index.");
       active=items.length?Math.max(0,Math.min(items.length-1,index)):-1;
       if(active>=0){if(active*size<top)top=active*size;else if((active+1)*size>top+height)top=(active+1)*size-height;clamp();}emit();
+    },
+    indexOf(key) { return positions.get(key) ?? -1; },
+    scrollToIndex(index, align = "nearest") {
+      if (!Number.isSafeInteger(index) || !["start", "center", "end", "nearest"].includes(align)) throw new TypeError("Invalid virtual scroll target.");
+      if (!items.length) return;
+      const target = Math.max(0, Math.min(items.length - 1, index)), start = target * size, old = top;
+      if (align === "start") top = start;
+      else if (align === "center") top = start - (height - size) / 2;
+      else if (align === "end") top = start + size - height;
+      else if (start < top) top = start;
+      else if (start + size > top + height) top = start + size - height;
+      clamp(); if (old !== top) emit();
+    },
+    scrollToKey(key, align = "nearest") {
+      if (!["start", "center", "end", "nearest"].includes(align)) throw new TypeError("Invalid virtual scroll alignment.");
+      const index = positions.get(key); if (index === undefined) return false;
+      collection.scrollToIndex(index, align); return true;
+    },
+    focusKey(key) { const index = positions.get(key); if (index === undefined) return false; collection.focus(index); return true; },
+    visibleRange() {
+      const start = Math.min(items.length, Math.floor(top / size));
+      return Object.freeze({ start, end: height === 0 ? start : Math.min(items.length, Math.ceil((top + height) / size)) });
+    },
+    setOverscan(rows) {
+      if (!Number.isSafeInteger(rows) || rows < 0 || rows > 50) throw new TypeError("Virtual overscan must be 0–50 rows.");
+      if (rows !== overscan) { overscan = rows; emit(); }
     },
     navigate(key) {
       const step=Math.max(1,Math.floor(height/size));

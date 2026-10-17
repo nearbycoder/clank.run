@@ -52,3 +52,64 @@ test('replacement retains document limits and the prior index if an input getter
  const inputs=[{id:'first',title:'First',get body(){if(inputs.length===1)inputs.push({id:'second',title:'Second',body:''});return '';}}];
  assert.throws(()=>index.replace(inputs),/capacity/);assert.equal(index.size,1);assert.equal(index.search('orig').hits[0].id,'old');
 });
+
+
+const advancedDocuments = [
+ {id:'a',title:'Café launch',body:'blue green blue'},
+ {id:'b',title:'Blue notes',body:'cafe red'},
+ {id:'c',title:'Garden',body:'green blue'},
+ {id:'d',title:'Blue blue',body:'green'},
+];
+const advancedIndex = () => {const index=createLocalSearchIndex();index.replace(advancedDocuments);return index;};
+test('search any mode unions terms including a missing first term',()=>{
+ const index=advancedIndex();assert.equal(index.search('missing garden',{mode:'any',prefix:false}).total,1);
+ assert.equal(index.search('cafe garden',{mode:'any',prefix:false}).total,3);
+ assert.equal(index.search('cafe garden',{prefix:false}).total,0);
+});
+test('field filters honor term frequency and prefix completions in the selected field',()=>{
+ const index=advancedIndex();assert.deepEqual(index.search('cafe',{field:'title'}).hits.map(x=>x.id),['a']);
+ assert.deepEqual(index.search('caf',{field:'body'}).hits.map(x=>x.id),['b']);
+ assert.equal(index.search('blue green',{field:'title'}).total,0);
+ assert.equal(index.search('blue green',{field:'body',prefix:false}).total,2);
+});
+test('ID scopes filter before pagination and exclusions use the selected field',()=>{
+ const index=advancedIndex();assert.deepEqual(index.search('blue',{ids:['c'],offset:0,limit:1}).hits.map(x=>x.id),['c']);
+ assert.equal(index.search('blue',{ids:[]}).total,0);
+ assert.equal(index.search('blue',{exclude:'green'}).total,1);
+ assert.equal(index.search('blue',{field:'title',exclude:'green'}).total,2);
+ assert.deepEqual(index.search('blue',{ids:['a','b'],exclude:'red'}).hits.map(x=>x.id),['a']);
+});
+test('phrase search preserves repetitions, token boundaries, order and field boundaries',()=>{
+ const index=advancedIndex();assert.deepEqual(index.search('blue green',{phrase:true}).hits.map(x=>x.id),['a']);
+ assert.deepEqual(index.search('green blue',{phrase:true}).hits.map(x=>x.id),['a','c']);
+ assert.deepEqual(index.search('blue blue',{phrase:true}).hits.map(x=>x.id),['d']);
+ assert.equal(index.search('caf',{phrase:true}).total,0);
+ assert.equal(index.search('launch blue',{phrase:true}).total,0,'phrases never cross title/body');
+ assert.equal(index.search('café LAUNCH',{phrase:true,field:'title'}).total,1);
+});
+test('explicit title and ID ordering are deterministic with pagination',()=>{
+ const index=advancedIndex();assert.deepEqual(index.search('blue',{sort:'id'}).hits.map(x=>x.id),['a','b','c','d']);
+ assert.deepEqual(index.search('blue',{sort:'title',offset:1,limit:2}).hits.map(x=>x.id),['b','a']);
+});
+test('lookup is immutable and clear removes all documents, postings and snapshot content',()=>{
+ const index=advancedIndex();const original=index.get('a');assert.equal(original.title,'Café launch');
+ assert.throws(()=>{original.title='corrupted';},TypeError);assert.equal(index.get('missing'),undefined);
+ index.search('bl');index.clear();assert.equal(index.size,0);assert.equal(index.get('a'),undefined);assert.equal(index.search('bl').total,0);
+ assert.deepEqual(JSON.parse(index.serialize()),{version:1,documents:[]});index.replace(advancedDocuments);assert.equal(index.search('blue').total,4);
+});
+test('invalid advanced options fail without changing the index',()=>{
+ const index=advancedIndex();for(const settings of [{mode:'oops'},{field:'oops'},{sort:'oops'},{prefix:1},{phrase:1},{ids:'a'},{ids:[null]},{exclude:9},{exclude:Array.from({length:13},(_,i)=>`term${i}`).join(' ')}])assert.throws(()=>index.search('blue',settings));
+ assert.equal(index.size,4);assert.equal(index.search('blue').total,4);
+});
+test('cached prefix vocabulary invalidates on every kind of mutation',()=>{
+ const index=createLocalSearchIndex();index.upsert({id:'a',title:'prefix1',body:''});assert.equal(index.search('pre').total,1);
+ index.upsert({id:'b',title:'prefix2',body:''});assert.equal(index.search('pre').total,2);
+ index.remove('a');assert.deepEqual(index.search('pre').hits.map(x=>x.id),['b']);
+ index.upsert({id:'b',title:'different',body:''});assert.equal(index.search('pre').total,0);
+ index.restore(JSON.stringify({version:1,documents:[{id:'c',title:'prefix3',body:''}]}));assert.equal(index.search('pre').total,1);
+});
+test('failed capacity replacement preserves documents, postings and prefix cache atomically',()=>{
+ const index=createLocalSearchIndex({maxBytes:1024});index.upsert({id:'a',title:'prefix',body:''});index.search('pre');
+ assert.throws(()=>index.replace([{id:'b',title:'new',body:'x'.repeat(2000)}]),/capacity/);
+ assert.equal(index.get('a').title,'prefix');assert.equal(index.search('pre').total,1);assert.equal(index.search('new').total,0);
+});

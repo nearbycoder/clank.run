@@ -1016,6 +1016,21 @@ paginate larger results. A row height of 16–1000 pixels and overscan of 0–50
 bounded. The mounted view uses ResizeObserver with a window-resize fallback, and disposal removes
 listeners, observers, row resources, and its own viewport without changing the parent container.
 
+### Programmatic large-list navigation
+
+The returned `model` supports `scrollToIndex(index, align)` and `scrollToKey(key, align)`.
+Alignment is `"start"`, `"center"`, `"end"`, or `"nearest"` (default), clamped to the scroll
+bounds. Scrolling preserves active focus. Missing keys return `false`; index targets clamp
+to the collection's bounds. `focusKey(key)` changes active focus and scrolls it into view.
+`indexOf(key)` uses a retained key map and returns `-1` for a missing key, including after
+reorders. Keys retain their string/number distinction.
+
+`visibleRange()` returns immutable `{ start, end }` indexes with an exclusive `end`, excluding
+overscan and offscreen retained focus. A zero-height viewport has an empty range.
+`setOverscan(rows)` changes the mounted margin at runtime (0–50 rows) and notifies subscribers
+only when the setting changes. Existing mounted lists automatically render these model updates.
+
+
 ## Saved filter and table views
 
 `@clank.run/framework/saved-views` provides account-owned saved filters, sort order, and visible
@@ -1083,6 +1098,32 @@ index. Snapshots contain document content: keep them in the correct account's st
 them on logout. The search panel debounces input, announces results, supports arrow-key navigation
 and Escape, and clears pending work on disposal. It does not independently synchronize server data.
 
+
+### Advanced local search
+
+`search(query, settings)` also supports `mode: "any"` to union terms, `field: "title"`
+or `"body"` to restrict matching, `ids: [...]` to scope results before pagination, and
+`exclude: "archived draft"` to omit exact normalized tokens from the selected field.
+Defaults remain AND matching across both fields. ID scoping is a presentation filter;
+only index records that the user may read.
+
+```ts
+const results = index.search("café launch", {
+  field: "title", phrase: true, sort: "title", ids: visibleRecordIds,
+});
+```
+
+`phrase: true` requires consecutive normalized tokens in one field, preserving word order
+and repeated words. Punctuation separates tokens; phrases never cross title/body boundaries.
+Phrase searches disable final-word prefix expansion. `sort` accepts `"relevance"` (default),
+`"title"` (accent-folded ascending), or `"id"` (ascending). Explicit title/ID sorting uses code-point order; default relevance
+sorting retains its existing locale-based ID tie-breaker.
+`get(id)` returns an immutable indexed document or `undefined`. `clear()` releases every
+record and posting; call it when changing accounts or logging out. The existing snapshot
+format is unchanged. Field frequencies now charge 96 bytes per distinct indexed term, plus
+term bytes and document text, so near-capacity indexes may need a larger explicit byte limit.
+Replacement is atomic and tokenizes each document once. Prefix lookup caches the sorted
+vocabulary and invalidates it on mutations.
 
 ## Searchable command palette
 

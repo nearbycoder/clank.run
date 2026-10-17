@@ -1,0 +1,35 @@
+{
+  "focused": {
+    "passed": 36,
+    "failed": 0
+  },
+  "fullSuite": {
+    "tests": 4019,
+    "passed": 3975,
+    "failed": 1,
+    "skipped": 43,
+    "coverage": {
+      "lines": 92.04,
+      "branches": 82.51,
+      "functions": 90.29
+    }
+  },
+  "supervisorFailoverIsolatedReruns": {
+    "passed": 2,
+    "failed": 0,
+    "coverageEnabledRerunPassed": true
+  },
+  "sourceTypes": "no new diagnostics",
+  "packedConsumerTypeFixtures": 55,
+  "securityAudit": "passed",
+  "documentationAudit": "passed",
+  "performanceBudgets": "passed",
+  "packagedConformance": "passed",
+  "limitation": "Full aggregate check failed on an intermittent supervisor SIGKILL failover HTTP 502; isolated reruns passed; cause unresolved.",
+  "postRebase": {
+    "upstream": "2a13854",
+    "focusedPassed": 40,
+    "focusedFailed": 0,
+    "fullAggregateRerun": false
+  }
+}
