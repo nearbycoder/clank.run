@@ -11,6 +11,13 @@ export interface ServeOptions {
     headersTimeout?: number;
     requestTimeout?: number;
     keepAliveTimeout?: number;
+    /**
+     * Compress text-like responses (HTML, CSS, JS, JSON, XML, SVG, plain text)
+     * with Brotli or gzip when the client accepts it. Off by default so an app
+     * behind another proxy does not compress twice; enable it on the listener
+     * that faces clients directly.
+     */
+    compression?: boolean;
     onError?: (error: unknown) => void;
 }
 export interface ServerHandle {

@@ -14,6 +14,13 @@ export interface ServeOptions {
   headersTimeout?: number;
   requestTimeout?: number;
   keepAliveTimeout?: number;
+  /**
+   * Compress text-like responses (HTML, CSS, JS, JSON, XML, SVG, plain text)
+   * with Brotli or gzip when the client accepts it. Off by default so an app
+   * behind another proxy does not compress twice; enable it on the listener
+   * that faces clients directly.
+   */
+  compression?: boolean;
   onError?: (error: unknown) => void;
 }
 
@@ -44,6 +51,8 @@ interface OutgoingResponse {
   statusCode: number;
   statusMessage: string;
   setHeader(name: string, value: string | string[]): void;
+  getHeader(name: string): string | string[] | number | undefined;
+  removeHeader(name: string): void;
   write(chunk: Uint8Array): boolean;
   end(chunk?: string | Uint8Array): void;
   once(event: "close" | "drain", listener: () => void): void;
@@ -75,7 +84,12 @@ export async function serve(app: FetchApplication | ((request: Request) => Respo
   const moduleName = "node:http";
   const { createServer } = await import(moduleName) as unknown as HttpModule;
   const cryptoName = "node:crypto", timersName = "node:timers";
-  const [crypto, timers] = await Promise.all([import(cryptoName), import(timersName)]);
+  const zlibName = "node:zlib";
+  const [crypto, timers, zlib] = await Promise.all([
+    import(cryptoName),
+    import(timersName),
+    options.compression ? import(zlibName) as Promise<unknown> as Promise<ZlibModule> : Promise.resolve(undefined),
+  ]);
   const digest = (value: string): string => crypto.createHash("sha256").update(value).digest("hex");
   const hostname = options.hostname ?? "127.0.0.1";
   const requestedPort = options.port ?? 3000;
@@ -100,7 +114,7 @@ export async function serve(app: FetchApplication | ((request: Request) => Respo
     requestTimeout: options.requestTimeout ?? 30_000,
     keepAliveTimeout: options.keepAliveTimeout ?? 5_000,
   }, (incoming, outgoing) => {
-    void dispatch(incoming, outgoing, handler, effectiveOptions, digest, timers.setImmediate).catch((error) => {
+    void dispatch(incoming, outgoing, handler, effectiveOptions, digest, timers.setImmediate, zlib).catch((error) => {
       try { void Promise.resolve(effectiveOptions.onError?.(error)).catch(() => undefined); }
       catch { /* Private logging must not prevent a response from reaching the socket. */ }
       try {
@@ -240,6 +254,7 @@ async function dispatch(
   options: ServeOptions,
   digest: (value: string) => string,
   afterWrite: (callback: () => void) => unknown,
+  zlib?: ZlibModule,
 ): Promise<void> {
   const attachTarget = captureCanonicalRequestTarget(incoming.method, incoming.url);
   const attachExact = captureExactRequest(incoming.method, incoming.url, incoming.rawHeaders, options.trustProxy === true, digest);
@@ -316,6 +331,7 @@ async function dispatch(
     if (name !== "set-cookie") outgoing.setHeader(name, value);
   });
   if (cookies.length) outgoing.setHeader("set-cookie", cookies);
+  const encoding = zlib ? negotiateCompression(response, method, headers.get("accept-encoding"), outgoing) : null;
   if (!response.body || method === "HEAD") {
     await response.body?.cancel("HEAD response has no body").catch(() => undefined);
     outgoing.end();
@@ -325,6 +341,16 @@ async function dispatch(
   const reader = response.body.getReader();
   const cancelResponse = () => { void reader.cancel("client disconnected").catch(() => undefined); };
   outgoing.once("close", cancelResponse);
+  if (encoding && zlib) {
+    try {
+      await pumpCompressed(reader, outgoing, encoding, zlib, () => responseClosed, handoff);
+      handoff();
+    } finally {
+      outgoing.removeListener("close", cancelResponse);
+      reader.releaseLock();
+    }
+    return;
+  }
   try {
     while (!responseClosed) {
       const { done, value } = await reader.read();
@@ -349,6 +375,146 @@ async function dispatch(
   } finally {
     outgoing.removeListener("close", cancelResponse);
     reader.releaseLock();
+  }
+}
+
+interface CompressionStreamLike {
+  write(chunk: Uint8Array): boolean;
+  end(): void;
+  flush(kind: number, callback: () => void): void;
+  destroy(): void;
+  on(event: "data", listener: (chunk: Uint8Array) => void): void;
+  once(event: "end" | "error", listener: (value?: unknown) => void): void;
+}
+
+interface ZlibModule {
+  constants: Record<string, number>;
+  createGzip(options: Record<string, unknown>): CompressionStreamLike;
+  createBrotliCompress(options: Record<string, unknown>): CompressionStreamLike;
+}
+
+const COMPRESSIBLE_TYPES = new Set([
+  "text/html",
+  "text/css",
+  "text/plain",
+  "text/markdown",
+  "text/javascript",
+  "text/xml",
+  "application/javascript",
+  "application/json",
+  "application/manifest+json",
+  "application/xml",
+  "image/svg+xml",
+]);
+const COMPRESSION_MIN_BYTES = 1024;
+
+/**
+ * Choose a response encoding and rewrite headers for it. Returns null and
+ * leaves the response untouched when compression does not apply.
+ */
+function negotiateCompression(
+  response: Response,
+  method: string,
+  acceptEncoding: string | null,
+  outgoing: OutgoingResponse,
+): "br" | "gzip" | null {
+  if (!response.body || method === "HEAD") return null;
+  if (response.status < 200 || response.status === 204 || response.status === 206 || response.status === 304) return null;
+  if (response.headers.has("content-encoding") || response.headers.has("content-range")) return null;
+  const type = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase();
+  if (!type || !COMPRESSIBLE_TYPES.has(type)) return null;
+  if (/(?:^|,)\s*no-transform\s*(?:,|$)/iu.test(response.headers.get("cache-control") ?? "")) return null;
+  const length = response.headers.get("content-length");
+  if (length !== null && Number(length) < COMPRESSION_MIN_BYTES) return null;
+  // The representation now depends on Accept-Encoding even when this client
+  // receives identity bytes, so shared caches must key on it.
+  const vary = String(outgoing.getHeader("vary") ?? "");
+  if (!/(?:^|,)\s*(?:\*|accept-encoding)\s*(?:,|$)/iu.test(vary)) {
+    outgoing.setHeader("vary", vary ? `${vary}, Accept-Encoding` : "Accept-Encoding");
+  }
+  const encoding = preferredEncoding(acceptEncoding);
+  if (!encoding) return null;
+  outgoing.setHeader("content-encoding", encoding);
+  outgoing.removeHeader("content-length");
+  const etag = outgoing.getHeader("etag");
+  if (typeof etag === "string" && etag.startsWith("\"")) outgoing.setHeader("etag", `W/${etag}`);
+  return encoding;
+}
+
+function preferredEncoding(header: string | null): "br" | "gzip" | null {
+  if (!header) return null;
+  const weights = new Map<string, number>();
+  for (const part of header.split(",")) {
+    const [name, ...parameters] = part.trim().toLowerCase().split(";");
+    if (!name) continue;
+    const q = parameters.map((value) => value.trim()).find((value) => value.startsWith("q="));
+    const weight = q === undefined ? 1 : Number(q.slice(2));
+    weights.set(name, Number.isFinite(weight) ? weight : 0);
+  }
+  const weight = (name: string) => weights.get(name) ?? weights.get("*") ?? 0;
+  if (weight("br") > 0) return "br";
+  if (weight("gzip") > 0) return "gzip";
+  return null;
+}
+
+/** Stream a response body through a compressor, flushing after each chunk so streamed responses stay incremental. */
+async function pumpCompressed(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  outgoing: OutgoingResponse,
+  encoding: "br" | "gzip",
+  zlib: ZlibModule,
+  isClosed: () => boolean,
+  afterChunk: () => void,
+): Promise<void> {
+  const constants = zlib.constants;
+  const compressor = encoding === "br"
+    ? zlib.createBrotliCompress({
+      params: {
+        // Quality 5 keeps per-request CPU low while landing close to gzip -9 sizes.
+        [constants.BROTLI_PARAM_QUALITY!]: 5,
+        [constants.BROTLI_PARAM_MODE!]: constants.BROTLI_MODE_TEXT!,
+      },
+    })
+    : zlib.createGzip({ level: 6 });
+  const flushKind = encoding === "br" ? constants.BROTLI_OPERATION_FLUSH! : constants.Z_SYNC_FLUSH!;
+  let failure: unknown;
+  let drained: Promise<void> | null = null;
+  compressor.once("error", (error) => { failure = error; });
+  compressor.on("data", (chunk) => {
+    if (isClosed()) return;
+    if (!outgoing.write(chunk) && !drained) {
+      drained = new Promise<void>((resolve) => {
+        const resume = () => {
+          outgoing.removeListener("drain", resume);
+          outgoing.removeListener("close", resume);
+          drained = null;
+          resolve();
+        };
+        outgoing.once("drain", resume);
+        outgoing.once("close", resume);
+      });
+    }
+  });
+  try {
+    while (!isClosed()) {
+      const { done, value } = await reader.read();
+      if (done || isClosed()) break;
+      compressor.write(value);
+      await new Promise<void>((resolve) => compressor.flush(flushKind, resolve));
+      if (failure) throw failure;
+      afterChunk();
+      if (drained) await drained;
+    }
+    if (isClosed()) return;
+    await new Promise<void>((resolve, reject) => {
+      compressor.once("end", () => resolve());
+      compressor.once("error", reject);
+      compressor.end();
+    });
+    if (failure) throw failure;
+    outgoing.end();
+  } finally {
+    compressor.destroy();
   }
 }
 

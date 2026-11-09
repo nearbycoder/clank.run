@@ -407,3 +407,107 @@ test("Node adapter cancels responses returned after the client has already disco
     await server.close();
   }
 });
+
+function rawGet(url, headers = {}, method = "GET") {
+  return new Promise((resolve, reject) => {
+    const request = httpRequest(url, { method, headers }, (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.on("end", () => resolve({ status: response.statusCode, headers: response.headers, body: Buffer.concat(chunks) }));
+      response.on("error", reject);
+    });
+    request.on("error", reject);
+    request.end();
+  });
+}
+
+test("Node adapter compression is opt-in and negotiates Brotli, gzip, or identity", async () => {
+  const { brotliDecompressSync, gunzipSync } = await import("node:zlib");
+  const page = `<!doctype html><title>x</title>${"<p>repeated documentation text</p>".repeat(200)}`;
+  const app = (request) => {
+    const path = new URL(request.url).pathname;
+    if (path === "/small") return new Response("<p>tiny</p>", { headers: { "content-type": "text/html", "content-length": "11" } });
+    if (path === "/events") return new Response(page, { headers: { "content-type": "text/event-stream" } });
+    if (path === "/protocol") return new Response(page, { headers: { "content-type": "application/vnd.clank.example+json" } });
+    if (path === "/encoded") return new Response(page, { headers: { "content-type": "text/html", "content-encoding": "identity-custom" } });
+    if (path === "/no-transform") return new Response(page, { headers: { "content-type": "text/html", "cache-control": "public, no-transform" } });
+    return new Response(page, { headers: { "content-type": "text/html; charset=utf-8", etag: "\"v1\"", vary: "Cookie", "content-length": String(page.length) } });
+  };
+
+  const plain = await serve(app, { port: 0 });
+  try {
+    const response = await rawGet(plain.url, { "accept-encoding": "br, gzip" });
+    assert.equal(response.headers["content-encoding"], undefined);
+    assert.equal(response.body.toString(), page);
+  } finally { await plain.close(); }
+
+  const server = await serve(app, { port: 0, compression: true });
+  try {
+    const br = await rawGet(server.url, { "accept-encoding": "gzip, deflate, br" });
+    assert.equal(br.status, 200);
+    assert.equal(br.headers["content-encoding"], "br");
+    assert.equal(br.headers["content-length"], undefined);
+    assert.equal(br.headers.vary, "Cookie, Accept-Encoding");
+    assert.equal(br.headers.etag, "W/\"v1\"");
+    assert.ok(br.body.length < page.length / 10, `expected strong compression, got ${br.body.length} bytes`);
+    assert.equal(brotliDecompressSync(br.body).toString(), page);
+
+    const gzip = await rawGet(server.url, { "accept-encoding": "gzip, br;q=0" });
+    assert.equal(gzip.headers["content-encoding"], "gzip");
+    assert.equal(gunzipSync(gzip.body).toString(), page);
+
+    const identity = await rawGet(server.url, {});
+    assert.equal(identity.headers["content-encoding"], undefined);
+    assert.equal(identity.headers.vary, "Cookie, Accept-Encoding");
+    assert.equal(identity.headers["content-length"], String(page.length));
+    assert.equal(identity.body.toString(), page);
+
+    const head = await rawGet(server.url, { "accept-encoding": "br" }, "HEAD");
+    assert.equal(head.headers["content-encoding"], undefined);
+    assert.equal(head.body.length, 0);
+
+    for (const path of ["/small", "/events", "/protocol", "/encoded", "/no-transform"]) {
+      const skipped = await rawGet(`${server.url}${path}`, { "accept-encoding": "br, gzip" });
+      assert.notEqual(skipped.headers["content-encoding"], "br", path);
+      assert.notEqual(skipped.headers["content-encoding"], "gzip", path);
+    }
+    // Fetch advertises its own encodings and decodes transparently.
+    const decoded = await fetch(server.url);
+    assert.match(decoded.headers.get("content-encoding") ?? "", /^(?:br|gzip)$/u);
+    assert.equal(await decoded.text(), page);
+  } finally { await server.close(); }
+});
+
+test("Node adapter compression keeps streamed responses incremental", async () => {
+  const { createBrotliDecompress } = await import("node:zlib");
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const server = await serve(() => new Response(new ReadableStream({
+    async start(controller) {
+      controller.enqueue(new TextEncoder().encode(`<!doctype html><main>${"first ".repeat(400)}`));
+      await gate;
+      controller.enqueue(new TextEncoder().encode("second</main>"));
+      controller.close();
+    },
+  }), { headers: { "content-type": "text/html" } }), { port: 0, compression: true });
+  try {
+    const text = await new Promise((resolve, reject) => {
+      const request = httpRequest(server.url, { headers: { "accept-encoding": "br" } }, (response) => {
+        assert.equal(response.headers["content-encoding"], "br");
+        const decoder = createBrotliDecompress();
+        let decoded = "";
+        decoder.on("data", (chunk) => {
+          decoded += chunk;
+          // The first chunk must arrive before the stream is allowed to finish.
+          if (decoded.includes("first") && !decoded.includes("second")) release();
+        });
+        decoder.on("end", () => resolve(decoded));
+        decoder.on("error", reject);
+        response.pipe(decoder);
+      });
+      request.on("error", reject);
+      request.end();
+    });
+    assert.ok(text.endsWith("second</main>"));
+  } finally { release(); await server.close(); }
+});
