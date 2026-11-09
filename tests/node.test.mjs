@@ -511,3 +511,34 @@ test("Node adapter compression keeps streamed responses incremental", async () =
     assert.ok(text.endsWith("second</main>"));
   } finally { release(); await server.close(); }
 });
+
+test("Node adapter writes helper responses in one piece, including ones from another framework copy", async () => {
+  const { json: jsonResponse, text: textResponse } = await import("../dist/server.js");
+  const server = await serve((request) => {
+    const path = new URL(request.url).pathname;
+    if (path === "/json") return jsonResponse({ ok: true, snowman: "☃" });
+    if (path === "/read") { const response = textResponse("already read"); void response.body; return response; }
+    if (path === "/foreign") {
+      // A bundled application answers through its own copy of the helpers.
+      const response = new Response(null, { headers: { "content-type": "text/plain; charset=utf-8" } });
+      let taken = false;
+      response[Symbol.for("clank.buffered-body")] = (take) => taken ? undefined : take ? (taken = true, "from another copy") : 17;
+      return response;
+    }
+    return textResponse("plain");
+  }, { port: 0 });
+  try {
+    const json = await rawGet(`${server.url}/json`);
+    assert.equal(json.headers["content-length"], String(Buffer.byteLength(JSON.stringify({ ok: true, snowman: "☃" }))));
+    assert.equal(json.headers["transfer-encoding"], undefined);
+    assert.deepEqual(JSON.parse(json.body.toString()), { ok: true, snowman: "☃" });
+    const foreign = await rawGet(`${server.url}/foreign`);
+    assert.equal(foreign.headers["content-length"], "17");
+    assert.equal(foreign.body.toString(), "from another copy");
+    // A response whose stream was already taken still arrives intact.
+    assert.equal((await rawGet(`${server.url}/read`)).body.toString(), "already read");
+    const head = await rawGet(`${server.url}/json`, {}, "HEAD");
+    assert.equal(head.status, 200);
+    assert.equal(head.body.length, 0);
+  } finally { await server.close(); }
+});

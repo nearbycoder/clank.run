@@ -50,12 +50,15 @@ function nativeEvidence(request: Request): NativeEvidence {
   return evidence;
 }
 
-interface BufferedResponses {
-  create(source: string, init: ResponseInit): Response;
-  length(response: Response): number | undefined;
-  take(response: Response): string | undefined;
-}
-let bufferedResponses: BufferedResponses | undefined;
+/**
+ * How an adapter asks a response for its unread text. A registered symbol,
+ * not a class check: an application bundled with its own copy of the
+ * framework still hands the host adapter a response it recognises. It exposes
+ * nothing but the response's own body.
+ */
+const BUFFERED_BODY = Symbol.for("clank.buffered-body");
+type BufferedBody = (take: boolean) => string | number | undefined;
+let createBuffered: ((source: string, init: ResponseInit) => Response) | undefined;
 
 /**
  * @internal A Response whose body is a string the caller already holds.
@@ -72,7 +75,7 @@ export function createBufferedResponse(source: unknown, init: ResponseInit): Res
   if (typeof source !== "string" || status === 101 || status === 103 || status === 204 || status === 205 || status === 304) {
     return new Response(source as BodyInit | null | undefined, init);
   }
-  if (!bufferedResponses) {
+  if (!createBuffered) {
     const Base = globalThis.Response;
     const BufferedResponse = class Response extends Base {
       #source: string;
@@ -113,13 +116,12 @@ export function createBufferedResponse(source: unknown, init: ResponseInit): Res
       static real(response: globalThis.Response): globalThis.Response {
         return #source in response ? response.#real() : response;
       }
-      static length(response: globalThis.Response): number | undefined {
-        return #source in response && !response.#stream && !response.#used ? response.#source.length : undefined;
-      }
-      static take(response: globalThis.Response): string | undefined {
-        if (!(#source in response) || response.#stream || response.#used) return undefined;
-        response.#used = true;
-        return response.#source;
+      /** Length of the unread text, or the text itself once the caller takes it for a direct write. */
+      [BUFFERED_BODY](take: boolean): string | number | undefined {
+        if (this.#stream || this.#used) return undefined;
+        if (!take) return this.#source.length;
+        this.#used = true;
+        return this.#source;
       }
     };
     if ("bytes" in Base.prototype) {
@@ -129,17 +131,24 @@ export function createBufferedResponse(source: unknown, init: ResponseInit): Res
         writable: true, configurable: true,
       });
     }
-    bufferedResponses = { create: (source, init) => new BufferedResponse(source, init), length: BufferedResponse.length, take: BufferedResponse.take };
+    createBuffered = (source, init) => new BufferedResponse(source, init);
   }
-  return bufferedResponses.create(source, init);
+  return createBuffered(source, init);
+}
+function bufferedBody(response: Response): BufferedBody | undefined {
+  if (typeof response !== "object" || response === null) return undefined;
+  const read = (response as unknown as Record<symbol, unknown>)[BUFFERED_BODY];
+  return typeof read === "function" ? read as BufferedBody : undefined;
 }
 /** @internal Character count of an unread buffered body, or undefined for any other response. */
 export function bufferedBodyLength(response: Response): number | undefined {
-  return bufferedResponses !== undefined && typeof response === "object" && response !== null ? bufferedResponses.length(response) : undefined;
+  const length = bufferedBody(response)?.call(response, false);
+  return typeof length === "number" ? length : undefined;
 }
 /** @internal Claims an unread buffered body for a direct write. The response then reports its body as used. */
 export function takeBufferedBody(response: Response): string | undefined {
-  return bufferedResponses !== undefined && typeof response === "object" && response !== null ? bufferedResponses.take(response) : undefined;
+  const text = bufferedBody(response)?.call(response, true);
+  return typeof text === "string" ? text : undefined;
 }
 let lastTrustedAddress: readonly [raw: string | undefined, normalized: string] = [undefined, ""];
 
