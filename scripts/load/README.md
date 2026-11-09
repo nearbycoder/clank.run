@@ -6,6 +6,29 @@ accepts only a separately provisioned synthetic Railway fixture. Neither mode lo
 accounts or credentials. Keep CPU-heavy test suites and browser timing
 runs separate from server benchmarks.
 
+## Framework hot paths
+
+```sh
+node scripts/load/performance-suite.mjs /path/to/baseline/dist dist "" 7 300
+node scripts/load/performance-http.mjs /path/to/baseline/dist dist "/text,/json,/page,query" 3 32 5
+node scripts/load/performance-dom-table.mjs /path/to/baseline/dist dist 9
+```
+
+`performance-suite.mjs` alternates baseline and candidate in one process over the reactive core,
+server rendering, routing and response helpers, schema parsing, and in-memory backend calls, and
+prints the median operations per second for each. Rendering scenarios assert identical HTML. The
+optional third argument filters scenarios by name (`core`, `ssr`, `backend`, ...).
+
+`performance-http.mjs` starts one server process per build behind the real Node adapter and drives
+each with keep-alive loopback connections, one request at a time per connection. It reports median
+requests per second and p99 latency for plain routes, a parameterised route behind 20 others, a
+server-rendered page, and a cached backend query. The client shares the machine, so compare the
+two builds rather than reading the absolute figures as capacity.
+
+`performance-dom-table.mjs` runs the keyed-table operations in headless Chrome and reports script
+time and script-plus-layout time. Browser timers are coarse (0.1 ms), so sub-millisecond rows are
+indicative only.
+
 ## SQLite document write encoding
 
 ```sh

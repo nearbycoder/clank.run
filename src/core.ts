@@ -6,12 +6,18 @@ export type Equality<T> = false | ((previous: T, next: T) => boolean);
 
 interface Source {
   observers: Set<Observer>;
+  seen: number;
 }
 
+// Sources stay in read order: re-reading them in that order only moves
+// `cursor`; `stale` is the old tail once reads diverge.
 interface Observer {
-  dependencies: Set<Source>;
+  sources: Source[];
+  cursor: number;
+  stale: Source[] | null;
+  pass: number;
   active: boolean;
-  schedule(): void;
+  schedule(source?: Source): void;
 }
 
 interface Scope {
@@ -24,6 +30,7 @@ let activeObserver: Observer | null = null;
 let activeScope: Scope | null = null;
 let tracking = true;
 let batchDepth = 0;
+let passes = 0;
 let flushing = false;
 const pendingEffects = new Set<ReactiveEffect>();
 const transactionStack: Array<Map<ReactiveSignal<unknown>, unknown>> = [];
@@ -53,7 +60,7 @@ function diagnostic(type: ReactiveDiagnostic["type"], target: Source | Observer,
     ...(source ? { sourceId: diagnosticId(source) } : {}),
     ...("name" in target && typeof target.name === "string" ? { name: target.name.slice(0, 128) } : {}),
     ...(durationMs === undefined ? {} : { durationMs }),
-    ...("dependencies" in target ? { dependencies: target.dependencies.size } : {}) });
+    ...("sources" in target ? { dependencies: new Set(target.sources).size } : {}) });
   reportingDiagnostic = true;
   const previousTracking = tracking;
   tracking = false;
@@ -66,24 +73,53 @@ export function observeReactivity(listener: (event: ReactiveDiagnostic) => void)
 }
 
 function track(source: Source): void {
-  if (!tracking || activeObserver === null || !activeObserver.active) return;
-  const newDependency = diagnosticListeners.size > 0 && !activeObserver.dependencies.has(source);
-  source.observers.add(activeObserver);
-  activeObserver.dependencies.add(source);
-  if (newDependency) diagnostic("dependency", activeObserver, source);
+  const observer = activeObserver;
+  if (!tracking || !observer || !observer.active || source.seen === observer.pass) return;
+  const report = diagnosticListeners.size > 0 && !reads(observer, source);
+  source.seen = observer.pass;
+  if (!observer.stale && observer.sources[observer.cursor] === source) observer.cursor++;
+  else {
+    observer.stale ??= observer.sources.splice(observer.cursor);
+    observer.cursor = observer.sources.push(source);
+    source.observers.add(observer);
+  }
+  if (report) diagnostic("dependency", observer, source);
+}
+
+function reads(observer: Observer, source: Source): boolean {
+  const index = observer.sources.indexOf(source);
+  return index >= 0 && index < observer.cursor;
+}
+
+function settle(observer: Observer): void {
+  const { sources } = observer;
+  let stale = observer.stale;
+  observer.stale = null;
+  if (!observer.active || !stale && observer.cursor === sources.length) return;
+  stale ??= sources.splice(observer.cursor);
+  const kept = stale.length * sources.length > 4096 ? new Set(sources) : null;
+  for (const source of stale) {
+    if (source.seen !== observer.pass && !(kept ? kept.has(source) : sources.includes(source))) source.observers.delete(observer);
+  }
 }
 
 function detach(observer: Observer): void {
-  for (const source of observer.dependencies) source.observers.delete(observer);
-  observer.dependencies.clear();
+  for (const source of observer.sources) source.observers.delete(observer);
+  if (observer.stale) for (const source of observer.stale) source.observers.delete(observer);
+  observer.sources = [];
+  observer.stale = null;
 }
 
 function notify(source: Source): void {
-  diagnostic("invalidate", source);
+  if (diagnosticListeners.size) diagnostic("invalidate", source);
   // Invalidate all siblings before flushing effects.
-  batch(() => {
-    for (const observer of [...source.observers]) observer.schedule();
-  });
+  batchDepth++;
+  try {
+    for (const observer of source.observers) observer.schedule(source);
+  } finally {
+    batchDepth--;
+    flushEffects();
+  }
 }
 
 function flushEffects(): void {
@@ -125,6 +161,7 @@ export interface SignalOptions<T> {
 export class ReactiveSignal<T> implements Source {
   readonly [SIGNAL] = true;
   readonly observers = new Set<Observer>();
+  seen = 0;
   readonly name?: string;
   readonly equals: Equality<T>;
   #value: T;
@@ -164,7 +201,6 @@ export class ReactiveSignal<T> implements Source {
     }
     this.#value = value;
     notify(this);
-    flushEffects();
     return value;
   }
 
@@ -207,7 +243,11 @@ export function isSignal(value: unknown): value is ReactiveSignal<unknown> | Com
 export class Computed<T> implements Source, Observer {
   readonly [SIGNAL] = true;
   readonly observers = new Set<Observer>();
-  readonly dependencies = new Set<Source>();
+  seen = 0;
+  sources: Source[] = [];
+  cursor = 0;
+  stale: Source[] | null = null;
+  pass = 0;
   active = true;
   #dirty = true;
   #evaluating = false;
@@ -216,6 +256,10 @@ export class Computed<T> implements Source, Observer {
   declare readonly derive: () => T; declare readonly name?: string;
   constructor(derive: () => T, name?: string) {
     this.derive = derive; this.name = name;}
+
+  get dependencies(): Set<Source> {
+    return new Set(this.sources);
+  }
 
   get value(): T {
     return this.get();
@@ -249,7 +293,8 @@ export class Computed<T> implements Source, Observer {
     if (this.#evaluating) throw new Error(`Circular computed${this.name ? ` \"${this.name}\"` : ""}.`);
     this.#evaluating = true;
     const diagnosticStarted = diagnosticListeners.size ? performance.now() : 0;
-    detach(this);
+    this.pass = ++passes;
+    this.cursor = 0;
     const previous = activeObserver;
     activeObserver = this;
     try {
@@ -257,6 +302,7 @@ export class Computed<T> implements Source, Observer {
       this.#dirty = false;
     } finally {
       activeObserver = previous;
+      settle(this);
       this.#evaluating = false;
       if (diagnosticListeners.size) diagnostic("run", this, undefined, performance.now() - diagnosticStarted);
     }
@@ -281,18 +327,24 @@ export function computed<T>(derive: () => T, options: { name?: string } = {}): C
 }
 
 class ReactiveEffect implements Observer {
-  readonly dependencies = new Set<Source>();
+  sources: Source[] = [];
+  cursor = 0;
+  stale: Source[] | null = null;
+  pass = 0;
   active = true;
   #running = false;
+  #reading = false;
   #initialized = false;
   #cleanup: Cleanup | undefined;
+  #register: ((cleanup: Cleanup) => void) | undefined;
 
   declare readonly callback: (onCleanup: (cleanup: Cleanup) => void) => void | Cleanup;
   constructor(callback: (onCleanup: (cleanup: Cleanup) => void) => void | Cleanup) {
     this.callback = callback;}
 
-  schedule(): void {
-    if (!this.active) return;
+  schedule(source?: Source): void {
+    // While running, only sources read again in this pass count.
+    if (!this.active || this.#reading && source && source.seen !== this.pass && !reads(this, source)) return;
     pendingEffects.add(this);
     flushEffects();
   }
@@ -309,9 +361,11 @@ class ReactiveEffect implements Observer {
       const previousCleanup = this.#cleanup;
       this.#cleanup = undefined;
       previousCleanup?.();
-      detach(this);
+      this.pass = ++passes;
+      this.cursor = 0;
+      this.#reading = true;
       activeObserver = this;
-      const nextCleanup = this.callback((next) => { this.#cleanup = next; });
+      const nextCleanup = this.callback(this.#register ??= (next) => { this.#cleanup = next; });
       if (typeof nextCleanup === "function") this.#cleanup = nextCleanup;
     } catch (error) {
       if (initial) {
@@ -322,6 +376,10 @@ class ReactiveEffect implements Observer {
       throw error;
     } finally {
       activeObserver = previous;
+      if (this.#reading) {
+        this.#reading = false;
+        settle(this);
+      }
       this.#running = false;
       if (diagnosticListeners.size) diagnostic("run", this, undefined, performance.now() - diagnosticStarted);
     }

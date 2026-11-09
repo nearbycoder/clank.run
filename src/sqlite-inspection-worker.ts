@@ -161,6 +161,8 @@ export async function sanitizePreviewDatabase(
     }
     database.exec("BEGIN IMMEDIATE");
     try {
+      // Sanitizing rewrites documents directly; the preview must validate them again.
+      forgetStoredDataValidation(database);
       let totalRows = 0;
       for (const table of tables) {
         const name = String(table.name);
@@ -274,6 +276,13 @@ export async function sanitizePreviewDatabase(
     return Object.freeze(report);
   } finally {
     database.close();
+  }
+}
+
+/** Documents rewritten outside the validating writer must be read again by the next open. */
+function forgetStoredDataValidation(database: { prepare(sql: string): { get(): unknown; run(): unknown } }): void {
+  if (database.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_meta'").get()) {
+    database.prepare("DELETE FROM clank_meta WHERE _key IN ('validated_schema', 'validated_revision')").run();
   }
 }
 

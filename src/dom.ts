@@ -91,6 +91,7 @@ interface MountContext {
 
 interface ComponentFrame {
   contexts: Map<symbol, unknown>;
+  owned: boolean;
   mounts: Array<() => void | Cleanup>;
 }
 
@@ -119,7 +120,10 @@ export function h(
   props: Record<string, unknown> | null = null,
   ...children: Renderable[]
 ): VNode {
-  const input = props ?? {};
+  if (props === null || props === undefined) {
+    return { [VNODE]: true, type, props: { children }, key: undefined };
+  }
+  const input = props;
   const declared = input.children;
   const normalizedChildren = children.length > 0
     ? children
@@ -477,6 +481,11 @@ function expectComment(parent: Node, cursor: HydrationCursor, data: string, cont
 }
 
 function mountValue(parent: Node, input: Renderable, before: Node | null, context: MountContext): Mounted {
+  if (typeof input === "string") {
+    const text = ownerDocumentFor(parent).createTextNode(input);
+    parent.insertBefore(text, before);
+    return simpleMount([text]);
+  }
   if (isExpression(input)) return mountDynamic(parent, input.read as () => Renderable, before, context);
   if (isSignal(input)) return mountDynamic(parent, () => input.value as Renderable, before, context);
   if (isKeyedBlock(input)) return mountKeyed(parent, input, before, context);
@@ -499,17 +508,75 @@ function mountValue(parent: Node, input: Renderable, before: Node | null, contex
   return simpleMount([text]);
 }
 
+// Every node gets a mount record; classes share their methods across them.
+class NodeMount implements Mounted {
+  nodes: Node[];
+  cleanup: Cleanup | undefined;
+  active = true;
+  constructor(nodes: Node[], cleanup: Cleanup | undefined) { this.nodes = nodes; this.cleanup = cleanup; }
+  dispose(remove = true): void {
+    if (!this.active) return;
+    this.active = false;
+    const nodes = this.nodes;
+    try { this.cleanup?.(); }
+    finally { if (remove) for (let index = 0; index < nodes.length; index++) nodes[index]!.parentNode?.removeChild(nodes[index]!); }
+  }
+}
+
 function simpleMount(nodes: Node[], cleanup?: Cleanup): Mounted {
-  let active = true;
-  return {
-    nodes,
-    dispose(remove = true) {
-      if (!active) return;
-      active = false;
-      try { cleanup?.(); }
-      finally { if (remove) for (const node of nodes) node.parentNode?.removeChild(node); }
-    },
-  };
+  return new NodeMount(nodes, cleanup);
+}
+
+class FragmentMount implements Mounted {
+  mounted: Mounted[];
+  constructor(mounted: Mounted[]) { this.mounted = mounted; }
+  get nodes(): Node[] { return this.mounted.flatMap((entry) => entry.nodes); }
+  dispose(remove = true): void { disposeAll(this.mounted.splice(0), remove); }
+}
+
+const EMPTY_MOUNT: Mounted = Object.freeze({ nodes: Object.freeze([]) as unknown as Node[], dispose() {} });
+
+class ElementMount implements Mounted {
+  nodes: Node[];
+  element: Element;
+  children: Mounted | undefined = undefined;
+  cleanups: Cleanup[] | undefined = undefined;
+  ref: unknown = undefined;
+  refAssigned = false;
+  active = true;
+  constructor(element: Element) { this.element = element; this.nodes = [element]; }
+  clearRef(): void {
+    if (!this.refAssigned) return;
+    this.refAssigned = false;
+    const ref = this.ref, element = this.element;
+    if (isSignal(ref) && (ref as ReactiveSignal<Element | null>).peek() === element) (ref as ReactiveSignal<Element | null>).value = null;
+    if (typeof ref === "function") (ref as (node: Element | null) => void)(null);
+  }
+  dispose(remove = true): void {
+    if (!this.active) return;
+    this.active = false;
+    const cleanups = this.cleanups;
+    try {
+      if (!cleanups && !this.refAssigned) this.children?.dispose(false);
+      else cleanupAll([() => this.children?.dispose(false), ...(cleanups ? cleanups.splice(0).reverse() : []), () => this.clearRef()]);
+    } finally {
+      if (remove) this.element.parentNode?.removeChild(this.element);
+    }
+  }
+}
+
+class ComponentMount implements Mounted {
+  mounted: Mounted;
+  disposeScope: Cleanup;
+  active = true;
+  constructor(mounted: Mounted, disposeScope: Cleanup) { this.mounted = mounted; this.disposeScope = disposeScope; }
+  get nodes(): Node[] { return this.mounted.nodes; }
+  dispose(remove = true): void {
+    if (!this.active) return;
+    this.active = false;
+    if (!remove) this.mounted.dispose(false);
+    this.disposeScope();
+  }
 }
 
 function cleanupAfterError(error: unknown, cleanups: Cleanup[]): never {
@@ -543,12 +610,24 @@ function mountFragment(parent: Node, values: Renderable[], before: Node | null, 
   } catch (error) {
     cleanupAfterError(error, mounted.reverse().map((entry) => () => entry.dispose()));
   }
-  return {
-    get nodes() { return mounted.flatMap((entry) => entry.nodes); },
-    dispose(remove = true) {
-      cleanupAll(mounted.splice(0).reverse().map((entry) => () => entry.dispose(remove)));
-    },
-  };
+  return new FragmentMount(mounted);
+}
+
+function mountChildren(parent: Node, values: Renderable[], context: MountContext): Mounted {
+  if (values.length === 0) return EMPTY_MOUNT;
+  if (values.length === 1) return mountValue(parent, values[0], null, context);
+  return mountFragment(parent, values, null, context);
+}
+
+/** cleanupAll() for mounts, last to first. */
+function disposeAll(entries: Mounted[], remove: boolean): void {
+  let errors: unknown[] | undefined;
+  for (let index = entries.length - 1; index >= 0; index--) {
+    try { entries[index]!.dispose(remove); } catch (error) { (errors ??= []).push(error); }
+  }
+  if (!errors) return;
+  if (errors.length === 1) throw errors[0];
+  throw new AggregateError(errors, "Multiple Clank DOM cleanup callbacks failed.");
 }
 
 function mountDynamic(parent: Node, read: () => Renderable, before: Node | null, context: MountContext): Mounted {
@@ -595,11 +674,14 @@ function mountDynamic(parent: Node, read: () => Renderable, before: Node | null,
 }
 
 function unwrapReactive(input: Renderable): Renderable {
-  let value = input;
-  const seen = new Set<unknown>();
+  if (typeof input !== "object" || input === null) return input;
+  let value: Renderable = input;
+  let first: unknown = unwrapReactive;
+  let seen: Set<unknown> | undefined;
   while (isExpression(value) || isSignal(value)) {
-    if (seen.has(value)) throw new Error("Circular reactive expression.");
-    seen.add(value);
+    if (value === first || seen?.has(value)) throw new Error("Circular reactive expression.");
+    if (first === unwrapReactive) first = value;
+    else (seen ??= new Set()).add(value);
     value = (isExpression(value) ? value.read() : value.value) as Renderable;
   }
   return value;
@@ -1077,7 +1159,7 @@ function mountComponent(parent: Node, vnode: VNode, before: Node | null, parentC
     createRoot((dispose) => {
       disposeScope = dispose;
       const evaluation = evaluateComponent(vnode, parentContext.contexts);
-      mounted = mountValue(parent, evaluation.output, before, { ...parentContext, contexts: evaluation.contexts });
+      mounted = mountValue(parent, evaluation.output, before, evaluation.contexts === parentContext.contexts ? parentContext : { ...parentContext, contexts: evaluation.contexts });
       onCleanup(() => mounted.dispose());
       for (const callback of evaluation.mounts) {
         const cleanup = callback();
@@ -1088,23 +1170,16 @@ function mountComponent(parent: Node, vnode: VNode, before: Node | null, parentC
     disposeScope();
     throw error;
   }
-  let active = true;
-  return {
-    get nodes() { return mounted.nodes; },
-    dispose(remove = true) {
-      if (!active) return;
-      active = false;
-      if (!remove) mounted.dispose(false);
-      disposeScope();
-    },
-  };
+  return new ComponentMount(mounted, disposeScope);
 }
 
 /** @internal Evaluates one component with context/lifecycle ownership for DOM and SSR renderers. */
 export function evaluateComponent(vnode: VNode, parentContexts: Map<symbol, unknown>): ComponentEvaluation {
   if (typeof vnode.type !== "function") throw new TypeError("evaluateComponent expects a component VNode.");
+  // The parent's map is shared until this component provides a value.
   const frame: ComponentFrame = {
-    contexts: new Map(parentContexts),
+    contexts: parentContexts,
+    owned: false,
     mounts: [],
   };
   const previous = currentFrame;
@@ -1121,6 +1196,12 @@ export function evaluateComponent(vnode: VNode, parentContexts: Map<symbol, unkn
 }
 
 function componentProps(props: Record<string, unknown>): Record<string, unknown> & { children: Renderable[] } {
+  // Only compiler expressions need the unwrapping proxy.
+  let reactive = false;
+  for (const key in props) {
+    if (isExpression(props[key])) { reactive = true; break; }
+  }
+  if (!reactive) return props as Record<string, unknown> & { children: Renderable[] };
   return new Proxy(props, {
     get(target, key, receiver) {
       const value = Reflect.get(target, key, receiver);
@@ -1138,55 +1219,52 @@ function mountElement(parent: Node, vnode: VNode, before: Node | null, context: 
   const element = namespace
     ? ownerDocument.createElementNS("http://www.w3.org/2000/svg", tag)
     : ownerDocument.createElement(tag);
-  const cleanups: Cleanup[] = [];
-  const deferred: Array<[string, unknown]> = [];
-  let children: Mounted | undefined;
-  const ref = vnode.props.ref;
-  let refAssigned = false;
-  const clearRef = () => {
-    if (!refAssigned) return;
-    refAssigned = false;
-    if (isSignal(ref) && (ref as ReactiveSignal<Element | null>).peek() === element) (ref as ReactiveSignal<Element | null>).value = null;
-    if (typeof ref === "function") (ref as (node: Element | null) => void)(null);
-  };
+  const mount = new ElementMount(element);
+  let cleanups: Cleanup[] | undefined;
+  let deferred: Array<[string, unknown]> | undefined;
+  const props = vnode.props;
+  const ref = props.ref;
+  mount.ref = ref;
   try {
-    const classCleanup = bindClassProperties(element, vnode.props);
-    if (classCleanup) cleanups.push(classCleanup);
-    for (const [name, value] of Object.entries(vnode.props)) {
+    const classCleanup = bindClassProperties(element, props);
+    if (classCleanup) (cleanups ??= []).push(classCleanup);
+    for (const name in props) {
       if (name === "children" || name === "key") continue;
       if (name === "class" || name === "className" || name === "classList") continue;
+      const value = props[name];
       if (bindingNeedsChildren(element, name)) {
-        deferred.push([name, value]);
+        (deferred ??= []).push([name, value]);
         continue;
       }
       const cleanup = bindProperty(element, name, value);
-      if (cleanup) cleanups.push(cleanup);
+      if (cleanup) (cleanups ??= []).push(cleanup);
     }
-    const rawHTML = vnode.props.dangerouslySetInnerHTML;
-    children = rawHTML === undefined && !hasTextareaValue(element, vnode.props)
-      ? mountFragment(element, vnode.props.children as Renderable[], null, { ...context, namespace: childNamespace })
+    const rawHTML = props.dangerouslySetInnerHTML;
+    mount.children = rawHTML === undefined && !hasTextareaValue(element, props)
+      ? mountChildren(element, props.children as Renderable[], context.namespace === childNamespace ? context : { ...context, namespace: childNamespace })
       : undefined;
-    for (const [name, value] of deferred) {
-      const cleanup = bindProperty(element, name, value);
-      if (cleanup) cleanups.push(cleanup);
+    if (deferred) {
+      for (const [name, value] of deferred) {
+        const cleanup = bindProperty(element, name, value);
+        if (cleanup) (cleanups ??= []).push(cleanup);
+      }
     }
     parent.insertBefore(element, before);
     if (typeof ref === "function") {
-      refAssigned = true;
+      mount.refAssigned = true;
       (ref as (node: Element) => void)(element);
     } else if (isSignal(ref)) {
-      refAssigned = true;
+      mount.refAssigned = true;
       (ref as ReactiveSignal<Element | null>).value = element;
     }
   } catch (error) {
     cleanupAfterError(error, [
-      () => children?.dispose(), ...cleanups.splice(0).reverse(), clearRef,
+      () => mount.children?.dispose(), ...(cleanups ? cleanups.splice(0).reverse() : []), () => mount.clearRef(),
       () => element.parentNode?.removeChild(element),
     ]);
   }
-  return simpleMount([element], () => cleanupAll([
-    () => children?.dispose(false), ...cleanups.splice(0).reverse(), clearRef,
-  ]));
+  mount.cleanups = cleanups;
+  return mount;
 }
 
 function bindingNeedsChildren(element: Element, name: string): boolean {
@@ -1207,16 +1285,23 @@ function bindClassProperties(element: Element, props: Record<string, unknown>): 
   let hasBase = false;
   let hasList = false;
   // class/className: last declaration wins; compose classList after that base.
-  for (const [name, value] of Object.entries(props)) {
+  for (const name in props) {
     if (name === "class" || name === "className") {
-      baseInput = value;
+      baseInput = props[name];
       hasBase = true;
     } else if (name === "classList") {
-      listInput = value;
+      listInput = props[name];
       hasList = true;
     }
   }
   if (!hasBase && !hasList) return undefined;
+  if (!hasList && (typeof baseInput === "string" || baseInput === null || baseInput === undefined || baseInput === false)) {
+    // A literal class never changes: no effect needed.
+    const value = typeof baseInput === "string" ? classTokens(baseInput) : "";
+    if (value) element.setAttribute("class", value);
+    else element.removeAttribute("class");
+    return undefined;
+  }
   return effect(() => {
     const tokens = new Set<string>();
     if (hasBase) {
@@ -1293,11 +1378,14 @@ function bindProperty(element: Element, name: string, input: unknown): Cleanup |
 }
 
 function resolve(value: unknown): unknown {
-  let current = value;
-  const seen = new Set<unknown>();
+  if (typeof value !== "function" && (typeof value !== "object" || value === null)) return value;
+  let current: unknown = value;
+  let first: unknown = resolve;
+  let seen: Set<unknown> | undefined;
   while (isExpression(current) || isSignal(current) || typeof current === "function") {
-    if (seen.has(current)) throw new Error("Circular reactive value.");
-    seen.add(current);
+    if (current === first || seen?.has(current)) throw new Error("Circular reactive value.");
+    if (first === resolve) first = current;
+    else (seen ??= new Set()).add(current);
     current = isExpression(current)
       ? current.read()
       : isSignal(current)
@@ -1330,27 +1418,31 @@ function resolveAgentAction(value: unknown): string {
 }
 
 function isEventProperty(name: string): boolean {
-  return /^on(?::|[a-z])/i.test(name);
+  const first = name.charCodeAt(0);
+  return (first === 111 || first === 79) && /^on(?::|[a-z])/i.test(name);
+}
+
+interface EventBinding { readonly name: string; readonly options: Readonly<{ capture: boolean; once: boolean; passive: boolean }>; }
+const eventBindings = new Map<string, EventBinding>();
+
+function eventBinding(property: string): EventBinding {
+  let binding = eventBindings.get(property);
+  if (!binding) {
+    let name = property.startsWith("on:") ? property.slice(3) : property.slice(2);
+    let capture = false;
+    let once = false;
+    let passive = false;
+    if (name.endsWith("Capture")) { name = name.slice(0, -7); capture = true; }
+    if (name.endsWith("Once")) { name = name.slice(0, -4); once = true; }
+    if (name.endsWith("Passive")) { name = name.slice(0, -7); passive = true; }
+    binding = { name: name.toLowerCase(), options: Object.freeze({ capture, once, passive }) };
+    if (eventBindings.size < 1024) eventBindings.set(property, binding);
+  }
+  return binding;
 }
 
 function bindEvent(element: Element, property: string, listener: EventListener): Cleanup {
-  const colon = property.startsWith("on:");
-  let name = colon ? property.slice(3) : property.slice(2);
-  let capture = false;
-  let once = false;
-  let passive = false;
-  for (const [suffix, apply] of [
-    ["Capture", () => { capture = true; }],
-    ["Once", () => { once = true; }],
-    ["Passive", () => { passive = true; }],
-  ] as const) {
-    if (name.endsWith(suffix)) {
-      name = name.slice(0, -suffix.length);
-      apply();
-    }
-  }
-  name = name.toLowerCase();
-  const options = { capture, once, passive };
+  const { name, options } = eventBinding(property);
   element.addEventListener(name, listener, options);
   return () => element.removeEventListener(name, listener, options);
 }
@@ -1532,7 +1624,22 @@ function isInteractiveElement(element: Element): boolean {
   return ["A", "BUTTON", "INPUT", "SELECT", "SUMMARY", "TEXTAREA"].includes(element.tagName);
 }
 
+const knownClasses = new Map<string, string>();
+
+function classTokens(value: string): string {
+  let normalized = knownClasses.get(value);
+  if (normalized === undefined) {
+    normalized = [...new Set(value.split(/\s+/).filter(Boolean))].join(" ");
+    if (value.length <= 256) {
+      if (knownClasses.size >= 2048) knownClasses.clear();
+      knownClasses.set(value, normalized);
+    }
+  }
+  return normalized;
+}
+
 function normalizeClass(value: unknown): string {
+  if (typeof value === "string") return value;
   if (Array.isArray(value)) return value.map(normalizeClass).filter(Boolean).join(" ");
   if (value && typeof value === "object") {
     return Object.entries(value as Record<string, unknown>)
@@ -1554,6 +1661,10 @@ export function createContext<T>(defaultValue: T): ClankContext<T> {
 
 export function provideContext<T>(context: ClankContext<T>, value: T): void {
   if (!currentFrame) throw new Error("provideContext() must run inside a component.");
+  if (!currentFrame.owned) {
+    currentFrame.contexts = new Map(currentFrame.contexts);
+    currentFrame.owned = true;
+  }
   currentFrame.contexts.set(context.id, value);
 }
 

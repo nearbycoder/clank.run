@@ -228,6 +228,10 @@ const server = await serve(routeBundledDocumentation(platform, documentation), {
   hostname,
   port,
   trustProxy: process.env.TRUST_PROXY === "1",
+  // This listener faces clients (directly or via a non-compressing edge), so
+  // compress HTML/JSON/text here. Tenant apps behind ingress stay uncompressed
+  // and get compressed once on the way out. CLANK_COMPRESSION=0 disables it.
+  compression: process.env.CLANK_COMPRESSION !== "0",
   maxBodySize: number(environment("CLANK_MAX_ARTIFACT_BYTES", "PROACT_MAX_ARTIFACT_BYTES"), 100 * 1024 * 1024) + 1024,
   ...(ingressEnabled ? { allowedHosts: [] } : allowedHosts?.length ? { allowedHosts } : {}),
   onError: (error) => console.error("[http]", error),

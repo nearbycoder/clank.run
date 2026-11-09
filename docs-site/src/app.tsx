@@ -15,26 +15,43 @@ import { installCurrentSection } from "./enhancements/current-section.ts";
 import { installNavigation } from "./enhancements/navigation.ts";
 
 interface BootState {
-  search: SearchEntry[];
+  /** Inline index (legacy pages). */
+  search?: SearchEntry[];
+  /** Content-addressed index URL; preferred so pages do not repeat it. */
+  searchIndex?: string;
   initialQuery: string;
   searchGroup?: string;
   activeSlug?: string;
 }
 
-const boot = readState<BootState>() ?? { search: [], initialQuery: "" };
+async function loadSearchIndex(state: BootState): Promise<SearchEntry[]> {
+  if (state.search) return state.search;
+  if (!state.searchIndex || !state.searchIndex.startsWith("/assets/")) return [];
+  try {
+    const response = await fetch(state.searchIndex, { credentials: "same-origin" });
+    if (!response.ok) return [];
+    const entries: unknown = await response.json();
+    return Array.isArray(entries) ? entries as SearchEntry[] : [];
+  } catch {
+    return [];
+  }
+}
+
+const boot = readState<BootState>() ?? { initialQuery: "" };
+const search = await loadSearchIndex(boot);
 document.documentElement.dataset.docsEnhanced = "true";
-installRecentGuides(boot.search, boot.activeSlug);
-installBookmarks(boot.search, boot.activeSlug);
-installReadingResume(boot.search, boot.activeSlug);
-installReadingProgress(boot.search, boot.activeSlug);
-installTextSize(boot.search, boot.activeSlug);
-installCodeWrap(boot.search, boot.activeSlug);
-installPrintGuide(boot.search, boot.activeSlug);
+installRecentGuides(search, boot.activeSlug);
+installBookmarks(search, boot.activeSlug);
+installReadingResume(search, boot.activeSlug);
+installReadingProgress(search, boot.activeSlug);
+installTextSize(search, boot.activeSlug);
+installCodeWrap(search, boot.activeSlug);
+installPrintGuide(search, boot.activeSlug);
 const searchRoot = document.getElementById("docs-search");
-if (searchRoot) hydrate(searchRoot, <SearchBox entries={boot.search} initialQuery={boot.initialQuery} searchGroup={boot.searchGroup} />);
+if (searchRoot) hydrate(searchRoot, <SearchBox entries={search} initialQuery={boot.initialQuery} searchGroup={boot.searchGroup} />);
 
 const navigation = installNavigation();
-installFocusMode(boot.search, boot.activeSlug, () => { navigation.close(false); });
+installFocusMode(search, boot.activeSlug, () => { navigation.close(false); });
 document.addEventListener("keydown", (event) => {
   if (!navigation.isOpen()) handleSearchShortcut(event);
 });

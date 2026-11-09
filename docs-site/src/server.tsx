@@ -90,6 +90,11 @@ const searchEntries: SearchEntry[] = docs.map(({ slug, title, description, group
   groupTitle,
   headings,
 }));
+// Every page needs the same search index for client enhancements. Serve it once
+// as a content-addressed asset instead of repeating it inside each page's
+// boot state, where it dominated page weight (and crawler egress).
+const searchIndexPath = `/assets/search-index.${manifest.assetVersion}.json`;
+const searchIndexJson = JSON.stringify(searchEntries);
 const appFiles = staticFiles(distRoot, { cacheControl: "public, max-age=31536000, immutable" });
 const vendorFiles = staticFiles(vendorRoot, { prefix: `/vendor/${manifest.assetVersion}`, cacheControl: "public, max-age=31536000, immutable" });
 
@@ -732,7 +737,7 @@ async function page(view: unknown, options: PageOptions): Promise<Response> {
       bodyClass: options.activeSlug && docsBySlug.has(options.activeSlug) ? "site-body guide-page" : "site-body",
       nonce,
       stylesheets: [`/assets/styles.${manifest.assetVersion}.css`],
-      state: { search: searchEntries, initialQuery: options.initialQuery ?? "", searchGroup: options.searchGroup, activeSlug: options.activeSlug },
+      state: { searchIndex: searchIndexPath, initialQuery: options.initialQuery ?? "", searchGroup: options.searchGroup, activeSlug: options.activeSlug },
       head: (
         <>
           <meta name="description" content={options.description} />
@@ -741,6 +746,7 @@ async function page(view: unknown, options: PageOptions): Promise<Response> {
           <link rel="icon" href={`/brand/favicon.ico?v=${manifest.assetVersion}`} sizes="any" />
           <link rel="icon" href={`/brand/clank-mark-32.png?v=${manifest.assetVersion}`} type="image/png" sizes="32x32" />
           <link rel="apple-touch-icon" href={`/brand/apple-touch-icon.png?v=${manifest.assetVersion}`} sizes="180x180" />
+          <link rel="preload" href={searchIndexPath} as="fetch" crossorigin="anonymous" />
           <link rel="canonical" href={canonical} />
           <link rel="alternate" type="text/plain" href="/llms.txt" title="Agent documentation map" />
           <meta property="og:title" content={options.title} />
@@ -1018,6 +1024,14 @@ export const app = createApp({
       headers: { "content-type": "application/xml; charset=utf-8", "cache-control": "public, max-age=3600" },
     });
   })
+  .get(searchIndexPath, () => new Response(searchIndexJson, {
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "public, max-age=31536000, immutable",
+      "x-content-type-options": "nosniff",
+      "x-robots-tag": "noindex",
+    },
+  }))
   .get("/assets/*", ({ request, url }) => versionedAsset(request, url.pathname.slice("/assets/".length)))
   .route("*", "/brand/*", ({ request }) => appFiles.handle(request))
   .get("/vendor/*", ({ request }) => vendorFiles.handle(request))
