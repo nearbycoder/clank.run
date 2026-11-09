@@ -190,6 +190,10 @@ File databases default to:
 
 Database, WAL, SHM, backup, and restored files are restricted to mode `0600` where the operating system supports POSIX modes. Final database paths cannot be symbolic links. Corrupt databases and semantically inconsistent revision journals stop startup instead of being used.
 
+Every table is indexed in creation order (per owner for owned tables), so the default ordering of `query()`, `limit()` and `first()` reads only the rows it returns.
+
+Stored documents are validated against the schema when the database opens. To keep startup independent of data size, the database records the schema its documents were validated against and the revision that trust extends to. An open with the same schema skips the full read as long as every write since came from a validating writer with that schema; a schema change, an applied migration, preview-data sanitization, or a writer from an older framework version causes one full validation on the next open. Tables whose schema uses `s.refine()` or a custom schema are always validated in full. The record does not detect edits made directly to the SQLite file; set `storedDataValidation: "always"` to read every document on every open.
+
 Set `durability: "normal"` only after accepting weaker power-loss durability. Set `integrityCheck: "full"` for SQLite's more expensive full startup check, or `false` only when another verified operational process owns integrity checking.
 
 ## Migrations, backup, and restore

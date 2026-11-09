@@ -202,6 +202,9 @@ export async function applyMigrations(options: ApplyMigrationsOptions): Promise<
       const insert = database.prepare(
         "INSERT INTO clank_migrations (id, name, checksum, applied_at) VALUES (?, ?, ?, ?)",
       );
+      // Migration SQL can rewrite documents without the validating writer, so
+      // the next open must read them all again.
+      forgetStoredDataValidation(database);
       for (const migration of pending) {
         database.exec(migration.sql);
         insert.run(migration.id, migration.name, migration.checksum, Date.now());
@@ -287,6 +290,13 @@ function assertMigrationResponseSize(plan: MigrationPlan): void {
       bytes += (index > 0 ? 1 : 0) + encoder.encode(JSON.stringify(records[index])).byteLength;
       if (bytes > SQLITE_TASK_MAX_MESSAGE_BYTES) throw new Error("SQLite task response exceeds its limit.");
     }
+  }
+}
+
+/** Documents rewritten outside the validating writer must be read again by the next open. */
+function forgetStoredDataValidation(database: { prepare(sql: string): { get(): unknown; run(): unknown } }): void {
+  if (database.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_meta'").get()) {
+    database.prepare("DELETE FROM clank_meta WHERE _key IN ('validated_schema', 'validated_revision')").run();
   }
 }
 

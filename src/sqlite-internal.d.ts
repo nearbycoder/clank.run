@@ -39,6 +39,8 @@ export interface SQLiteInternal {
     purgeDeletedHistory(table: string, id: string): void;
 }
 /** Every upgraded source writer consults persisted holds, including preopened connections. */
+/** @internal Whether a sqlite_schema lookup returns a row, reused until SQLite reports a schema change. */
+export declare function schemaLookup(connection: Pick<SQLiteInternal, "prepare">, sql: string): boolean;
 export declare function isRetentionHeld(connection: Pick<SQLiteInternal, "prepare">, kind: "import" | "collaboration" | "audit", id: string, now?: number): boolean;
 /** Internal hook used by the point-in-time journal. All callbacks are synchronous. */
 export interface SQLiteCaptureConnection {

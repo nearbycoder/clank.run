@@ -31,6 +31,7 @@ import {
 } from "./auth.ts";
 import {
   RequestInputError,
+  createBufferedResponse,
   publicValidationIssues,
   readJsonRequest,
   requestOriginAllowed,
@@ -39,6 +40,7 @@ import {
   SQLITE_INTERNAL,
   retentionHistoryProtection,
   retentionHistoryUsage,
+  schemaLookup,
   updateSourceSearch,
   type SQLiteInternal,
 } from "./sqlite-internal.ts";
@@ -630,6 +632,13 @@ export interface SQLiteOptions {
   busyTimeout?: number;
   durability?: "full" | "normal";
   integrityCheck?: "quick" | "full" | false;
+  /**
+   * When stored documents are checked against the schema at startup.
+   * "changed" (default) skips tables whose documents were already validated
+   * against this exact schema and have only been written by validating writers
+   * since. "always" re-reads every document on every open.
+   */
+  storedDataValidation?: "changed" | "always";
   changePollIntervalMs?: number;
   changeRetentionRevisions?: number;
   /** Global committed-revision window retained for document history. Defaults to 10,000. */
@@ -801,6 +810,23 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
     return statement;
   };
 
+  // Validating every stored document makes startup cost grow with the data.
+  // The database records which schema its documents were last validated
+  // against and the revision that trust extends to. Every validating writer
+  // moves that revision forward with its own commits, so trust survives only an
+  // unbroken chain of them: a writer with another schema, or one that predates
+  // this record, leaves the revision behind and the next open reads everything.
+  if (options.storedDataValidation !== undefined && options.storedDataValidation !== "changed" && options.storedDataValidation !== "always") {
+    throw new TypeError('storedDataValidation must be "changed" or "always".');
+  }
+  const storedSchema = storedDataFingerprint(schema);
+  const storedTrust = new Map(prepared("SELECT _key, _value FROM clank_meta WHERE _key IN ('global_version', 'validated_schema', 'validated_revision')")
+    .all().map((row) => [String(row._key), row._value]));
+  const validatedFrom = safeRevision(storedTrust.get("global_version") ?? 0, "global database revision");
+  const storedDataTrusted = options.storedDataValidation !== "always"
+    && storedTrust.get("validated_schema") === storedSchema.fingerprint
+    && storedTrust.get("validated_revision") === validatedFrom;
+
   for (const [name, table] of Object.entries(schema.tables) as Array<[string, TableDefinition<any, any, any>]>) {
     const sqlTable = tableIdentifier(name);
     migrateLegacyTable(native, `proact_${name}`, `clank_${name}`);
@@ -815,23 +841,35 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
     if (!columns.some((column) => column.name === "_owner_id")) {
       native.exec(`ALTER TABLE ${sqlTable} ADD COLUMN _owner_id TEXT`);
     }
+    // Queries default to creation order. Without an index in that order every
+    // `limit()` or `first()` reads and sorts the whole table (or the whole
+    // owner's slice of it); with one it reads only the rows it returns.
     if (table.ownership === "user") {
       native.exec(`DROP INDEX IF EXISTS ${quoteIdentifier(`proact_${name}_owner`)}`);
-      native.exec(`CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`clank_${name}_owner`)} ON ${sqlTable} (_owner_id)`);
+      native.exec(`CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`clank_${name}_owner_order`)} ON ${sqlTable} (_owner_id, _creation_time, _id)`);
+      // Superseded: every owner lookup is a prefix of the ordered index.
+      native.exec(`DROP INDEX IF EXISTS ${quoteIdentifier(`clank_${name}_owner`)}`);
+    } else {
+      native.exec(`CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`clank_${name}_order`)} ON ${sqlTable} (_creation_time, _id)`);
     }
     for (const [indexName, fields] of Object.entries(table.indexes)) {
       const expressions = fields.map((field) => jsonExpression(field)).join(", ");
       native.exec(`DROP INDEX IF EXISTS ${quoteIdentifier(`proact_${name}_${indexName}`)}`);
       native.exec(`CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`clank_${name}_${indexName}`)} ON ${sqlTable} (${expressions})`);
     }
-    const rows = prepared(`SELECT _id, _owner_id, _creation_time, _version, _data FROM ${sqlTable}`).all();
-    for (const row of rows) {
+    if (storedDataTrusted && storedSchema.tables.has(name)) continue;
+    const stored = prepared(`SELECT _id, _owner_id, _creation_time, _version, _data FROM ${sqlTable}`) as StatementLike & { iterate?(): Iterable<Record<string, unknown>> };
+    // Stream where the driver can, so a large table is never held in memory at once.
+    for (const row of typeof stored.iterate === "function" ? stored.iterate() : stored.all()) {
       table.schema.parse(parseStoredData(row._data));
       if (table.ownership === "user" && typeof row._owner_id !== "string") {
         throw new Error(`Owned table ${name} contains an unowned document (${String(row._id)}). Assign an owner before enabling .owned().`);
       }
     }
   }
+  // Set while a full validation by this process awaits its first commit. That
+  // commit records the trust, provided nothing else was written in between.
+  let validatedPending: number | undefined = storedDataTrusted ? undefined : validatedFrom;
 
   assertDatabaseIntegrity(native, options.integrityCheck ?? "quick");
 
@@ -1441,6 +1479,15 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
       if (changes.records.size > 0) {
         prepared("UPDATE clank_meta SET _value = _value + 1 WHERE _key = 'global_version'").run();
         committedVersion = readGlobalRevision(prepared);
+        if (validatedPending === committedVersion - 1) {
+          prepared(`INSERT INTO clank_meta (_key, _value) VALUES ('validated_schema', ?), ('validated_revision', ?)
+            ON CONFLICT(_key) DO UPDATE SET _value = excluded._value`).run(storedSchema.fingerprint, committedVersion);
+        } else {
+          // Extend trust only from the immediately preceding revision and only for this schema.
+          prepared(`UPDATE clank_meta SET _value = ? WHERE _key = 'validated_revision' AND _value = ?
+            AND EXISTS (SELECT 1 FROM clank_meta WHERE _key = 'validated_schema' AND _value = ?)`)
+            .run(committedVersion, committedVersion - 1, storedSchema.fingerprint);
+        }
         const insertChange = prepared(`INSERT INTO clank_changes
           (revision, sequence, table_name, document_id, owner_id)
           VALUES (?, ?, ?, ?, ?)`);
@@ -1509,6 +1556,8 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
       capture?.commit();
       writeGuard?.();
       native.exec("COMMIT");
+      // This process's validation was either recorded by that commit or overtaken by another writer.
+      if (committedVersion !== undefined) validatedPending = undefined;
     } catch (error) {
       if (began) {
         try { native.exec("ROLLBACK"); } catch { /* SQLite may already have rolled back. */ }
@@ -2231,7 +2280,16 @@ interface CacheEntry {
   dependencies: readonly ReadDependency[];
   version: number;
   dirty: boolean;
+  /** HTTP body for this immutable result, kept so repeated hits are not re-serialized. */
+  body?: string;
 }
+
+/** Init for successful query and mutation responses; matches Response.json() plus no-store. */
+const RESULT_RESPONSE: ResponseInit = Object.freeze({
+  headers: Object.freeze({ "cache-control": "no-store", "content-type": "application/json" }),
+});
+/** Larger bodies are cheaper to rebuild than to hold twice. */
+const MAX_RETAINED_BODY = 64 * 1024;
 
 interface SubscriberEntry {
   path: string;
@@ -2411,6 +2469,8 @@ export async function openBackend<
   const maxLiveConnections = positiveIntegerOption(options.maxLiveConnections ?? liveConnectionEnvironment(), "maxLiveConnections");
   const maxCacheEntries = nonNegativeInteger(options.maxCacheEntries ?? 1_000, "maxCacheEntries");
   const prefix = `/${trimBoundarySlashes(options.prefix ?? "__clank")}`;
+  // Compiled on first request so an unusual prefix fails where it always has.
+  let securityRoutePattern: RegExp | undefined;
   const agentOptions = options.agent === false ? null : options.agent ?? {};
   const mcpPath = agentOptions
     ? backendAgentPath(agentOptions.mcpPath ?? `${prefix}/mcp`, "agent.mcpPath")
@@ -2471,7 +2531,7 @@ export async function openBackend<
     const internal=serviceDatabase[SQLITE_INTERNAL];
     assertOrganizationSecurityProtocol(internal);
     if(organizationSecurity) organizationSecurity.authorizeAuth(options.organizationSecurity!.organizationId,current);
-    else if(internal.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_organization_security_policies' AND type='table'").get()
+    else if(schemaLookup(internal, "SELECT 1 FROM sqlite_schema WHERE name='clank_organization_security_policies' AND type='table'")
       && internal.prepare('SELECT 1 FROM clank_organization_security_policies LIMIT 1').get()) throw new AuthError('ORGANIZATION_POLICY_UNCONFIGURED','Reopen this backend with its organization security binding.',503);
   };
   let activity: ReturnType<typeof openAgentActivity> | undefined;
@@ -2568,7 +2628,10 @@ export async function openBackend<
     while (cache.size > maxCacheEntries) cache.delete(cache.keys().next().value!);
   };
 
+  /** Cache entry behind the result invokeQueryBody() just returned; read synchronously by the HTTP handler. */
+  let servedQuery: CacheEntry | undefined;
   const invokeQueryBody = (path: string, input: unknown, auth: AuthRequest<any> | null): { value: unknown; version: number } => {
+    servedQuery = undefined;
     ensureOpen();
     // Reading a request body can yield while sessions or roles are revoked.
     // Refresh the session at the synchronous execution boundary.
@@ -2589,6 +2652,7 @@ export async function openBackend<
       if (diagnostic) diagnostic.cacheHits++;
       cache.delete(key);
       cache.set(key, cached);
+      servedQuery = cached;
       return { value: cached.value, version: cached.version };
     }
     const diagnostic = queryDiagnostic(path);
@@ -2601,8 +2665,22 @@ export async function openBackend<
     const dependencies = auth?.user
       ? [...tracked.dependencies, { table: "__auth", id: auth.user.id, ownerId: auth.user.id }]
       : tracked.dependencies;
-    setCache(key, { path, args, auth, value, dependencies, version: tracked.version, dirty: false });
+    const entry: CacheEntry = { path, args, auth, value, dependencies, version: tracked.version, dirty: false, body: undefined };
+    setCache(key, entry);
+    servedQuery = entry;
     return { value, version: tracked.version };
+  };
+
+  /** Serialize a query result once per cache entry. Results are immutable snapshots, so the text cannot go stale. */
+  const queryResponse = (result: { value: unknown; version: number }): Response => {
+    const entry = servedQuery;
+    servedQuery = undefined;
+    let body = entry !== undefined && entry.value === result.value && entry.version === result.version ? entry.body : undefined;
+    if (body === undefined) {
+      body = JSON.stringify({ ok: true, ...result });
+      if (entry !== undefined && entry.value === result.value && entry.version === result.version && body.length <= MAX_RETAINED_BODY) entry.body = body;
+    }
+    return createBufferedResponse(body, RESULT_RESPONSE);
   };
 
   const invokeMutationBody = (path: string, input: unknown, auth: AuthRequest<any> | null, key?: string): { value: unknown; version: number } => {
@@ -3048,7 +3126,7 @@ export async function openBackend<
     async handle(request) {
       ensureOpen();
       const url = new URL(request.url);
-      const securityRoute = new RegExp('^'+prefix+'/organizations/([A-Za-z0-9_-]{8,128})/security-policy(?:/(preview|recover))?$','u').exec(url.pathname);
+      const securityRoute = (securityRoutePattern ??= new RegExp('^'+prefix+'/organizations/([A-Za-z0-9_-]{8,128})/security-policy(?:/(preview|recover))?$','u')).exec(url.pathname);
       if (securityRoute) {
         try {
           if (!organizationSecurity || securityRoute[1] !== options.organizationSecurity?.organizationId) return problem(404,'NOT_FOUND','Organization security is unavailable.');
@@ -3151,8 +3229,7 @@ export async function openBackend<
         }
         const auth = authRuntime ? await authRuntime.resolve(request) : null;
         if (request.method === "POST" && operation === "query") {
-          const result = invokeQuery(path, await readJsonRequest(request, maxRequestBytes), auth);
-          return Response.json({ ok: true, ...result }, { headers: { "cache-control": "no-store" } });
+          return queryResponse(invokeQuery(path, await readJsonRequest(request, maxRequestBytes), auth));
         }
         if (request.method === "POST" && operation === "mutation") {
           if (authRuntime && auth?.session) await authRuntime.verifyCsrf(request, auth);
@@ -3162,7 +3239,7 @@ export async function openBackend<
             if (!auth?.user || request.headers.get("x-clank-offline-user") !== auth.user.id) throw new RequestInputError(403, "OFFLINE_ACCOUNT_CHANGED", "Queued mutation belongs to another account.");
           }
           const result = invokeMutation(path, await readJsonRequest(request, maxRequestBytes), auth, key);
-          return Response.json({ ok: true, ...result }, { headers: { "cache-control": "no-store" } });
+          return createBufferedResponse(JSON.stringify({ ok: true, ...result }), RESULT_RESPONSE);
         }
         if (request.method === "GET" && operation === "live") {
           const encoded = url.searchParams.get("args") ?? "{}";
@@ -3970,17 +4047,19 @@ function databaseChange(
   });
 }
 
-function immutableSnapshot<Value>(value: Value, seen = new WeakSet<object>()): Value {
-  if (!value || typeof value !== "object") return value;
-  const object = value as object;
-  if (seen.has(object) || Object.isFrozen(object)) return value;
-  seen.add(object);
+function immutableSnapshot<Value>(value: Value): Value {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  // Freezing before descending marks the object as visited, so a cycle stops
+  // at the frozen check without a separate visited set.
+  Object.freeze(value);
   if (Array.isArray(value)) {
-    for (const entry of value) immutableSnapshot(entry, seen);
+    for (let index = 0; index < value.length; index++) immutableSnapshot(value[index]);
   } else {
-    for (const entry of Object.values(value as Record<string, unknown>)) immutableSnapshot(entry, seen);
+    for (const key in value) {
+      if (Object.hasOwn(value, key)) immutableSnapshot((value as Record<string, unknown>)[key]);
+    }
   }
-  return Object.freeze(value);
+  return value;
 }
 
 function readonlySet<Value>(input: Iterable<Value>): ReadonlySet<Value> {
@@ -4018,6 +4097,41 @@ function readonlyMap<Key, Value>(input: Iterable<readonly [Key, Value]>): Readon
     get [Symbol.toStringTag]() { return "Map"; },
   });
   return output;
+}
+
+/**
+ * Version of the rules built-in schemas apply to stored documents. Raise it
+ * whenever a built-in type starts rejecting a value it used to accept, so
+ * every database is validated again under the new rules.
+ */
+const STORED_DATA_RULES = 1;
+
+/**
+ * Identifies everything that decides whether a stored document is valid: the
+ * JSON Schema and ownership of each table whose schema is entirely built in.
+ * Tables with refinements or custom schemas carry logic a fingerprint cannot
+ * see, so they are left out and validated on every open.
+ */
+function storedDataFingerprint(schema: DatabaseSchema<any>): { fingerprint: number; tables: ReadonlySet<string> } {
+  const tables = new Set<string>();
+  const shapes: unknown[] = [STORED_DATA_RULES];
+  for (const name of Object.keys(schema.tables).sort()) {
+    const table = schema.tables[name] as TableDefinition<any, any, any>;
+    if (!isBuiltinSchema(table.schema)) continue;
+    tables.add(name);
+    shapes.push([name, table.ownership, table.schema.toJSONSchema()]);
+  }
+  // 53-bit non-cryptographic hash (cyrb53): this detects change, it is not a security boundary.
+  const text = stableStringify(shapes);
+  let high = 0xdeadbeef, low = 0x41c6ce57;
+  for (let index = 0; index < text.length; index++) {
+    const code = text.charCodeAt(index);
+    high = Math.imul(high ^ code, 2654435761);
+    low = Math.imul(low ^ code, 1597334677);
+  }
+  high = Math.imul(high ^ (high >>> 16), 2246822507) ^ Math.imul(low ^ (low >>> 13), 3266489909);
+  low = Math.imul(low ^ (low >>> 16), 2246822507) ^ Math.imul(high ^ (high >>> 13), 3266489909);
+  return { fingerprint: 4294967296 * (2097151 & low) + (high >>> 0), tables };
 }
 
 function readGlobalRevision(prepared: (sql: string) => StatementLike): number {

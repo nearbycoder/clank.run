@@ -34,15 +34,22 @@ export interface Schema<T = unknown> {
 declare const DOCUMENT_ID_TABLE: unique symbol;
 export type DocumentId<Table extends string> = string & { readonly [DOCUMENT_ID_TABLE]: Table };
 
-type Parser<T> = (input: unknown, path: Array<string | number>) => T;
-const schemaState = new WeakMap<object, { parser: Parser<any>; json: Record<string, unknown> }>();
+type Parser<T> = (input: unknown, path: ReadonlyArray<string | number>) => T;
+/**
+ * Every schema parses from its own root: a parent adds its key to a child's
+ * issues only when one is thrown. Parsers therefore share one empty path and
+ * never retain it, so a successful parse allocates no path arrays at all.
+ */
+const ROOT_PATH: ReadonlyArray<string | number> = Object.freeze([]);
 
 class SchemaValue<T> implements Schema<T> {
   declare readonly description?: string;
-  constructor(parser: Parser<T>, json: Record<string, unknown>, description?: string) { schemaState.set(this, { parser, json }); this.description = description; }
+  readonly #parser: Parser<T>;
+  readonly #json: Record<string, unknown>;
+  constructor(parser: Parser<T>, json: Record<string, unknown>, description?: string) { this.#parser = parser; this.#json = json; this.description = description; }
 
   parse(input: unknown): T {
-    return schemaState.get(this)!.parser(input, []);
+    return this.#parser(input, ROOT_PATH);
   }
 
   safeParse(input: unknown): { success: true; data: T } | { success: false; error: ValidationError } {
@@ -54,13 +61,13 @@ class SchemaValue<T> implements Schema<T> {
   }
 
   toJSONSchema(): Record<string, unknown> {
-    const output = structuredClone(schemaState.get(this)!.json);
+    const output = structuredClone(this.#json);
     return this.description ? { ...output, description: this.description } : output;
   }
 }
 
-function issue(path: Array<string | number>, message: string, expected?: string, received?: unknown): never {
-  throw new ValidationError([{ path, message, expected, received }]);
+function issue(path: ReadonlyArray<string | number>, message: string, expected?: string, received?: unknown): never {
+  throw new ValidationError([{ path: [...path], message, expected, received }]);
 }
 
 function schemaValue<T>(parser: Parser<T>, json: Record<string, unknown>, description?: string, children: readonly Schema[] | false = []): Schema<T> {
@@ -215,7 +222,7 @@ export const s = {
       if (settings.max !== undefined && input.length > settings.max) return issue(path, `Must contain at most ${settings.max} items.`);
       const issues: ValidationIssue[] = [];
       const output = input.map((entry, index) => {
-        try { return parseAt(item, entry, [...path, index]); }
+        try { return parseAt(item, entry, path, index); }
         catch (error) {
           if (error instanceof ValidationError) issues.push(...error.issues);
           else throw error;
@@ -255,7 +262,7 @@ export const s = {
             continue;
           }
         }
-        try { output[key] = parseAt(value, entry, [...path, key]); }
+        try { output[key] = parseAt(value, entry, path, key); }
         catch (error) { if (error instanceof ValidationError) issues.push(...error.issues); else throw error; }
       }
       if (issues.length) throw new ValidationError(issues);
@@ -279,22 +286,29 @@ export const s = {
       delete json.optional;
       return [key, json];
     }));
+    // The shape is frozen, so its keys and members are fixed for every parse.
+    const keys = Object.keys(safeShape);
+    const members = keys.map((key) => safeShape[key]!);
+    const loose = settings.strict === false;
     return schemaValue((input, path) => {
       if (!input || typeof input !== "object" || Array.isArray(input)) return issue(path, "Expected an object.", "object", input);
       const source = input as Record<string, unknown>;
-      const output: Record<string, unknown> = settings.strict === false ? { ...source } : {};
-      const issues: ValidationIssue[] = [];
-      for (const [key, value] of Object.entries(safeShape)) {
+      const output: Record<string, unknown> = loose ? { ...source } : {};
+      let issues: ValidationIssue[] | undefined;
+      for (let index = 0; index < keys.length; index++) {
+        const key = keys[index]!;
         try {
-          const parsed = parseAt(value, Object.hasOwn(source, key) ? source[key] : undefined, [...path, key]);
-          Object.defineProperty(output, key, { value: parsed, enumerable: true, writable: true, configurable: true });
+          const parsed = parseAt(members[index]!, Object.hasOwn(source, key) ? source[key] : undefined, path, key);
+          // Assignment defines an own property for every key except the one that names the prototype.
+          if (key === "__proto__") Object.defineProperty(output, key, { value: parsed, enumerable: true, writable: true, configurable: true });
+          else output[key] = parsed;
         }
-        catch (error) { if (error instanceof ValidationError) issues.push(...error.issues); else throw error; }
+        catch (error) { if (error instanceof ValidationError) (issues ??= []).push(...error.issues); else throw error; }
       }
-      if (settings.strict !== false) {
-        for (const key of Object.keys(source)) if (!Object.hasOwn(safeShape, key)) issues.push({ path: [...path, key], message: "Unknown property." });
+      if (!loose) {
+        for (const key of Object.keys(source)) if (!Object.hasOwn(safeShape, key)) (issues ??= []).push({ path: [...path, key], message: "Unknown property." });
       }
-      if (issues.length) throw new ValidationError(issues);
+      if (issues) throw new ValidationError(issues);
       return output as InferShape<S>;
     }, {
       type: "object",
@@ -407,12 +421,16 @@ function validDate(value: string): boolean {
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
-function parseAt<T>(schema: Schema<T>, input: unknown, path: Array<string | number>): T {
+/** Parse a member, locating any issue it reports under `path` (and `key`, when the member is a property or item). */
+function parseAt<T>(schema: Schema<T>, input: unknown, path: ReadonlyArray<string | number>, key?: string | number): T {
   try {
     return schema.parse(input);
   } catch (error) {
     if (error instanceof ValidationError) {
-      throw new ValidationError(error.issues.map((entry) => ({ ...entry, path: [...path, ...entry.path] })));
+      throw new ValidationError(error.issues.map((entry) => ({
+        ...entry,
+        path: key === undefined ? [...path, ...entry.path] : [...path, key, ...entry.path],
+      })));
     }
     throw error;
   }

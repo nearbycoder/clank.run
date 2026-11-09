@@ -11,38 +11,180 @@ const URL_ATTRIBUTES = new Set([
   "xlink:href",
 ]);
 
-const TRUSTED_CLIENT_ADDRESSES = new WeakMap<Request, string>();
+/**
+ * Everything the native adapter attests about one Request object. One weak
+ * record per request keeps the per-request cost to a single map insertion.
+ */
+interface NativeEvidence { address?: string; target?: CanonicalTarget; exact?: ExactProof; }
+const FOREIGN_EVIDENCE = new WeakMap<Request, NativeEvidence>();
+interface NativeRequests { create(url: string, init: RequestInit): Request; read(request: Request): NativeEvidence | undefined; }
+let nativeRequests: NativeRequests | undefined;
 
-const CANONICAL_REQUEST_TARGETS = new WeakMap<Request, Readonly<{method:"POST";url:string}>>();
+/**
+ * @internal The native adapter's Request. Its evidence lives in a private
+ * field: handlers can neither read nor forge it, clones never carry it, and it
+ * avoids the identity-hash cost of keying a WeakMap by every incoming Request.
+ */
+export function createNativeRequest(url: string, init: RequestInit): Request {
+  if (!nativeRequests) {
+    const Base = globalThis.Request;
+    // Named Request so diagnostics and constructor.name read like the platform class.
+    const NativeRequest = class Request extends Base {
+      #evidence: NativeEvidence = { address: undefined, target: undefined, exact: undefined };
+      static read(request: globalThis.Request): NativeEvidence | undefined {
+        return #evidence in request ? request.#evidence : undefined;
+      }
+    };
+    nativeRequests = { create: (url, init) => new NativeRequest(url, init), read: NativeRequest.read };
+  }
+  return nativeRequests.create(url, init);
+}
+/** Evidence already attached to a request, without creating any. */
+function evidenceOf(request: Request): NativeEvidence | undefined {
+  return nativeRequests?.read(request) ?? FOREIGN_EVIDENCE.get(request);
+}
+/** Evidence for a request; Requests built outside the adapter fall back to a weak record. */
+function nativeEvidence(request: Request): NativeEvidence {
+  let evidence = evidenceOf(request);
+  if (!evidence) FOREIGN_EVIDENCE.set(request, evidence = { address: undefined, target: undefined, exact: undefined });
+  return evidence;
+}
+
+interface BufferedResponses {
+  create(source: string, init: ResponseInit): Response;
+  length(response: Response): number | undefined;
+  take(response: Response): string | undefined;
+}
+let bufferedResponses: BufferedResponses | undefined;
+
+/**
+ * @internal A Response whose body is a string the caller already holds.
+ *
+ * The platform constructor builds a byte stream for every non-null body even
+ * when the adapter writes the text straight to the socket. This subclass
+ * defers that stream until something actually asks for it (`body`, `clone()`,
+ * `blob()`...), so `json()`/`text()`/`html()` responses cost one header list.
+ * Every Body method behaves as it does on a platform Response.
+ */
+export function createBufferedResponse(source: unknown, init: ResponseInit): Response {
+  const status = init.status;
+  // Non-strings and null-body statuses keep the platform's own conversion and errors.
+  if (typeof source !== "string" || status === 101 || status === 103 || status === 204 || status === 205 || status === 304) {
+    return new Response(source as BodyInit | null | undefined, init);
+  }
+  if (!bufferedResponses) {
+    const Base = globalThis.Response;
+    const BufferedResponse = class Response extends Base {
+      #source: string;
+      #stream: globalThis.Response | undefined;
+      #used = false;
+      constructor(source: string, init: ResponseInit) { super(null, init); this.#source = source; }
+      /** The platform Response that owns the real stream, created on first need. */
+      #real(): globalThis.Response {
+        let stream = this.#stream;
+        if (!stream) {
+          stream = this.#stream = new Base(this.#source, { status: this.status, statusText: this.statusText, headers: this.headers });
+          // A body read through a fast path stays read for every later consumer.
+          if (this.#used) void stream.text().catch(() => undefined);
+        }
+        return stream;
+      }
+      override get body(): ReadableStream<Uint8Array<ArrayBuffer>> | null { return this.#real().body; }
+      override get bodyUsed(): boolean { return this.#used || (this.#stream !== undefined && this.#stream.bodyUsed); }
+      override text(): Promise<string> {
+        if (this.#stream || this.#used) return this.#real().text();
+        this.#used = true;
+        return Promise.resolve(this.#source);
+      }
+      override json(): Promise<any> {
+        if (this.#stream || this.#used) return this.#real().json();
+        this.#used = true;
+        try { return Promise.resolve(JSON.parse(this.#source)); }
+        catch (error) { return Promise.reject(error); }
+      }
+      override arrayBuffer(): Promise<ArrayBuffer> { return this.#real().arrayBuffer(); }
+      override blob(): Promise<Blob> { return this.#real().blob(); }
+      override formData(): Promise<FormData> { return this.#real().formData(); }
+      override clone(): globalThis.Response {
+        const init = { status: this.status, statusText: this.statusText, headers: this.headers };
+        if (!this.#stream && !this.#used) return new BufferedResponse(this.#source, init);
+        return new Base(this.#real().clone().body, init);
+      }
+      static real(response: globalThis.Response): globalThis.Response {
+        return #source in response ? response.#real() : response;
+      }
+      static length(response: globalThis.Response): number | undefined {
+        return #source in response && !response.#stream && !response.#used ? response.#source.length : undefined;
+      }
+      static take(response: globalThis.Response): string | undefined {
+        if (!(#source in response) || response.#stream || response.#used) return undefined;
+        response.#used = true;
+        return response.#source;
+      }
+    };
+    if ("bytes" in Base.prototype) {
+      // Not every supported runtime has bytes(); mirror it only where the platform does.
+      Object.defineProperty(BufferedResponse.prototype, "bytes", {
+        value(this: globalThis.Response) { return (BufferedResponse.real(this) as unknown as { bytes(): Promise<Uint8Array> }).bytes(); },
+        writable: true, configurable: true,
+      });
+    }
+    bufferedResponses = { create: (source, init) => new BufferedResponse(source, init), length: BufferedResponse.length, take: BufferedResponse.take };
+  }
+  return bufferedResponses.create(source, init);
+}
+/** @internal Character count of an unread buffered body, or undefined for any other response. */
+export function bufferedBodyLength(response: Response): number | undefined {
+  return bufferedResponses !== undefined && typeof response === "object" && response !== null ? bufferedResponses.length(response) : undefined;
+}
+/** @internal Claims an unread buffered body for a direct write. The response then reports its body as used. */
+export function takeBufferedBody(response: Response): string | undefined {
+  return bufferedResponses !== undefined && typeof response === "object" && response !== null ? bufferedResponses.take(response) : undefined;
+}
+let lastTrustedAddress: readonly [raw: string | undefined, normalized: string] = [undefined, ""];
+
+interface CanonicalTarget {readonly method:"POST";readonly url:string;readonly target:string;verified?:boolean}
 /** @internal Separate POST target evidence; never anonymous observation or authentication. */
 export function captureCanonicalRequestTarget(method: unknown, target: unknown): ((request: Request) => void) | undefined {
   try {
     if(method!=="POST" || typeof target!=="string" || target.length<1 || target.length>1024 || !target.startsWith("/")
-      || /[^\x21-\x7e]|[%\\?#]|\/\//u.test(target) || target.split("/").some(part=>part==="." || part===".."))return undefined;
+      || /[^\x21-\x7e]|[%\\?#]|\/\//u.test(target) || target.includes("/.") && target.split("/").some(part=>part==="." || part===".."))return undefined;
     let attached=false;
     return request=>{
       if(attached)return;attached=true;
       try {
-        const value=request.url,url=new URL(value);
-        if(request.method!==method || value.length>2048 || /[^\x21-\x7e]/u.test(value) || url.pathname!==target || url.search || url.hash)return;
-        CANONICAL_REQUEST_TARGETS.set(request,Object.freeze({method,url:value}));
+        // Snapshot the native method/URL now; parse them only if a consumer asks for the proof.
+        const value=request.url;
+        if(request.method!==method || typeof value!=="string" || value.length>2048)return;
+        nativeEvidence(request).target={method,url:value,target,verified:undefined};
       } catch { /* Unsupported transport evidence never changes ordinary dispatch. */ }
     };
   } catch { return undefined; }
 }
 /** @internal Assertion-only exact native object/method/URL evidence; clones carry none. */
 export function hasCanonicalRequestTarget(request: Request): boolean {
-  try {const proof=CANONICAL_REQUEST_TARGETS.get(request);return Boolean(proof && request.method===proof.method && request.url===proof.url);}
+  try {
+    const proof=evidenceOf(request)?.target;if(!proof)return false;
+    if(proof.verified===undefined){
+      // The snapshot is immutable, so this deferred check equals the attach-time check.
+      let verified=false;
+      try{const url=new URL(proof.url);verified=!/[^\x21-\x7e]/u.test(proof.url) && url.pathname===proof.target && !url.search && !url.hash;}catch{}
+      proof.verified=verified;
+    }
+    return proof.verified && request.method===proof.method && request.url===proof.url;
+  }
   catch {return false;}
 }
 
 
 /** @internal Native transport proof; never inherited by Request.clone(). */
 export interface ExactRequest { readonly method: "GET" | "HEAD"; readonly path: string; readonly accept: string | null; }
-const EXACT_REQUESTS = new WeakMap<Request, {
-  exact: Readonly<ExactRequest>; url: string; fingerprint: string; digest: (value: string) => string;
+interface ExactProof {
+  exact?: Readonly<ExactRequest>; url: string; fingerprint?: string; digest: (value: string) => string;
   taken: boolean; registered: boolean; active: boolean; handoff?: () => undefined; detach?: () => void;
-}>();
+  /** Unresolved transport evidence. Cleared, leaving only the digest, on first use. */
+  pending?: { method: "GET" | "HEAD"; target: string; rawHeaders: readonly unknown[]; trustProxy: boolean; injected: string | null };
+}
 const ANONYMOUS_HEADERS = new Set("host accept accept-encoding accept-language user-agent connection cache-control pragma dnt sec-gpc sec-fetch-dest sec-fetch-mode sec-fetch-site sec-fetch-user sec-ch-ua sec-ch-ua-mobile sec-ch-ua-platform referer".split(" "));
 const PROXY_HEADERS = new Set("forwarded x-forwarded-for x-forwarded-proto x-forwarded-host x-forwarded-port".split(" "));
 
@@ -56,59 +198,87 @@ function exactHeaderFields(headers: Headers, injected = true): string | undefine
   return JSON.stringify(fields.sort((a, b) => a[0]! < b[0]! ? -1 : a[0]! > b[0]! ? 1 : 0));
 }
 
-/** @internal Called only by the native adapter, before Fetch normalization. */
+/** Canonical JSON of the raw anonymous header fields, or undefined when the transport is not provable. */
+function exactRawFields(rawHeaders: readonly unknown[], trustProxy: boolean): { canonical: string; accept: string | null } | undefined {
+  const fields: string[][] = [], seen = new Set<string>(); let size = 0, accept: string | null = null;
+  for (let i = 0; i < rawHeaders.length; i += 2) {
+    const rawName: unknown = rawHeaders[i], rawValue: unknown = rawHeaders[i + 1];
+    if (typeof rawName !== "string" || typeof rawValue !== "string" || rawValue.length > 2048
+      || (size += rawName.length + rawValue.length + 4) > 8192) return undefined;
+    const name = rawName.toLowerCase(), value = rawValue.replace(/^[ \t]+|[ \t]+$/gu, "");
+    if (seen.has(name) || !ANONYMOUS_HEADERS.has(name) && !(trustProxy && PROXY_HEADERS.has(name)) || /[^\x20-\x7e]/u.test(value)
+      || name === "connection" && value.toLowerCase() !== "keep-alive" && value.toLowerCase() !== "close") return undefined;
+    seen.add(name); fields.push([name, value]);
+    if (name === "accept") { if (value.length > 512) return undefined; accept = value; }
+  }
+  return { canonical: JSON.stringify(fields.sort((a, b) => a[0]! < b[0]! ? -1 : a[0]! > b[0]! ? 1 : 0)), accept };
+}
+
+/**
+ * @internal Called only by the native adapter, before Fetch normalization.
+ *
+ * Almost no request is ever asked for this proof, so capture only records the
+ * transport's own evidence. Canonicalisation and hashing run on first use and
+ * reach the same verdict the eager check did: the request must still mirror
+ * the raw header block, and the adapter-injected address must be unchanged.
+ */
 export function captureExactRequest(method: unknown, target: unknown, rawHeaders: unknown, trustProxy: boolean, digest: (value: string) => string): ((request: Request) => void) | undefined {
   try {
     if (method !== "GET" && method !== "HEAD" || typeof target !== "string" || target.length > 512
-      || !target.startsWith("/") || /[^\x21-\x7e]|[%\\?#]|\/\//u.test(target) || target.split("/").some(part => part === "." || part === "..")
+      || !target.startsWith("/") || /[^\x21-\x7e]|[%\\?#]|\/\//u.test(target) || target.includes("/.") && target.split("/").some(part => part === "." || part === "..")
       || !Array.isArray(rawHeaders) || rawHeaders.length > 64 || rawHeaders.length % 2) return undefined;
-    const fields: string[][] = [], seen = new Set<string>(); let size = 0, accept: string | null = null;
-    for (let i = 0; i < rawHeaders.length; i += 2) {
-      const rawName: unknown = rawHeaders[i], rawValue: unknown = rawHeaders[i + 1];
-      if (typeof rawName !== "string" || typeof rawValue !== "string" || rawValue.length > 2048
-        || (size += rawName.length + rawValue.length + 4) > 8192) return undefined;
-      const name = rawName.toLowerCase(), value = rawValue.replace(/^[ \t]+|[ \t]+$/gu, "");
-      if (seen.has(name) || !ANONYMOUS_HEADERS.has(name) && !(trustProxy && PROXY_HEADERS.has(name)) || /[^\x20-\x7e]/u.test(value)
-        || name === "connection" && value.toLowerCase() !== "keep-alive" && value.toLowerCase() !== "close") return undefined;
-      seen.add(name); fields.push([name, value]);
-      if (name === "accept") { if (value.length > 512) return undefined; accept = value; }
-    }
-    const rawFingerprint = digest(JSON.stringify(fields.sort((a, b) => a[0]! < b[0]! ? -1 : a[0]! > b[0]! ? 1 : 0)));
-    fields.length = 0; seen.clear();
-    const exact = Object.freeze({ method, path: target, accept }); let attached = false;
-    // Retain no browser/referrer/forwarding values: only their bounded digest.
+    let attached = false;
     return request => {
       if (attached) return; attached = true;
       try {
-        const url = new URL(request.url), fields = exactHeaderFields(request.headers, false), current = exactHeaderFields(request.headers);
-        if (request.method !== method || request.body || url.pathname !== target || url.search || url.hash || fields === undefined || current === undefined
-          || digest(fields) !== rawFingerprint) return;
-        EXACT_REQUESTS.set(request, { exact, url: request.url, fingerprint: digest(current), digest, taken: false, registered: false, active: false });
+        if (request.method !== method || request.body) return;
+        // Until first use the proof references only the transport's own header
+        // block, which the request already mirrors and outlives.
+        nativeEvidence(request).exact = { exact: undefined, url: request.url, fingerprint: undefined, digest, taken: false, registered: false, active: false,
+          handoff: undefined, detach: undefined,
+          pending: { method, target, rawHeaders, trustProxy, injected: request.headers.get("x-clank-client-ip") } };
       } catch { /* Missing transport proof only disables observation. */ }
     };
   } catch { return undefined; }
 }
 
+/** Resolve deferred evidence once. Returns false while the request does not (or no longer) match its transport. */
+function resolveExactProof(request: Request, proof: ExactProof): boolean {
+  const pending = proof.pending;
+  if (!pending) return true;
+  const raw = exactRawFields(pending.rawHeaders, pending.trustProxy);
+  if (!raw) { const evidence = evidenceOf(request); if (evidence?.exact === proof) evidence.exact = undefined; return false; }
+  const url = new URL(proof.url), fields = exactHeaderFields(request.headers, false), current = exactHeaderFields(request.headers);
+  if (request.url !== proof.url || request.method !== pending.method || request.body || url.pathname !== pending.target || url.search || url.hash
+    || fields === undefined || current === undefined || fields !== raw.canonical
+    || request.headers.get("x-clank-client-ip") !== pending.injected) return false;
+  // Retain no browser/referrer/forwarding values from here on: only their bounded digest.
+  proof.exact = Object.freeze({ method: pending.method, path: pending.target, accept: raw.accept });
+  proof.fingerprint = proof.digest(current);
+  proof.pending = undefined;
+  return true;
+}
+
 /** @internal Returns bounded public metadata only while the exact native request still matches. */
 export function exactRequest(request: Request): Readonly<ExactRequest> | undefined {
   try {
-    const proof = EXACT_REQUESTS.get(request); if (!proof) return undefined;
+    const proof = evidenceOf(request)?.exact; if (!proof || !resolveExactProof(request, proof)) return undefined;
     const fields = exactHeaderFields(request.headers);
-    if (request.url !== proof.url || request.method !== proof.exact.method || request.body || fields === undefined || proof.digest(fields) !== proof.fingerprint) return undefined;
+    if (request.url !== proof.url || request.method !== proof.exact!.method || request.body || fields === undefined || proof.digest(fields) !== proof.fingerprint) return undefined;
     return proof.exact;
   } catch { return undefined; }
 }
 
 /** @internal Reserve one post-write notification; cancellation also detaches the primary tap. */
 export function registerRequestHandoff(request: Request, callback: () => undefined): (() => void) | undefined {
-  const proof = EXACT_REQUESTS.get(request);
+  const proof = evidenceOf(request)?.exact;
   if (!proof || proof.taken || proof.registered || typeof callback !== "function" || !exactRequest(request)) return undefined;
   proof.registered = true; proof.active = true; proof.handoff = callback;
   return () => cancelRequestHandoff(request);
 }
 /** @internal Native adapter alone consumes this after its ordinary first write/end. */
 export function takeRequestHandoff(request: Request): (() => void) | undefined {
-  const proof = EXACT_REQUESTS.get(request); if (!proof || proof.taken) return undefined;
+  const proof = evidenceOf(request)?.exact; if (!proof || proof.taken) return undefined;
   proof.taken = true; const callback = proof.handoff; proof.handoff = undefined;
   if (!callback) return undefined;
   let called = false;
@@ -121,12 +291,12 @@ export function takeRequestHandoff(request: Request): (() => void) | undefined {
 }
 /** @internal Ends only shadow observation; it never cancels the primary request. */
 export function cancelRequestHandoff(request: Request): void {
-  const proof = EXACT_REQUESTS.get(request);
+  const proof = evidenceOf(request)?.exact;
   if (proof) { proof.active = false; proof.handoff = undefined; const detach = proof.detach; proof.detach = undefined; try { detach?.(); } catch {} }
 }
 /** @internal Controller cancellation detaches consumer-driven byte notifications. */
 export function requestHandoffActive(request: Request, detach?: () => void): boolean {
-  const proof = EXACT_REQUESTS.get(request);
+  const proof = evidenceOf(request)?.exact;
   if (!proof?.active) return false;
   if (detach) { if (proof.detach) return false; proof.detach = detach; }
   return true;
@@ -175,16 +345,29 @@ export function redactLogSecrets(line: string, secrets: Iterable<string>): strin
 
 /** Attaches adapter-authenticated network identity without trusting request headers. */
 export function setTrustedClientAddress(request: Request, address: string): void {
-  const normalized = address.trim();
-  if (!normalized || normalized.length > 512 || /[\u0000-\u001f\u007f]/u.test(normalized)) {
-    throw new TypeError("Trusted client address must be a non-empty, bounded value without control characters.");
+  // Consecutive requests usually share a connection or proxy hop; revalidate only a new value.
+  if (address !== lastTrustedAddress[0]) {
+    const normalized = address.trim();
+    if (!normalized || normalized.length > 512 || /[\u0000-\u001f\u007f]/u.test(normalized)) {
+      throw new TypeError("Trusted client address must be a non-empty, bounded value without control characters.");
+    }
+    lastTrustedAddress = [address, normalized];
   }
-  TRUSTED_CLIENT_ADDRESSES.set(request, normalized);
+  nativeEvidence(request).address = lastTrustedAddress[1];
 }
 
 /** Returns network identity attached by a trusted server adapter, when available. */
 export function trustedClientAddress(request: Request): string | undefined {
-  return TRUSTED_CLIENT_ADDRESSES.get(request);
+  return evidenceOf(request)?.address;
+}
+
+/**
+ * @internal True when assertSafeAttributeValue() accepts every value for this
+ * attribute on every tag, so renderers may skip the per-value policy check.
+ */
+export function isInertAttributeName(name: string): boolean {
+  const attribute = name.toLowerCase();
+  return attribute !== "srcdoc" && attribute !== "innerhtml" && attribute !== "outerhtml" && attribute !== "data" && !URL_ATTRIBUTES.has(attribute);
 }
 
 /** Rejects executable URL schemes before they reach DOM properties or SSR attributes. */
@@ -262,6 +445,7 @@ export async function readRequestBytes(request: Request, maxBytes: number): Prom
     request.body,
     maxBytes,
     () => new RequestInputError(413, "PAYLOAD_TOO_LARGE", `Request body exceeds ${maxBytes} bytes.`),
+    declared,
   );
 }
 
@@ -281,6 +465,9 @@ export async function readResponseBytes(response: Response, maxBytes: number): P
   );
 }
 
+/** One-shot decodes keep no state between calls, so a single strict decoder serves every request. */
+let strictUtf8: TextDecoder | undefined;
+
 /** Reads and parses a JSON body with a hard byte limit in any Fetch runtime. */
 export async function readJsonRequest(request: Request, maxBytes = 64 * 1024): Promise<unknown> {
   const contentType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
@@ -291,7 +478,7 @@ export async function readJsonRequest(request: Request, maxBytes = 64 * 1024): P
   const bytes = await readRequestBytes(request, maxBytes);
   let text: string;
   try {
-    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    text = (strictUtf8 ??= new TextDecoder("utf-8", { fatal: true })).decode(bytes);
   } catch {
     throw new RequestInputError(400, "INVALID_ENCODING", "Request body must be valid UTF-8.");
   }
@@ -306,7 +493,11 @@ async function readBoundedBytes(
   stream: ReadableStream<Uint8Array>,
   maxBytes: number,
   tooLarge: () => Error,
+  expected?: number,
 ): Promise<Uint8Array> {
+  // A declared length sizes the first slab exactly, so a body that honours it
+  // is returned as that slab instead of being copied a second time.
+  const hint = expected !== undefined && Number.isSafeInteger(expected) && expected > 0 ? expected : 0;
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   let length = 0;
@@ -329,7 +520,7 @@ async function readBoundedBytes(
       let at = 0;
       while (at < value.byteLength) {
         if (!slab || used === slab.byteLength) {
-          const capacity = Math.max(256, value.byteLength - at, (slab?.byteLength ?? 0) * 2);
+          const capacity = slab === undefined && hint > 0 ? hint : Math.max(256, value.byteLength - at, (slab?.byteLength ?? 0) * 2);
           slab = new Uint8Array(Math.min(64 * 1024, maxBytes - length, capacity));
           chunks.push(slab); used = 0;
         }
@@ -341,6 +532,7 @@ async function readBoundedBytes(
   } finally {
     reader.releaseLock();
   }
+  if (chunks.length === 1 && chunks[0]!.byteLength === length) return chunks[0]!;
   const bytes = new Uint8Array(length);
   let offset = 0;
   for (const chunk of chunks) {

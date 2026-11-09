@@ -99,9 +99,11 @@ export function matchPath(pattern: string, pathname: string): Record<string, str
   if (!matched) return null;
   const params: Record<string, string> = {};
   try {
-    keys.forEach((key, index) => {
-      if (matched[index + 1] !== undefined) params[key] = decodeURIComponent(matched[index + 1]);
-    });
+    for (let index = 0; index < keys.length; index++) {
+      const value = matched[index + 1];
+      // Most captures are plain; decoding only matters once a percent sign appears.
+      if (value !== undefined) params[keys[index]!] = value.includes("%") ? decodeURIComponent(value) : value;
+    }
   } catch {
     return null;
   }

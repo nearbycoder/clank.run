@@ -1,6 +1,6 @@
 import {AuthError, type AuthClient, type AuthRequest, type AuthRuntime} from "./auth.ts";
 import type {SQLiteDatabase} from "./backend.ts";
-import {SQLITE_INTERNAL, type SQLiteInternal} from "./sqlite-internal.ts";
+import {SQLITE_INTERNAL, schemaLookup, type SQLiteInternal} from "./sqlite-internal.ts";
 
 export type OrganizationFactorRequirement = "none" | "mfa-or-passkey" | "passkey";
 export interface OrganizationSecurityRequirements {
@@ -162,7 +162,7 @@ const normalize = (value: unknown): OrganizationSecurityRequirements => {
 const defaults: OrganizationSecurityRequirements = Object.freeze({factor: "none", ssoOnly: false, sessionMaxAgeMs: 30 * 86400000, enrollmentGraceMs: 0});
 /** @internal Shared fail-closed storage guard for native integrations. */
 export function assertOrganizationSecurityProtocol(sql: SQLiteInternal): void {
-  if (sql.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_organization_security_state' AND type='table'").get()
+  if (schemaLookup(sql, "SELECT 1 FROM sqlite_schema WHERE name='clank_organization_security_state' AND type='table'")
     && sql.prepare("SELECT protocol FROM clank_organization_security_state WHERE singleton=1").get()?.protocol !== 1) policyError("ORGANIZATION_POLICY_PROTOCOL", "Unsupported organization security storage protocol.", 409);
 }
 

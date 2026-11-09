@@ -253,6 +253,13 @@ export interface SQLiteOptions {
     busyTimeout?: number;
     durability?: "full" | "normal";
     integrityCheck?: "quick" | "full" | false;
+    /**
+     * When stored documents are checked against the schema at startup.
+     * "changed" (default) skips tables whose documents were already validated
+     * against this exact schema and have only been written by validating writers
+     * since. "always" re-reads every document on every open.
+     */
+    storedDataValidation?: "changed" | "always";
     changePollIntervalMs?: number;
     changeRetentionRevisions?: number;
     /** Global committed-revision window retained for document history. Defaults to 10,000. */

@@ -47,9 +47,43 @@ export interface SQLiteInternal {
   purgeDeletedHistory(table: string, id: string): void;
 }
 
+interface SchemaFacts {
+  /** Reads SQLite's schema change counter; prepared once per connection. */
+  readonly counter: SQLiteStatement;
+  version: number;
+  readonly answers: Map<string, boolean>;
+}
+const schemaFacts = new WeakMap<object, SchemaFacts>();
+
+/**
+ * @internal Whether a `sqlite_schema` lookup returns a row.
+ *
+ * Optional features announce themselves by a table's existence, so hot paths
+ * ask on every read and write, and each question scans the whole schema. The
+ * schema can only differ after SQLite advances `schema_version`, which every
+ * connection observes, so an answer is reused until that counter moves. A
+ * connection whose counter cannot be read is simply asked every time.
+ */
+export function schemaLookup(connection: Pick<SQLiteInternal, "prepare">, sql: string): boolean {
+  let facts = schemaFacts.get(connection);
+  try {
+    const counter = facts?.counter ?? connection.prepare("SELECT schema_version FROM pragma_schema_version");
+    const version = counter.get()?.schema_version;
+    if (typeof version === "number" && Number.isSafeInteger(version)) {
+      if (!facts) schemaFacts.set(connection, facts = { counter, version, answers: new Map() });
+      else if (facts.version !== version) { facts.version = version; facts.answers.clear(); }
+      let answer = facts.answers.get(sql);
+      if (answer === undefined) facts.answers.set(sql, answer = Boolean(connection.prepare(sql).get()));
+      return answer;
+    }
+  } catch { /* Fall through to the direct lookup. */ }
+  schemaFacts.delete(connection);
+  return Boolean(connection.prepare(sql).get());
+}
+
 /** Every upgraded source writer consults persisted holds, including preopened connections. */
 export function isRetentionHeld(connection: Pick<SQLiteInternal, "prepare">, kind: "import" | "collaboration" | "audit", id: string, now = Date.now()): boolean {
-  if (!connection.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_retention_holds'").get()) return false;
+  if (!schemaLookup(connection, "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_retention_holds'")) return false;
   const state = connection.prepare("SELECT protocol FROM clank_retention_state WHERE singleton=1").get();
   if (state?.protocol !== 1) throw new Error("Unsupported persisted retention hold protocol.");
   const rows = connection.prepare("SELECT scope,reason,expires_at,version FROM clank_retention_holds WHERE kind=? AND resource_id=? LIMIT 2").all(kind, id);
@@ -62,7 +96,7 @@ export function isRetentionHeld(connection: Pick<SQLiteInternal, "prepare">, kin
 
 /** Fixed history predicate for every upgraded writer's automatic cleanup. */
 export function retentionHistoryProtection(connection: Pick<SQLiteInternal, "prepare">): string {
-  if (!connection.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_retention_holds'").get()) return "";
+  if (!schemaLookup(connection, "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_retention_holds'")) return "";
   if (connection.prepare("SELECT protocol FROM clank_retention_state WHERE singleton=1").get()?.protocol !== 1) throw new Error("Unsupported persisted retention hold protocol.");
   if (connection.prepare(`SELECT 1 FROM clank_retention_holds WHERE
     typeof(kind)<>'text' OR kind NOT IN ('import','collaboration','audit') OR typeof(resource_id)<>'text' OR length(resource_id) NOT BETWEEN 1 AND 200
@@ -175,7 +209,7 @@ export function projectSearchRecord(connection: SearchConnection, binding: SQLit
 export function updateSourceSearch(connection: SearchConnection, records: Iterable<{ table: string; id: string }>): void {
   const changed = [...records];
   if (!changed.length) return;
-  if (!connection.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_source_search_indexes'").get()) return;
+  if (!schemaLookup(connection, "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_source_search_indexes'")) return;
   const bindings = connection.prepare("SELECT name,definition FROM clank_source_search_indexes ORDER BY name LIMIT 17").all();
   if (bindings.length > 16) throw new RangeError("Source-search binding capacity exceeded.");
   for (const row of bindings) {

@@ -1,4 +1,5 @@
 import { matchPath } from "./router.ts";
+import { createBufferedResponse } from "./security.ts";
 
 type SegmentParams<Segment extends string> = Segment extends `:${infer Name}?`
   ? { [Key in Name]?: string }
@@ -28,6 +29,65 @@ interface Endpoint {
   method: string;
   path: string;
   handler: RequestHandler<any, any>;
+  /** Exact pathname for a parameterless route, without its optional trailing slash. */
+  literal?: string;
+  /** Text every match of a parameterised route must start with. */
+  prefix?: string;
+}
+
+/**
+ * Derive string pre-checks from a route pattern. matchPath() stays the only
+ * judge of parameterised routes; these checks just skip patterns that cannot
+ * match, and resolve parameterless routes without running a regular expression.
+ */
+function describeEndpoint(method: string, path: string, handler: RequestHandler<any, any>): Endpoint {
+  const endpoint: Endpoint = { method, path, handler };
+  if (path === "*") return endpoint;
+  const segments = path.split("/").filter(Boolean);
+  // A malformed parameter name must keep failing exactly where matchPath() reports it.
+  if (segments.some((segment) => segment.startsWith(":") && !/^:[A-Za-z][A-Za-z0-9_]*\??$/.test(segment))) return endpoint;
+  let literal = "";
+  for (const segment of segments) {
+    if (segment === "*" || segment.startsWith(":")) {
+      endpoint.prefix = segment.startsWith(":") && segment.endsWith("?") ? literal : `${literal}/`;
+      return endpoint;
+    }
+    literal += `/${segment}`;
+  }
+  endpoint.literal = literal;
+  return endpoint;
+}
+
+function matchEndpoint(endpoint: Endpoint, pathname: string): Record<string, string> | null {
+  const literal = endpoint.literal;
+  if (literal !== undefined) {
+    return pathname === literal || (pathname.length === literal.length + 1 && pathname.endsWith("/") && pathname.startsWith(literal))
+      ? {}
+      : null;
+  }
+  if (endpoint.prefix !== undefined && !pathname.startsWith(endpoint.prefix)) return null;
+  return matchPath(endpoint.path, pathname);
+}
+
+const JSON_TYPE = "application/json; charset=utf-8";
+const TEXT_TYPE = "text/plain; charset=utf-8";
+const HTML_TYPE = "text/html; charset=utf-8";
+
+/** Response init with a default content type, without building an intermediate Headers when none was supplied. */
+function withContentType(init: ResponseInit, type: string): ResponseInit {
+  const supplied = init.headers;
+  if (supplied === undefined) return { ...init, headers: { "content-type": type } };
+  const prototype = typeof supplied === "object" && supplied !== null ? Object.getPrototypeOf(supplied) : undefined;
+  if (prototype === Object.prototype || prototype === null) {
+    // A plain record converts once inside Response; only add the default when absent.
+    for (const name in supplied as Record<string, string>) {
+      if (name.length === 12 && name.toLowerCase() === "content-type") return init;
+    }
+    return { ...init, headers: { ...(supplied as Record<string, string>), "content-type": type } };
+  }
+  const headers = new Headers(supplied);
+  if (!headers.has("content-type")) headers.set("content-type", type);
+  return { ...init, headers };
 }
 
 export interface CreateAppOptions {
@@ -52,7 +112,7 @@ export function createApp<State extends Record<string, unknown> = Record<string,
   const endpoints: Endpoint[] = [];
   const app: RequestApp<State> = {
     use(entry) { middleware.push(entry); return app; },
-    route(method, path, handler) { endpoints.push({ method: method.toUpperCase(), path, handler: handler as RequestHandler<any, any> }); return app; },
+    route(method, path, handler) { endpoints.push(describeEndpoint(method.toUpperCase(), path, handler as RequestHandler<any, any>)); return app; },
     get(path, handler) { return app.route("GET", path, handler); },
     post(path, handler) { return app.route("POST", path, handler); },
     put(path, handler) { return app.route("PUT", path, handler); },
@@ -64,9 +124,11 @@ export function createApp<State extends Record<string, unknown> = Record<string,
       try {
         let endpoint: Endpoint | undefined;
         let params: Record<string, string> = {};
-        for (const entry of endpoints) {
-          if (entry.method !== request.method && entry.method !== "*") continue;
-          const matched = matchPath(entry.path, url.pathname);
+        const method = request.method, pathname = url.pathname;
+        for (let position = 0; position < endpoints.length; position++) {
+          const entry = endpoints[position]!;
+          if (entry.method !== method && entry.method !== "*") continue;
+          const matched = matchEndpoint(entry, pathname);
           if (matched) {
             endpoint = entry;
             params = matched;
@@ -74,6 +136,12 @@ export function createApp<State extends Record<string, unknown> = Record<string,
           }
         }
         (context as RequestContext<string, State>).params = params;
+        // Without middleware there is no chain to build: answer directly.
+        if (middleware.length === 0) {
+          return await (endpoint
+            ? endpoint.handler(context)
+            : json({ error: { code: "NOT_FOUND", message: "Route not found." } }, { status: 404 }));
+        }
         const terminal = async () => endpoint
           ? endpoint.handler(context)
           : json({ error: { code: "NOT_FOUND", message: "Route not found." } }, { status: 404 });
@@ -110,21 +178,15 @@ export function createApp<State extends Record<string, unknown> = Record<string,
 }
 
 export function json(value: unknown, init: ResponseInit = {}): Response {
-  const headers = new Headers(init.headers);
-  if (!headers.has("content-type")) headers.set("content-type", "application/json; charset=utf-8");
-  return new Response(JSON.stringify(value), { ...init, headers });
+  return createBufferedResponse(JSON.stringify(value), withContentType(init, JSON_TYPE));
 }
 
 export function text(value: string, init: ResponseInit = {}): Response {
-  const headers = new Headers(init.headers);
-  if (!headers.has("content-type")) headers.set("content-type", "text/plain; charset=utf-8");
-  return new Response(value, { ...init, headers });
+  return createBufferedResponse(value, withContentType(init, TEXT_TYPE));
 }
 
 export function html(value: string, init: ResponseInit = {}): Response {
-  const headers = new Headers(init.headers);
-  if (!headers.has("content-type")) headers.set("content-type", "text/html; charset=utf-8");
-  return new Response(value, { ...init, headers });
+  return createBufferedResponse(value, withContentType(init, HTML_TYPE));
 }
 
 export type CorsOrigin = string | readonly string[] | ((origin: string | null, request: Request) => string | null);
@@ -169,18 +231,31 @@ export interface SecurityHeadersOptions {
 export function securityHeaders<State extends Record<string, unknown> = Record<string, unknown>>(
   options: SecurityHeadersOptions = {},
 ): Middleware<State> {
+  const defaults: Array<[name: string, value: string]> = [["x-content-type-options", "nosniff"]];
+  if (options.frameOptions !== false) defaults.push(["x-frame-options", options.frameOptions ?? "DENY"]);
+  if (options.referrerPolicy !== false) defaults.push(["referrer-policy", options.referrerPolicy ?? "strict-origin-when-cross-origin"]);
+  if (options.permissionsPolicy !== false) defaults.push(["permissions-policy", options.permissionsPolicy ?? "camera=(), microphone=(), geolocation=()"]);
+  if (options.crossOriginOpenerPolicy !== false) defaults.push(["cross-origin-opener-policy", options.crossOriginOpenerPolicy ?? "same-origin"]);
+  if (options.contentSecurityPolicy) defaults.push(["content-security-policy", options.contentSecurityPolicy]);
+  const apply = (headers: Headers): void => {
+    for (let index = 0; index < defaults.length; index++) {
+      const entry = defaults[index]!;
+      if (!headers.has(entry[0])) headers.set(entry[0], entry[1]);
+    }
+  };
   return async (_context, next) => {
     const response = await next();
-    const headers = new Headers(response.headers);
-    if (!headers.has("x-content-type-options")) headers.set("x-content-type-options", "nosniff");
-    if (options.frameOptions !== false && !headers.has("x-frame-options")) headers.set("x-frame-options", options.frameOptions ?? "DENY");
-    if (options.referrerPolicy !== false && !headers.has("referrer-policy")) headers.set("referrer-policy", options.referrerPolicy ?? "strict-origin-when-cross-origin");
-    if (options.permissionsPolicy !== false && !headers.has("permissions-policy")) headers.set("permissions-policy", options.permissionsPolicy ?? "camera=(), microphone=(), geolocation=()");
-    if (options.crossOriginOpenerPolicy !== false && !headers.has("cross-origin-opener-policy")) headers.set("cross-origin-opener-policy", options.crossOriginOpenerPolicy ?? "same-origin");
-    if (options.contentSecurityPolicy && !headers.has("content-security-policy")) {
-      headers.set("content-security-policy", options.contentSecurityPolicy);
+    // These defaults are fixed and only fill gaps, so they can be written onto
+    // the handler's own response. Rebuilding a Response is kept for the ones
+    // whose headers are immutable (redirects, upstream fetches).
+    try {
+      apply(response.headers);
+      return response;
+    } catch {
+      const headers = new Headers(response.headers);
+      apply(headers);
+      return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
     }
-    return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
   };
 }
 

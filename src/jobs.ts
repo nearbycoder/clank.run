@@ -7,7 +7,7 @@ import {
   type SQLiteDatabase,
   type WriteDatabase,
 } from "./backend.ts";
-import { SQLITE_INTERNAL, currentReviewedExecution, type SQLiteInternal } from "./sqlite-internal.ts";
+import { SQLITE_INTERNAL, currentReviewedExecution, schemaLookup, type SQLiteInternal } from "./sqlite-internal.ts";
 
 export type JobArgs = Schema<any> | SchemaShape;
 export type InferJobArgs<Args extends JobArgs> = Args extends Schema<any>
@@ -2908,7 +2908,7 @@ function storedJob(row: JobRow): StoredJob {
 function storedWorkflow(internal: SQLiteInternal, row: WorkflowRow): StoredWorkflowRun {
   const steps = internal.prepare(`SELECT * FROM clank_workflow_steps
     WHERE workflow_id = ? ORDER BY step_name ASC`).all(row.id) as WorkflowStepRow[];
-  const waits = internal.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_workflow_waits'").get()
+  const waits = schemaLookup(internal, "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_workflow_waits'")
     ? internal.prepare("SELECT step_name,mode FROM clank_workflow_waits WHERE workflow_id=? AND state='pending'").all(row.id) : [];
   const pending = new Map(waits.map(wait => [String(wait.step_name), String(wait.mode)]));
   const compensation = storedWorkflowCompensation(internal, row.id);
@@ -3351,7 +3351,7 @@ function reserveWorkflowCompensations(internal: SQLiteInternal, id: string, work
 }
 
 function storedWorkflowCompensation(internal: SQLiteInternal, id: string): StoredWorkflowCompensation | undefined {
-  if (!internal.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_workflow_compensation_runs'").get()) return;
+  if (!schemaLookup(internal, "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_workflow_compensation_runs'")) return;
   const run = internal.prepare("SELECT * FROM clank_workflow_compensation_runs WHERE workflow_id=?").get(id);
   if (!run) return;
   const rows = internal.prepare("SELECT * FROM clank_workflow_compensations WHERE workflow_id=? ORDER BY position").all(id) as WorkflowCompensationRow[];

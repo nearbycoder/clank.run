@@ -17,10 +17,20 @@ export declare function takeRequestHandoff(request: Request): (() => void) | und
 export declare function cancelRequestHandoff(request: Request): void;
 /** @internal Controller cancellation detaches consumer-driven byte notifications. */
 export declare function requestHandoffActive(request: Request, detach?: () => void): boolean;
+/** @internal The native adapter's Request; its transport evidence is private to the object. */
+export declare function createNativeRequest(url: string, init: RequestInit): Request;
+/** @internal A Response over text the caller already holds; its byte stream is built only on demand. */
+export declare function createBufferedResponse(source: unknown, init: ResponseInit): Response;
+/** @internal Character count of an unread buffered body, or undefined for any other response. */
+export declare function bufferedBodyLength(response: Response): number | undefined;
+/** @internal Claims an unread buffered body for a direct write. */
+export declare function takeBufferedBody(response: Response): string | undefined;
 /** Attaches adapter-authenticated network identity without trusting request headers. */
 export declare function setTrustedClientAddress(request: Request, address: string): void;
 /** Returns network identity attached by a trusted server adapter, when available. */
 export declare function trustedClientAddress(request: Request): string | undefined;
+/** @internal True when assertSafeAttributeValue() accepts every value for this attribute on every tag. */
+export declare function isInertAttributeName(name: string): boolean;
 /** Rejects executable URL schemes before they reach DOM properties or SSR attributes. */
 export declare function assertSafeAttributeValue(tag: string, name: string, value: unknown): void;
 export interface RequestOriginOptions {
