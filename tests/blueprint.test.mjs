@@ -933,3 +933,29 @@ function runNodeTests(cwd, testPath) {
       : reject(new Error(`Generated tests exited with ${code}.\n${stdout}\n${stderr}`)));
   });
 }
+
+test("generated entity detail queries do not inherit public access from a public list route", () => {
+  const blueprint = defineApp({
+    name: "Public Catalog Private Detail",
+    description: "Public list route with authenticated detail route.",
+    auth: { required: true },
+    entities: {
+      items: {
+        description: "Catalog items",
+        ownership: "public",
+        realtime: false,
+        displayField: "title",
+        fields: { title: { type: "string", required: true } },
+      },
+    },
+    routes: [
+      { path: "/", view: "items", access: "public", entity: "items" },
+      { path: "/items/:id", view: "item-detail", access: "authenticated", entity: "items" },
+    ],
+  });
+  const files = generateAppFiles(blueprint, { frameworkVersion: version });
+  const backendSource = files.find((file) => file.path === "src/backend.ts").contents;
+  assert.match(backendSource, /publicList:\s*publicQuery\(\{/u);
+  assert.match(backendSource, /detail:\s*query\(\{/u);
+  assert.doesNotMatch(backendSource, /publicDetail:/u);
+});

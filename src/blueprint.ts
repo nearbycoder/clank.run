@@ -377,7 +377,7 @@ export function generateAppFiles(
         include: ["dist", "migrations"],
         build: { command: ["clank", "build", "src", "dist", "--tailwind=src/styles.css"] },
         database: {
-          path: app.deployment.database === "sqlite" ? "app.sqlite" : "app.sqlite",
+          path: "app.sqlite",
           migrations: "migrations",
           allowUnsafeMigrations: false,
         },
@@ -1124,7 +1124,7 @@ Run \`npm test\`, \`npm run doctor\`, and \`npm run deploy:check\`. With the dev
 
 function routeAccessLabel(access: AppRouteDefinition["access"]): string {
   if (access === "public") return "public read-only page";
-  if (access === "authenticated") return "authenticated";
+  if (access === undefined || access === "authenticated") return "authenticated";
   return `roles ${access.roles?.map((role) => `\`${role}\``).join(", ")}`;
 }
 
@@ -1171,7 +1171,11 @@ function normalizeApp(input: AppBlueprintInput): AppBlueprint {
   }
 
   const sourceEntities = { ...record(input.entities, "entities") };
-  for (const relation of input.relationships ?? []) {
+  if (input.relationships !== undefined && !Array.isArray(input.relationships)) {
+    throw new TypeError("App blueprint relationships must be an array.");
+  }
+  for (const rawRelation of input.relationships ?? []) {
+    const relation = object(rawRelation, "relationship") as unknown as AppRelationshipDefinition;
     if (relation.kind !== "many-to-many") continue;
     const join = identifier(relation.join ?? `${relation.name}Links`, "join entity");
     const from = sourceEntities[relation.from] as AppEntityDefinition;
@@ -1179,7 +1183,7 @@ function normalizeApp(input: AppBlueprintInput): AppBlueprint {
     if (!from || !to || (from.ownership ?? "user") !== (to.ownership ?? "user")) throw new TypeError("Many-to-many endpoints must exist and share ownership.");
     if (relation.onDelete === "nullify") throw new TypeError("Many-to-many edges support restrict or cascade deletion.");
     const existing = sourceEntities[join] as AppEntityDefinition | undefined;
-    if (existing && (existing.fields?.fromId?.entity !== relation.from || existing.fields?.toId?.entity !== relation.to || existing.fields?.fromId?.type !== "reference" || existing.fields?.toId?.type !== "reference" || existing.fields?.fromId?.required === false || existing.fields?.toId?.required === false || existing.fields?.fromId?.nullable || existing.fields?.toId?.nullable || existing.ownership !== (from.ownership ?? "user"))) throw new TypeError(`Join entity ${join} conflicts with the relationship contract.`);
+    if (existing && (existing.fields?.fromId?.entity !== relation.from || existing.fields?.toId?.entity !== relation.to || existing.fields?.fromId?.type !== "reference" || existing.fields?.toId?.type !== "reference" || existing.fields?.fromId?.required === false || existing.fields?.toId?.required === false || existing.fields?.fromId?.nullable || existing.fields?.toId?.nullable || (existing.ownership ?? "user") !== (from.ownership ?? "user"))) throw new TypeError(`Join entity ${join} conflicts with the relationship contract.`);
     sourceEntities[join] ??= { description: `Links ${relation.from} to ${relation.to}.`, ownership: from.ownership ?? "user", displayField: "label", fields: { label: { type: "string", default: "Relationship" }, fromId: { type: "reference", entity: relation.from }, toId: { type: "reference", entity: relation.to } }, indexes: { by_pair: { fields: ["fromId", "toId"] }, by_to: { fields: ["toId"] } } };
   }
   if (Object.keys(sourceEntities).length === 0) throw new TypeError("App blueprint requires at least one entity.");
@@ -1221,7 +1225,7 @@ function normalizeApp(input: AppBlueprintInput): AppBlueprint {
     }
     entities[entityName] = {
       description: text(entity.description, `${entityName}.description`, 1, 500),
-      ownership: enumValue(entity.ownership ?? "user", ["public", "user", "workspace"], `${entityName}.ownership`),
+      ownership: enumValue(entity.ownership ?? "user", ["public", "user", "workspace"] as const, `${entityName}.ownership`),
       realtime: booleanValue(entity.realtime ?? true, `${entityName}.realtime`),
       displayField,
       ...(completionField ? { completionField } : {}),
@@ -1259,7 +1263,7 @@ function normalizeApp(input: AppBlueprintInput): AppBlueprint {
     };
   }
   if (!roles.member) roles.member = { description: "Standard application member.", permissions: ["app.use"] };
-  if (input.auth?.required === false) {
+  if ((input.auth?.required as boolean | undefined) === false) {
     throw new TypeError("Generated Clank applications currently require built-in authentication.");
   }
 
@@ -1399,7 +1403,7 @@ function normalizeApp(input: AppBlueprintInput): AppBlueprint {
       roles: actionRoles,
       confirmation: enumValue(
         action.confirmation ?? (action.operation === "delete" ? "always" : action.operation === "read" ? "never" : "write"),
-        ["never", "write", "always"],
+        ["never", "write", "always"] as const,
         `${actionName}.confirmation`,
       ),
       realtime: booleanValue(action.realtime ?? false, `${actionName}.realtime`),
@@ -1486,11 +1490,12 @@ function normalizeApp(input: AppBlueprintInput): AppBlueprint {
   if (routes.some((route) => route.path === normalized.deployment.healthPath)) {
     throw new TypeError(`Health path ${normalized.deployment.healthPath} conflicts with an application route.`);
   }
-  if (normalized.admin && routes.some((route) => route.path === normalized.admin.path)) {
-    throw new TypeError(`Admin studio path ${normalized.admin.path} conflicts with an application route.`);
+  const adminConfig = normalized.admin;
+  if (adminConfig && routes.some((route) => route.path === adminConfig.path)) {
+    throw new TypeError(`Admin studio path ${adminConfig.path} conflicts with an application route.`);
   }
-  if (normalized.admin && normalized.admin.path === normalized.deployment.healthPath) {
-    throw new TypeError(`Admin studio path ${normalized.admin.path} conflicts with the health route.`);
+  if (adminConfig && adminConfig.path === normalized.deployment.healthPath) {
+    throw new TypeError(`Admin studio path ${adminConfig.path} conflicts with the health route.`);
   }
   return deepFreeze(normalized);
 }
@@ -2275,7 +2280,7 @@ function routeRolesForEntity(app: AppBlueprint, name: string): string[] {
   const roles = new Set<string>();
   for (const route of app.routes) {
     if (route.entity !== name) continue;
-    if (typeof route.access === "string") return [];
+    if (!route.access || typeof route.access === "string") return [];
     for (const role of route.access.roles ?? []) roles.add(role);
   }
   return [...roles].sort();
@@ -2439,12 +2444,13 @@ ${guard}        return deleteEntity_${name}(db, id, version, {
   const detailRoutes = app.routes.filter((route) => route.entity === name && route.path.includes(":"));
   const detailRoles = detailRoutes.some((route) => typeof route.access === "string") ? [] : [...new Set(detailRoutes.flatMap((route) => typeof route.access === "object" ? route.access.roles ?? [] : []))];
   const hasPublic = app.routes.some((route) => route.entity === name && route.access === "public");
+  const hasPublicDetail = detailRoutes.some((route) => route.access === "public");
   if (hasPublic) actions.push(`    publicList: publicQuery({ args: {}, agent: false, handler: ({ db }) => db.table(${sourceLiteral(name)}).query().orderBy("_creationTime", "asc").collect() })`);
-  if (app.routes.some((route) => route.entity === name && route.path.includes(":"))) actions.push(`    detail: ${hasPublic ? "publicQuery" : "query"}({
+  if (detailRoutes.length) actions.push(`    detail: ${hasPublicDetail ? "publicQuery" : "query"}({
       args: { id: s.id(${sourceLiteral(name)}) }, agent: false,
       handler: ({ db, auth }, { id }) => {
-        ${hasPublic || !detailRoles.length ? "" : `auth.requireRole(${detailRoles.map((role) => sourceLiteral(role)).join(", ")});`}
-        ${hasPublic ? "" : "db = guardDatabase(db, auth.user!.id);"}
+        ${hasPublicDetail || !detailRoles.length ? "" : `auth.requireRole(${detailRoles.map((role) => sourceLiteral(role)).join(", ")});`}
+        ${hasPublicDetail ? "" : "db = guardDatabase(db, auth.user!.id);"}
         const document = db.table(${sourceLiteral(name)}).get(id);
         if (!document) throw new BackendActionError(404, "RECORD_NOT_FOUND", "Record not found.");
         return document;
@@ -2722,7 +2728,7 @@ function entityPanelSource(app: AppBlueprint, name: string, entity: AppEntityDef
           <div class="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
             <div><h3 id=${sourceLiteral(`${name}-history-title`)} class="font-semibold">Revision timeline</h3>
             <p class="mt-1 text-sm text-slate-500">Every restore adds a new version; history is never rewound or rewritten.</p></div>
-            <button class="self-start rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold hover:bg-slate-50 disabled:opacity-50" type="button" disabled={props.pending} onClick={props.${name}RefreshHistory} agentId=${sourceLiteral(`${name}-history-refresh`)} agentAction={api[${sourceLiteral(name)}][${sourceLiteral(history.localName)}]} agentLabel=${sourceLiteral(`Refresh ${title.toLowerCase()} revision timeline`)}>Refresh activity</button>
+            <button class="self-start rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold hover:bg-slate-50 disabled:opacity-50" type="button" disabled={props.pending} onClick={props.${name}RefreshHistory} agentId=${sourceLiteral(`${name}-history-refresh`)} agentAction={api[${sourceLiteral(name)}][${sourceLiteral(history.localName)}]} agentLabel={${sourceLiteral(`Refresh ${title.toLowerCase()} revision timeline`)}}>Refresh activity</button>
           </div>
           <ol class="divide-y divide-slate-100 px-5" aria-live="polite">
             <For each={props.${name}Revisions} by={(revision) => \`\${revision.cursor.revision}:\${revision.cursor.sequence}\`} fallback={<li class="py-6 text-sm text-slate-500">No retained revisions yet.</li>}>
@@ -2834,8 +2840,9 @@ function adminStudioSource(app: AppBlueprint): string {
             </ul>
           </article>`;
   }).join("\n          ");
-  const panels = app.admin.entities.map((name) =>
-    `<${typeName(name)}Panel {...props} studioReadOnly={${sourceLiteral(!app.admin!.allowMutations)}} showHistory={true} />`).join("\n        ");
+  const admin = app.admin;
+  const panels = admin.entities.map((name) =>
+    `<${typeName(name)}Panel {...props} studioReadOnly={${sourceLiteral(!admin.allowMutations)}} showHistory={true} />`).join("\n        ");
   return `function AdminStudio(props: AppViewProps) {
   return (
     <section>
@@ -2903,7 +2910,7 @@ function fieldControlSource(
     ...(field.max === undefined ? [] : [field.type === "number" ? `max={${field.max}}` : `maxlength={${field.max}}`]),
     ...(field.type === "number" && field.integer ? ['step="1"'] : field.type === "number" ? ['step="any"'] : []),
     `agentId=${sourceLiteral(`${entityName}-${fieldName}-input`)}`,
-    `agentLabel=${sourceLiteral(`${humanize(entityName.replace(/s$/u, ""))} ${label}`)}`,
+    `agentLabel={${sourceLiteral(`${humanize(entityName.replace(/s$/u, ""))} ${label}`)}}`,
   ].join(" ");
   const description = field.description
     ? `<p class="mt-1 text-xs text-slate-500">{${sourceLiteral(field.description)}}</p>`
@@ -2918,7 +2925,7 @@ function fieldControlSource(
           </div>`;
   }
   if (field.type === "enum") {
-    const options = field.values!.map((value) => `<option value=${sourceLiteral(value)}>{${sourceLiteral(value)}}</option>`).join("");
+    const options = field.values!.map((value) => `<option value={${sourceLiteral(value)}}>{${sourceLiteral(value)}}</option>`).join("");
     return `          <div>
             <label class="text-sm font-semibold" for=${sourceLiteral(id)}>{${sourceLiteral(label)}}</label>
             <select class="mt-1 w-full rounded-xl border border-slate-300 bg-white px-4 py-3" ${attributes} bind:value={draft_${fieldName}}>${options}</select>
@@ -2984,10 +2991,11 @@ client.seed(client.api[${sourceLiteral(name)}][${sourceLiteral(history.localName
   const dispose = names
     .filter((name) => app.entities[name].realtime)
     .map((name) => `    live_${name}?.dispose();`).join("\n");
+  const adminPath = app.admin ? app.admin.path : "";
   const historyState = historyNames.map((name) => {
     const history = generatedEntityActions(app, name, app.entities[name]).find((action) => action.behavior === "history")!;
     return `  const revisions_${name} = signal(boot.entities.${name}.revisions);
-  const canReadHistory_${name} = boot.route === ${sourceLiteral(app.admin!.path)} && roleAllowed(user.role, ${sourceLiteral(history.roles)});
+  const canReadHistory_${name} = boot.route === ${sourceLiteral(adminPath)} && roleAllowed(user.role, ${sourceLiteral(history.roles)});
   const liveHistory_${name} = canReadHistory_${name}
     ? client.live(client.api[${sourceLiteral(name)}][${sourceLiteral(history.localName)}], { limit: 25 })
     : null;
@@ -3755,10 +3763,6 @@ async function sha256(value: string): Promise<string> {
 
 function sqlString(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
-}
-
-function escapeTemplate(value: string): string {
-  return value.replaceAll("\\", "\\\\").replaceAll("`", "\\`").replaceAll("${", "\\${");
 }
 
 function deepFreeze<T>(value: T): T {

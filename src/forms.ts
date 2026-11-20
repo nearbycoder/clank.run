@@ -382,7 +382,11 @@ export function createForm<Values extends FormValues, Result = unknown>(
         keys.filter((name) => fields.get(name)!.invalid.peek()).map(String),
       );
       if (invalid.size === 0) return false;
-      for (const element of root.querySelectorAll<HTMLElement>("[name]")) {
+      const escapedId = id.replace(/[^A-Za-z0-9_-]/g, "\\$&");
+      const scope = typeof root.querySelector === "function"
+        ? root.querySelector<HTMLElement>(`#${escapedId}, [data-clank-form="${escapedId}"]`) ?? root
+        : root;
+      for (const element of scope.querySelectorAll<HTMLElement>("[name]")) {
         if (invalid.has(element.getAttribute("name") ?? "")) {
           element.focus();
           return true;
@@ -533,7 +537,7 @@ function createField<Value>(
       return {
         ...semantics(options),
         type: "checkbox",
-        checked: () => this.value.value,
+        checked: () => Boolean(value.value),
         onChange: (event: Event) => {
           set((event.currentTarget as HTMLInputElement).checked as Value);
           validateAfter("input");
@@ -689,7 +693,7 @@ function trimBoundaryCharacter(value: string, character: string): string {
 }
 
 function displayValue(value: unknown): string | number {
-  return typeof value === "number" ? value : value === null || value === undefined ? "" : String(value);
+  return typeof value === "number" ? (Number.isFinite(value) ? value : "") : value === null || value === undefined ? "" : String(value);
 }
 
 function cloneValues<Values extends FormValues>(values: Values): Values {

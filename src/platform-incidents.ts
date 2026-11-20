@@ -280,8 +280,8 @@ export async function openProjectIncidents(sql: SQLiteInternal, options: Platfor
         if (!allowed) return {sequence: Number(row.sequence), kind: ref.kind, reference: null, available: false, reason: "permission-required", releaseContext: null, diagnostic: null};
         const stored = row.release_context === null ? null : JSON.parse(String(row.release_context));
         const releaseId = ref.kind === "release" ? ref.id : "releaseId" in ref ? ref.releaseId : null;
-        const available = ref.kind === "alert" ? hooks.alert(projectId, ref.id) : releaseId !== null && Boolean(hooks.release(projectId, releaseId)?.available);
         const alert = ref.kind === "alert" ? hooks.alert(projectId, ref.id) : null;
+        const available = ref.kind === "alert" ? Boolean(alert) : releaseId !== null && Boolean(hooks.release(projectId, releaseId)?.available);
         let projection: ProjectIncidentDiagnostic | null = alert ? {projectId, reference: ref, available: true, ...alert} : null, reason: ProjectIncidentLink["reason"] = available ? "available" : "not-retained";
         if (available && "releaseId" in ref) {
           try { projection = await diagnostic(projectId, ref, deadline - Date.now()); reason = projection.available ? "available" : "not-retained"; }

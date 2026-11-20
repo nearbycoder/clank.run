@@ -31,7 +31,7 @@ export async function openErrorInbox(database:SQLiteDatabase<any>,options:{maxEv
    if(data.sources.some((value:unknown)=>typeof value!=="string"||value.length>2048)||data.names.some((value:unknown)=>typeof value!=="string"||value.length>256))throw new TypeError("Invalid source map metadata.");
    const key=`${release}\n${file}`;if(!maps.has(key)&&maps.size>=100)maps.delete(maps.keys().next().value!);
    // Never retain sourcesContent or arbitrary extension fields.
-   maps.set(key,new SourceMap({version:3,file,sources:[...data.sources],names:[...data.names],mappings:data.mappings}));
+   maps.set(key,new SourceMap({version:3,file,sources:[...data.sources],names:[...data.names],mappings:data.mappings} as ConstructorParameters<typeof SourceMap>[0]));
   },
   capture(error,context){
    const release=identifier(context.release,"release"),code=identifier(context.code??(error instanceof Error&&/^[A-Za-z][A-Za-z0-9_]{0,79}$/.test(error.name)?error.name:"Error"),"error code");
@@ -42,8 +42,8 @@ export async function openErrorInbox(database:SQLiteDatabase<any>,options:{maxEv
     const match=/(?:\(|\s)([^()\s]+):(\d+):(\d+)\)?$/.exec(line);if(!match)continue;
     const file=sourceFile(match[1]!);let lineNumber=Number(match[2]),column=Number(match[3]);if(!file||!Number.isSafeInteger(lineNumber)||lineNumber<1||!Number.isSafeInteger(column)||column<1)continue;
     const original=maps.get(`${release}\n${file}`)?.findOrigin(lineNumber,column);
-    const mappedFile=original?.fileName?sourceFile(original.fileName):null;
-    if(mappedFile&&original?.lineNumber&&original.columnNumber){frames.push({file:mappedFile,line:original.lineNumber,column:original.columnNumber,mapped:true});}
+    const mappedFile=original&&"fileName" in original&&original.fileName?sourceFile(original.fileName):null;
+    if(mappedFile&&original&&"lineNumber" in original&&original.lineNumber&&original.columnNumber){frames.push({file:mappedFile,line:original.lineNumber,column:original.columnNumber,mapped:true});}
     else frames.push({file,line:lineNumber,column,mapped:false});
     if(frames.length===8)break;
    }

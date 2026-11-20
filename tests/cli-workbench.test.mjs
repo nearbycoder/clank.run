@@ -189,3 +189,22 @@ test("resilience CLI executes a disposable fault and reports verified recovery",
     assert.equal(result.ok, true); assert.equal(result.scenarios[0].injected, 1);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test("workbench contract CLI exits zero when all action contract checks pass", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-contract-cli-"));
+  try {
+    const modulePath = join(root, "action.mjs");
+    const aiUrl = new URL("../dist/ai.js", import.meta.url).href;
+    await writeFile(modulePath, `import { defineAction, s } from ${JSON.stringify(aiUrl)};
+export default defineAction({
+  name: "items.echo",
+  description: "Echo an item title.",
+  input: s.object({ title: s.string({ min: 1, max: 20 }) }),
+  output: s.object({ title: s.string() }),
+  handler: ({ title }) => ({ title }),
+});\n`);
+    const result = JSON.parse((await run(["workbench", "contract", modulePath, "default", "--json"])).stdout);
+    assert.equal(result.ok, true);
+    assert.equal(result.action, "items.echo");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

@@ -62,10 +62,10 @@ export function createServiceRegistry(
     drivers.set(driver.name, driver);
   }
   return {
-    get(name) {
+    get<Service = unknown>(name: string): Service {
       const driver = drivers.get(name);
       if (!driver) throw new Error(`Service driver is not configured: ${name}`);
-      return driver.service;
+      return driver.service as Service;
     },
     has: (name) => drivers.has(name),
     describe: () => [...drivers.values()]
@@ -155,11 +155,16 @@ export async function openFileEmailService(options: {
       const acceptedAt = Date.now();
       const target = path.join(root, `${acceptedAt}-${id}.json`);
       const temporary = `${target}.${processId()}.tmp`;
-      await fs.writeFile(temporary, `${JSON.stringify({ id, acceptedAt, ...normalized }, null, 2)}\n`, {
-        mode: 0o600,
-        flag: "wx",
-      });
-      await fs.rename(temporary, target);
+      try {
+        await fs.writeFile(temporary, `${JSON.stringify({ id, acceptedAt, ...normalized }, null, 2)}\n`, {
+          mode: 0o600,
+          flag: "wx",
+        });
+        await fs.rename(temporary, target);
+      } catch (error) {
+        await fs.rm(temporary, { force: true }).catch(() => undefined);
+        throw error;
+      }
       return { id, acceptedAt, provider: "file" };
     },
   };
@@ -210,9 +215,10 @@ export function createHttpEmailService(options: {
           }
           await response.body?.cancel().catch(() => undefined);
           const retryable = response.status === 429 || response.status >= 500;
-          lastError = new Error(`Email service returned ${response.status}.`);
-          if (!retryable) throw new PermanentDeliveryError(lastError.message);
-          if (attempt === retries) throw lastError;
+          const failure = new Error(`Email service returned ${response.status}.`);
+          lastError = failure;
+          if (!retryable) throw new PermanentDeliveryError(failure.message);
+          if (attempt === retries) throw failure;
         } catch (error) {
           if (error instanceof PermanentDeliveryError) throw error;
           lastError = error;
@@ -301,9 +307,10 @@ export function createResendEmailService(options: {
               response.status === 409
               && errorPayload.name === "concurrent_idempotent_requests"
             );
-          lastError = new Error(`Resend returned ${response.status}.`);
-          if (!retryable) throw new PermanentDeliveryError(lastError.message);
-          if (attempt === retries) throw lastError;
+          const failure = new Error(`Resend returned ${response.status}.`);
+          lastError = failure;
+          if (!retryable) throw new PermanentDeliveryError(failure.message);
+          if (attempt === retries) throw failure;
         } catch (error) {
           if (error instanceof PermanentDeliveryError) throw error;
           lastError = error;
@@ -521,7 +528,7 @@ export async function openLocalFileStore(options: {
             "cache-control": "private, no-store",
             "x-content-type-options": "nosniff",
           });
-          return new Response(request.method === "HEAD" ? null : object.bytes, { headers });
+          return new Response(request.method === "HEAD" ? null : object.bytes as BodyInit, { headers });
         }
         if (request.method === "PUT") {
           const capability = await store.verify(token, "write");
@@ -671,10 +678,11 @@ export function openJobQueue<DB extends DatabaseSchema<any>>(
       });
       for (const row of claimed) {
         const record = jobRecord(row);
-        const handler = handlers[record.type];
+        const handler = Object.hasOwn(handlers, record.type) ? handlers[record.type] : undefined;
         const controller = new AbortController();
         let timeout: ReturnType<typeof setTimeout> | undefined;
         try {
+          if (typeof handler !== "function") throw new Error(`No job handler is registered for ${record.type}.`);
           const payload = JSON.parse(String(row.payload));
           await Promise.race([
             Promise.resolve(handler(payload, {
@@ -730,7 +738,11 @@ export function openJobQueue<DB extends DatabaseSchema<any>>(
     },
     start(intervalMs = 1_000) {
       if (closed) throw new Error("Job queue is closed.");
-      if (timer) return () => queue.close();
+      const stop = () => {
+        if (timer) clearInterval(timer);
+        timer = undefined;
+      };
+      if (timer) return stop;
       const interval = integerRange(intervalMs, "intervalMs", 50, 60_000);
       timer = setInterval(() => {
         if (running || closed) return;
@@ -738,10 +750,7 @@ export function openJobQueue<DB extends DatabaseSchema<any>>(
         void queue.runOnce().catch(() => undefined).finally(() => { running = false; });
       }, interval);
       timer.unref?.();
-      return () => {
-        if (timer) clearInterval(timer);
-        timer = undefined;
-      };
+      return stop;
     },
     close() {
       closed = true;
@@ -812,9 +821,10 @@ export function createWebhookSender(options: {
       const signed = await signWebhook(body, input.secret);
       const deliveryId = input.idempotencyKey ?? crypto.randomUUID();
       let lastStatus = 0;
+      let lastError: unknown;
       for (let attempt = 0; attempt <= retries; attempt++) {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), timeoutMs);
+        const timeout = setTimeout(() => controller.abort(new Error("Webhook delivery timed out.")), timeoutMs);
         try {
           const response = await fetcher(url, {
             method: "POST",
@@ -831,15 +841,22 @@ export function createWebhookSender(options: {
             redirect: "error",
           });
           lastStatus = response.status;
+          await response.body?.cancel().catch(() => undefined);
           if (response.ok) return { status: response.status, attempts: attempt + 1 };
           if (response.status !== 429 && response.status < 500) {
-            throw new Error(`Webhook endpoint returned ${response.status}.`);
+            throw new PermanentDeliveryError(`Webhook endpoint returned ${response.status}.`);
           }
+          lastError = undefined;
+        } catch (error) {
+          if (error instanceof PermanentDeliveryError) throw error;
+          lastError = error;
+          if (attempt === retries) throw error;
         } finally {
           clearTimeout(timeout);
         }
         if (attempt < retries) await retryDelay(attempt);
       }
+      if (lastError !== undefined) throw lastError;
       throw new Error(`Webhook delivery failed after ${retries + 1} attempts (last status ${lastStatus}).`);
     },
   };
@@ -1077,7 +1094,7 @@ function secureHttpUrl(value: string, name: string): string {
     || url.password
     || url.hash
     || (url.protocol !== "https:"
-      && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "::1"].includes(url.hostname)))
+      && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)))
   ) throw new TypeError(`${name} must use HTTPS, except for loopback development.`);
   return url.href;
 }
@@ -1121,7 +1138,7 @@ async function sha256(value: string): Promise<string> {
 }
 
 async function sha256Bytes(value: Uint8Array): Promise<string> {
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", value));
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", value as BufferSource));
   return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
@@ -1134,8 +1151,8 @@ async function hmacBytes(
   key: Uint8Array,
   encoding: "base64url" | "hex",
 ): Promise<string> {
-  const imported = await crypto.subtle.importKey("raw", key, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const signature = new Uint8Array(await crypto.subtle.sign("HMAC", imported, value));
+  const imported = await crypto.subtle.importKey("raw", key as BufferSource, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const signature = new Uint8Array(await crypto.subtle.sign("HMAC", imported, value as BufferSource));
   if (encoding === "hex") return [...signature].map((byte) => byte.toString(16).padStart(2, "0")).join("");
   return base64Url(signature);
 }
@@ -1173,7 +1190,8 @@ function normalizeEndpointPrefix(input: string): string {
   let end = input.length;
   while (start < end && input.charCodeAt(start) === 47) start++;
   while (end > start && input.charCodeAt(end - 1) === 47) end--;
-  return `/${input.slice(start, end)}`;
+  const trimmed = input.slice(start, end);
+  return trimmed ? `/${trimmed}` : "";
 }
 
 function safeError(error: unknown): string {

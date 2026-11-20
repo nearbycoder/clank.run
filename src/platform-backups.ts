@@ -211,15 +211,22 @@ export function createPlatformBackupScheduler(options: {
         delayMs = retryMs;
       }
     }
+    const stepMs = Math.min(Math.max(0, delayMs), 2_147_483_647);
+    const remainingMs = Math.max(0, delayMs - stepMs);
     timer = setTimeout(() => {
       timer = undefined;
+      if (closed) return;
+      if (remainingMs > 0) {
+        schedule(remainingMs);
+        return;
+      }
       const current = run().catch(report);
       flight = current;
       void current.then(() => {
         if (flight === current) flight = undefined;
         if (!closed) schedule();
       });
-    }, delayMs);
+    }, stepMs);
     timer.unref?.();
   };
 

@@ -1341,26 +1341,28 @@ async function openOwnedDeploymentProviderService(
           }, async (value) => {
             await cleanupCandidate(candidate, value);
           });
-          if (!prepared || !candidate) {
+          const resolvedPrepared = prepared as PreparedDeploymentRuntimeData | null;
+          const resolvedCandidate = candidate as DockerDeploymentRuntimeCandidate | null;
+          if (!resolvedPrepared || !resolvedCandidate) {
             throw new Error("Provider data validation did not produce a runtime candidate.");
           }
           if (
-            committed.projectId !== candidate.projectId
-            || committed.releaseId !== candidate.releaseId
-            || committed.generation !== candidate.generation
-            || committed.capsuleSha256 !== candidate.capsuleSha256
+            committed.projectId !== resolvedCandidate.projectId
+            || committed.releaseId !== resolvedCandidate.releaseId
+            || committed.generation !== resolvedCandidate.generation
+            || committed.capsuleSha256 !== resolvedCandidate.capsuleSha256
           ) {
             throw new Error("Provider data and runtime candidate do not match.");
           }
-          const active = await runtimes.activate(candidate, request.signal);
+          const active = await runtimes.activate(resolvedCandidate, request.signal);
           throwIfAborted(request.signal);
           const ingressBinding = Object.freeze({
             protocol: DEPLOYMENT_RUNTIME_PROTOCOL,
             projectId: committed.projectId,
             releaseId: committed.releaseId,
             generation: committed.generation,
-            path: prepared.ingress.route,
-            token: prepared.ingress.token,
+            path: resolvedPrepared.ingress.route,
+            token: resolvedPrepared.ingress.token,
             upstream: active.upstream,
           });
           if (resume && resumed?.ingressTombstone) {
@@ -1387,12 +1389,12 @@ async function openOwnedDeploymentProviderService(
           } else {
             await ingress.activate(ingressBinding);
           }
-          if (prepared.ingress.controlToken) {
+          if (resolvedPrepared.ingress.controlToken) {
             controls.set(committed.projectId, {
               projectId: committed.projectId,
               releaseId: committed.releaseId,
               generation: committed.generation,
-              tokenDigest: await secretDigest(prepared.ingress.controlToken),
+              tokenDigest: await secretDigest(resolvedPrepared.ingress.controlToken),
               incarnation: crypto.randomUUID(),
             });
           } else {
@@ -1709,7 +1711,7 @@ async function openOwnedDeploymentProviderService(
           ) {
             return controlProblem(409, "PROVIDER_GENERATION_STALE", "Provider generation is not current.");
           }
-          return new Response(snapshot.bytes, {
+          return new Response(snapshot.bytes as BodyInit, {
             status: 200,
             headers: {
               "cache-control": "private, no-store",

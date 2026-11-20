@@ -34,15 +34,15 @@ export async function openRecordHistory(options: RecordHistoryOptions): Promise<
   const tableSchema = s.enum(tables as [string, ...string[]]), cursor = s.object({ revision: s.number({ integer: true, min: 1, max: Number.MAX_SAFE_INTEGER }), sequence: s.number({ integer: true, min: 0, max: Number.MAX_SAFE_INTEGER - 1 }) });
   const backend = defineBackend({ schema: options.schema, auth: options.auth }).functions(({ query, mutation }) => ({
     list: query({ args: { table: tableSchema, id: s.string({ min: 1, max: 200 }), before: s.optional(cursor) }, handler: ({ db }, { table, id, before }) => {
-      const source = db.table(table), entries = source.history(id, { before, limit: 25 });
-      return { current: source.get(id), entries, next: entries.length === 25 ? entries[24]!.cursor : null };
+      const source = db.table(table), entries = source.history(id as any, { before, limit: 25 });
+      return { current: source.get(id as any), entries, next: entries.length === 25 ? entries[24]!.cursor : null };
     } }),
     restore: mutation({ args: { table: tableSchema, id: s.string({ min: 1, max: 200 }), cursor, expectedVersion: s.nullable(s.number({ integer: true, min: 1 })) }, handler: ({ db }, { table, id, cursor, expectedVersion }) => {
-      const source = db.table(table), selected = source.history(id, { before: { revision: cursor.revision, sequence: cursor.sequence + 1 }, limit: 1 })[0];
+      const source = db.table(table), selected = source.history(id as any, { before: { revision: cursor.revision, sequence: cursor.sequence + 1 }, limit: 1 })[0];
       if (!selected || selected.cursor.revision !== cursor.revision || selected.cursor.sequence !== cursor.sequence) throw new Error("Selected revision is no longer retained in the recovery window.");
       const validated = options.validateRestore?.(selected.document, { table, db });
       if (validated && typeof (validated as any).then === "function") throw new TypeError("Restore validation must be synchronous inside the transaction.");
-      return source.restore(id, cursor, { ifVersion: expectedVersion });
+      return source.restore(id as any, cursor, { ifVersion: expectedVersion });
     } }),
   }));
   const runtime = await openBackend(backend, { path: options.path, prefix: options.prefix ?? "__clank/history" });

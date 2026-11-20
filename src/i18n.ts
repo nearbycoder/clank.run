@@ -139,7 +139,7 @@ export function createI18n<const C extends MessageCatalog>(options: I18nOptions<
       return source.replace(/\{([A-Za-z][A-Za-z0-9_]*)\}/gu, (_match, name) => String(values[name]));
     },
     number(value: number, format?: Intl.NumberFormatOptions) { return new Intl.NumberFormat(current.value, format).format(finite(value)); },
-    date(value: Date | number, format?: Intl.DateTimeFormatOptions) { return new Intl.DateTimeFormat(current.value, { timeZone, ...format }).format(finite(value instanceof Date ? value.getTime() : value)); },
+    date(value: Date | number, format?: Intl.DateTimeFormatOptions) { return new Intl.DateTimeFormat(current.value, { ...format, timeZone: format?.timeZone ?? timeZone }).format(finite(value instanceof Date ? value.getTime() : value)); },
     relative(value: number, unit: Intl.RelativeTimeFormatUnit, format?: Intl.RelativeTimeFormatOptions) { return new Intl.RelativeTimeFormat(current.value, format).format(finite(value), unit); },
     manifest() { return Object.freeze(Object.entries(catalogs.get(current.value)!).map(([key, message]) => Object.freeze({ key, parameters: Object.freeze(parameters(message)), message }))); },
     revision() { const locale = current.value; return messageCatalogRevision(catalogs.get(locale)!, locale); },

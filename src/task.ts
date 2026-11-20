@@ -383,8 +383,9 @@ export class Task<A, E = never, R = never> {
     return new Task<A | B, E2, R | R2>(async (context) => {
       const exit = await runEvaluator(this, context);
       if (Exit.isSuccess(exit)) return exit;
-      if (exit.cause._tag !== "Failure") return exit as Exit<never, E2>;
-      try { return await runEvaluator(recover(exit.cause.error), context); }
+      const failure = failureOption(exit.cause);
+      if (!failure.found) return exit as Exit<never, E2>;
+      try { return await runEvaluator(recover(failure.error), context); }
       catch (error) { return Exit.failCause(Cause.defect(error)); }
     });
   }
@@ -537,7 +538,15 @@ export class Task<A, E = never, R = never> {
         });
         return acquired;
       } catch (error) {
-        return Exit.failCause(Cause.defect(error));
+        const failureCause = Cause.defect(error);
+        const failure = Exit.failCause(failureCause);
+        const released = await runEvaluator(release(acquired.value, failure), {
+          ...context,
+          signal: neverAbortedSignal(),
+        });
+        return Exit.isFailure(released)
+          ? Exit.failCause(Cause.sequential([failureCause, released.cause]))
+          : failure;
       }
     });
   }
@@ -564,13 +573,15 @@ export class Task<A, E = never, R = never> {
       let attempt = 0;
       while (true) {
         const exit = await runEvaluator(task, context);
-        if (Exit.isSuccess(exit) || exit.cause._tag !== "Failure") return exit;
+        if (Exit.isSuccess(exit)) return exit;
+        const failure = failureOption(exit.cause);
+        if (!failure.found) return exit;
         let next: number | null;
         try {
           next = schedule.next({
             attempt,
             elapsed: Math.max(0, context.clock.now() - started),
-            error: exit.cause.error,
+            error: failure.error,
             random: context.random,
           });
           if (next !== null) next = duration(next, "scheduled delay");
@@ -628,12 +639,16 @@ export class Task<A, E = never, R = never> {
       1,
       MAX_CONCURRENCY,
     );
-    return new Task(async (context) => {
+    return new Task<
+      { -readonly [K in keyof Tasks]: Tasks[K] extends Task<infer A, any, any> ? A : never },
+      Tasks[number] extends Task<any, infer E, any> ? E : never,
+      Tasks[number] extends Task<any, any, infer R> ? R : never
+    >(async (context) => {
       if (entries.length === 0) return Exit.succeed([] as any);
       const controller = linkedController(context.signal);
       const output = new Array(entries.length);
       let cursor = 0;
-      let failure: Exit<never, unknown> | undefined;
+      let failure: Exit<never, any> | undefined;
       const worker = async () => {
         while (!failure) {
           const index = cursor++;
@@ -661,9 +676,8 @@ export class Task<A, E = never, R = never> {
   ): Task<A | B, E | E2, R | R2> {
     return new Task<A | B, E | E2, R | R2>(async (context) => {
       const controller = linkedController(context.signal);
-      const child = childContext(context, controller.signal);
-      const leftRun = runScoped(left, child);
-      const rightRun = runScoped(right, child);
+      const leftRun = runScoped(left, childContext(context, controller.signal));
+      const rightRun = runScoped(right, childContext(context, controller.signal));
       const winner = await Promise.race([leftRun, rightRun]);
       controller.abort("race completed");
       await Promise.allSettled([leftRun, rightRun]);
@@ -676,7 +690,7 @@ export class Task<A, E = never, R = never> {
       const controller = linkedController(context.signal);
       const promise = runScoped(task, childContext(context, controller.signal));
       const fiber = new Fiber(promise, controller);
-      try { context.scope.add(() => fiber.interrupt("parent scope closed")); }
+      try { context.scope.add(async () => { await fiber.interrupt("parent scope closed"); }); }
       catch (error) {
         controller.abort(error);
         return Exit.failCause(Cause.defect(error));
@@ -815,7 +829,15 @@ export class Layer<Provides, E = never, R = never> {
             if (Exit.isFailure(released)) throw new TaskExecutionError(released.cause);
           });
         } catch (error) {
-          return Exit.failCause(Cause.defect(error));
+          const failureCause = Cause.defect(error);
+          const failure = Exit.failCause(failureCause);
+          const released = await runEvaluator(release(result.value), {
+            ...context,
+            signal: neverAbortedSignal(),
+          });
+          return Exit.isFailure(released)
+            ? Exit.failCause(Cause.sequential([failureCause, released.cause]))
+            : failure;
         }
       }
       return Exit.succeed(new Map([[token.key, result.value]]));
@@ -833,10 +855,12 @@ export class TaskRuntime<R = never, LE = never> {
     this.options = runtime[0] ?? {};
   }
   runExit<A, E>(task: Task<A, E, R>): Promise<Exit<A, E | LE>> {
-    return Task.runExit(task, this.options);
+    return runTask(task, this.options);
   }
-  runPromise<A, E>(task: Task<A, E, R>): Promise<A> {
-    return Task.runPromise(task, this.options);
+  async runPromise<A, E>(task: Task<A, E, R>): Promise<A> {
+    const exit = await runTask(task, this.options);
+    if (Exit.isSuccess(exit)) return exit.value;
+    throw new TaskExecutionError(exit.cause);
   }
 }
 
@@ -849,11 +873,11 @@ export function createTaskRuntime<R = never, LE = never>(...runtime: TaskRuntime
 }
 
 async function runTask<A, E, R, LE>(task: Task<A, E, R>, options: TaskRuntimeOptions<R, LE>): Promise<Exit<A, E | LE>> {
-  const root = new TaskScope();
-  const controller = linkedController(options.signal);
   let random: () => number;
   try { random = checkedRandom(options.random ?? Math.random); }
   catch (error) { return Exit.failCause(Cause.defect(error)); }
+  const root = new TaskScope();
+  const controller = linkedController(options.signal);
   const context: RuntimeContext = {
     environment: new Map(),
     scope: root,
@@ -948,6 +972,35 @@ function timeoutFailure<A, E>(exit: Exit<A, E>, error: TimeoutError): Exit<never
   };
   const cause = replace(exit.cause);
   return Exit.failCause(replaced ? cause : Cause.sequential([Cause.failure(error), cause]));
+}
+
+function hasDefect(cause: Cause<unknown>): boolean {
+  switch (cause._tag) {
+    case "Defect": return true;
+    case "Sequential":
+    case "Parallel": return cause.causes.some(hasDefect);
+    default: return false;
+  }
+}
+
+function failureOption<E>(cause: Cause<E>): { readonly found: true; readonly error: E } | { readonly found: false } {
+  switch (cause._tag) {
+    case "Failure": return { found: true, error: cause.error };
+    case "Defect":
+    case "Interrupted": return { found: false };
+    case "Sequential":
+    case "Parallel": {
+      let first: { readonly found: true; readonly error: E } | undefined;
+      for (const entry of cause.causes) {
+        if (hasDefect(entry)) return { found: false };
+        if (!first) {
+          const candidate = failureOption(entry);
+          if (candidate.found) first = candidate;
+        }
+      }
+      return first ?? { found: false };
+    }
+  }
 }
 
 function mapFailure<E, E2>(cause: Cause<E>, mapper: (error: E) => E2): Cause<E2> {

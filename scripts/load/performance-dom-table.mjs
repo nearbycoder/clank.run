@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { spawn } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 const [basePath, candPath, roundsIn = "7"] = process.argv.slice(2);
 if (!basePath || !candPath) throw new Error("Provide baseline and candidate dist directories.");
@@ -63,7 +63,15 @@ let finish;
 const done = new Promise((r) => { finish = r; });
 const server = createServer(async (req, res) => {
   if (req.url === "/") { res.setHeader("content-type", "text/html"); return res.end(page); }
-  if (req.url === "/done") { let body = ""; for await (const c of req) body += c; res.end("ok"); return finish(JSON.parse(body)); }
+  if (req.url === "/done") {
+    let body = "";
+    for await (const c of req) {
+      body += c;
+      if (body.length > 1024 * 1024) { res.statusCode = 413; return res.end("too large"); }
+    }
+    res.end("ok");
+    return finish(JSON.parse(body));
+  }
   const m = /^\/(baseline|candidate)\/([A-Za-z0-9._-]+\.js)$/.exec(req.url);
   if (!m) { res.statusCode = 404; return res.end(); }
   try { res.setHeader("content-type", "text/javascript"); res.end(await readFile(join(dirs[m[1]], m[2]))); } catch { res.statusCode = 404; res.end(); }
@@ -71,7 +79,14 @@ const server = createServer(async (req, res) => {
 await new Promise((r) => server.listen(34181, "127.0.0.1", r));
 const profile = mkdtempSync(join(tmpdir(), "clank-dom-ab-"));
 const chrome = spawn(process.env.CHROME ?? "google-chrome-stable", ["--headless=new", "--no-sandbox", "--disable-gpu", `--user-data-dir=${profile}`, "--window-size=1200,900", "http://127.0.0.1:34181/"], { stdio: "ignore" });
-const timer = setTimeout(() => { console.error("timeout"); chrome.kill("SIGKILL"); process.exit(1); }, 240000);
-const results = await done; clearTimeout(timer); chrome.kill("SIGKILL"); server.close();
-for (const [name, r] of Object.entries(results)) console.log(`${name.padEnd(12)} script base ${r.baseline[0].toFixed(2).padStart(8)}ms cand ${r.candidate[0].toFixed(2).padStart(8)}ms ${(r.baseline[0] / r.candidate[0]).toFixed(2)}x   +layout base ${r.baseline[1].toFixed(2).padStart(8)}ms cand ${r.candidate[1].toFixed(2).padStart(8)}ms ${(r.baseline[1] / r.candidate[1]).toFixed(2)}x`);
+const timer = setTimeout(() => { console.error("timeout"); chrome.kill("SIGKILL"); rmSync(profile, { recursive: true, force: true }); process.exit(1); }, 240000);
+try {
+  const results = await done;
+  for (const [name, r] of Object.entries(results)) console.log(`${name.padEnd(12)} script base ${r.baseline[0].toFixed(2).padStart(8)}ms cand ${r.candidate[0].toFixed(2).padStart(8)}ms ${(r.baseline[0] / r.candidate[0]).toFixed(2)}x   +layout base ${r.baseline[1].toFixed(2).padStart(8)}ms cand ${r.candidate[1].toFixed(2).padStart(8)}ms ${(r.baseline[1] / r.candidate[1]).toFixed(2)}x`);
+} finally {
+  clearTimeout(timer);
+  chrome.kill("SIGKILL");
+  server.close();
+  rmSync(profile, { recursive: true, force: true });
+}
 process.exit(0);

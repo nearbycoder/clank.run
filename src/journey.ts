@@ -270,7 +270,8 @@ export function createDomJourneyDriver(
       const target = new URL(url, windowObject.location.href);
       if (target.href === windowObject.location.href) return;
       windowObject.history.pushState({}, "", target.href);
-      windowObject.dispatchEvent(new windowObject.PopStateEvent("popstate", { state: windowObject.history.state }));
+      const PopState = (windowObject as Window & typeof globalThis).PopStateEvent;
+      windowObject.dispatchEvent(new PopState("popstate", { state: windowObject.history.state }));
     },
     currentUrl: () => windowObject.location.href,
     inspect: () => surface.inspect(),
@@ -308,10 +309,11 @@ async function executeStep(
     await abortable(signal, driver.settle()); return undefined;
   }
   if ("input" in step) {
-    const secret = isSecretReference(step.input.value);
-    const value = secret
-      ? await resolvedSecret(step.input.value.env, resolveSecret, signal)
-      : step.input.value;
+    const rawValue = step.input.value;
+    const secret = isSecretReference(rawValue);
+    const value = isSecretReference(rawValue)
+      ? await resolvedSecret(rawValue.env, resolveSecret, signal)
+      : rawValue;
     const accepted = await abortable(signal, driver.input(step.input.target, value, { secret }));
     if (!accepted) throw new Error(`Input target ${step.input.target} is missing, protected, or incompatible.`);
     await abortable(signal, driver.settle());
@@ -525,7 +527,7 @@ async function safeSurface(driver: JourneyDriver, signal?: AbortSignal, secrets:
       return Object.freeze({
         ...fields,
         ...(href ? { href: redactSecrets(safeHref(href), secrets) } : {}),
-        ...(children.length ? { children: Object.freeze(children) } : {}),
+        ...(children.length ? { children: Object.freeze(children) as AgentNode[] } : {}),
       });
     };
     return Object.freeze(nodes.map(redact).filter((entry): entry is AgentNode => entry !== null));

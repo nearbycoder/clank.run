@@ -979,20 +979,22 @@ export function openDeploymentOrchestrator<DB extends DatabaseSchema<any>>(
       const attempts = Number(current.attempts);
       const dead = attempts >= Number(current.max_attempts);
       const nextAttempt = Date.now() + Math.min(60 * 60_000, retryBaseMs * 2 ** Math.max(0, attempts - 1));
+      const now = Date.now();
       const updated = internal.prepare(`UPDATE clank_deployment_operations
         SET state = ?, error = ?, lease_token_hash = NULL, lease_expires_at = NULL,
             next_attempt_at = ?, updated_at = ?
         WHERE id = ? AND state = 'leased' AND node_id = ? AND fence = ?
-          AND lease_token_hash = ?`)
+          AND lease_token_hash = ? AND lease_expires_at > ?`)
         .run(
           dead ? "failed" : "retry",
           safeError(error).slice(0, 4_096),
           nextAttempt,
-          Date.now(),
+          now,
           operation.id,
           operation.nodeId,
           operation.fence,
           await digest(operation.leaseToken),
+          now,
         );
       if (Number(updated.changes) !== 1) throw new Error("Deployment operation lease is stale.");
       return operationFromRow(internal.prepare("SELECT * FROM clank_deployment_operations WHERE id = ?").get(operation.id)!);
@@ -1345,7 +1347,7 @@ function secureEndpoint(input: string): string {
     || url.search
     || url.hash
     || (url.protocol !== "https:"
-      && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "::1"].includes(url.hostname)))
+      && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)))
   ) throw new TypeError("Node endpoint must use HTTPS, except for loopback development.");
   return url.href.replace(/\/$/u, "");
 }

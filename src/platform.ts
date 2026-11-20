@@ -1916,7 +1916,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       ['clank_auth_users','account','id','disabled,role'],
       ['clank_auth_sessions','account','user_id','user_id,authenticated_at,authentication_method,expires_at,token_hash,csrf_token'],
       ['clank_platform_memberships','organization','organization_id','role,user_id,organization_id,created_at,updated_at'],
-      ['clank_platform_project_members','project','project_id','permissions,user_id,project_id,created_at,updated_at'],
+      ['clank_platform_project_members','project','project_id','permissions,user_id,project_id'],
       ['clank_platform_projects','project','id','owner_id,organization_id,parent_project_id'],
     ] as const){
       for(const event of ['INSERT','DELETE','UPDATE'] as const){
@@ -6772,7 +6772,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           }
         }
       }
-      if (error === preMigrationCapacityRejection) {
+      const capacityRejection = preMigrationCapacityRejection as PlatformError | null;
+      if (capacityRejection && error === capacityRejection) {
         let cleanupSucceeded = true;
         let restartSucceeded = !previousWasStopped;
         if (previousWasStopped && previousReleaseId) {
@@ -6800,11 +6801,11 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         audit(storage.internal, principal.userId, principal.tokenId, project.id, "release.reject", {
           releaseId,
           digest,
-          code: preMigrationCapacityRejection.code,
+          code: capacityRejection.code,
           cleanupSucceeded,
           restartSucceeded,
         });
-        if (cleanupSucceeded && restartSucceeded) throw preMigrationCapacityRejection;
+        if (cleanupSucceeded && restartSucceeded) throw capacityRejection;
         throw new PlatformError(
           422,
           "DEPLOYMENT_RECOVERY_FAILED",
@@ -8548,7 +8549,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         ? platformBrandAssets.get(url.pathname)
         : undefined;
       if (brandAsset) {
-        return new Response(request.method === "HEAD" ? null : brandAsset.bytes, {
+        return new Response(request.method === "HEAD" ? null : brandAsset.bytes as BodyInit, {
           headers: {
             "cache-control": "public, max-age=3600, must-revalidate",
             "content-type": brandAsset.contentType,
@@ -12145,7 +12146,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
               limit: 1,
             });
             requireCurrentProjectAuthority();
-            result = compatibility.compatibility === "ready"
+            result = compatibility.compatibility === "ready" && databasePath
               ? await mutatePlatformJob({
                   databasePath,
                   id: jobMutationMatch[1]!,
@@ -15496,7 +15497,7 @@ function workspaceUsagePayload(
       responseBytes,
       knownTransferBytes: boundedMetricSum(requestBytes, responseBytes),
       rejectedRequests: Number(row.rejected_count ?? 0),
-      updatedAt: Number(row.updated_at),
+      updatedAt: Number(row.updated_at) as number | null,
     };
   });
   for (const row of current.values()) {
@@ -16121,7 +16122,7 @@ async function platformMemoryDiagnostics(
       trackedApplicationProcesses: projectProcesses.length,
       projectAttributedBytes: projectAttributionBytes,
       trackedProcessBytes,
-      unattributedBytes: currentBytes === null
+      unattributedBytes: typeof currentBytes !== "number"
         ? null
         : Math.max(0, currentBytes - trackedProcessBytes),
       attribution: [
@@ -17163,7 +17164,7 @@ function normalizeBillingProviderEvent(value: unknown): BillingProviderEvent {
       Number.MAX_SAFE_INTEGER,
     );
   return Object.freeze({
-    kind,
+    kind: "subscription.updated" as const,
     ...normalized,
     status: input.status as BillingSubscriptionStatus,
     cancelAtPeriodEnd: input.cancelAtPeriodEnd,
@@ -21141,7 +21142,7 @@ function providerGeneration(
     generation: Number(row.generation),
     releaseId: String(row.release_id),
     encryptedEnvironment: String(row.encrypted_environment),
-    databaseMode,
+    databaseMode: databaseMode as ProviderGenerationRow["databaseMode"],
     restoreBackupId,
     restoreDatabaseSha256,
     restoreDatabaseBytes,

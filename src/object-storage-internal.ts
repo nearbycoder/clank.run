@@ -728,7 +728,7 @@ function s3Endpoint(value: string): URL {
     || url.search
     || (url.pathname !== "" && url.pathname !== "/")
     || (url.protocol !== "https:"
-      && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "::1"].includes(url.hostname)))
+      && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)))
   ) {
     throw new TypeError("S3 endpoint must be an HTTPS origin or a loopback HTTP origin.");
   }

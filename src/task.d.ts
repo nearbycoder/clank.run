@@ -170,6 +170,7 @@ export declare class Task<A, E = never, R = never> {
 }
 
 export declare class Fiber<A, E> {
+  private constructor();
   readonly exit: Promise<Exit<A, E>>;
   join(): Task<A, E>;
   interrupt(reason?: unknown): Promise<Exit<A, E>>;
@@ -189,6 +190,7 @@ export declare class MissingServiceError extends Error {
 }
 
 export declare class Layer<Provides, E = never, R = never> {
+  private constructor();
   readonly _Provides: () => Provides;
   readonly _E: () => E;
   readonly _R: (_: R) => void;

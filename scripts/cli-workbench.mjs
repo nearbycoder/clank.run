@@ -2,7 +2,7 @@ import { rehearseResilience } from "../dist/resilience.js";
 import { compareContracts } from "../dist/contract-compatibility.js";
 import { assessApplicationPerformance } from "../dist/application-performance.js";
 import { rehearseRecovery, rehearseMigrations } from "../dist/rehearsal.js";
-import { lstat, open, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -13,7 +13,7 @@ import { checkProductionParity, compareVisuals, diffSchemas, planFrameworkUpgrad
 import { runDeploymentProviderConformance } from "../dist/provider.js";
 
 const MAX_JSON_BYTES = 16 * 1024 * 1024;
-const EXCLUDED = new Set([".git", ".clank", ".proact", ".clank-runner", ".clank-provider", ".clank-platform", ".proact-runner", ".proact-provider", ".proact-platform", "node_modules", ".env", ".envrc", ".dev.vars", ".npmrc", ".yarnrc", ".pypirc", ".netrc", ".ssh", ".aws", "id_rsa", "id_ed25519"]);
+const EXCLUDED = new Set([".git", ".clank", ".proact", ".clank-runner", ".clank-provider", ".clank-platform", ".proact-runner", ".proact-provider", ".proact-platform", "node_modules", ".env", ".envrc", ".dev.vars", ".npmrc", ".yarnrc", ".pypirc", ".netrc", ".ssh", ".aws", "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa"]);
 const ARGUMENTS = {
   compatibility: [2, []], performance: [2, ["baseline", "page"]],
   resilience: [1, []], restore: [1, []], migrate: [1, []],
@@ -147,7 +147,11 @@ export async function runWorkbench(args) {
       const output = resolve(option("output") ?? `${basename(root)}.clank-export.json`);
       const files = await exportFiles(root, output);
       result = await createPortableProjectExport({ name: option("name") ?? basename(root), frameworkVersion: option("framework") ?? "unknown", files });
-      await privateWrite(output, `${JSON.stringify(result)}\n`, option("force") === "true");
+      const forceFlag = option("force");
+      if (forceFlag !== undefined && forceFlag !== "true" && forceFlag !== "false") {
+        throw new Error("--force must be true or false.");
+      }
+      await privateWrite(output, `${JSON.stringify(result)}\n`, forceFlag === "true");
       result = { protocol: "clank-project-export-result/1", output, digest: result.digest, files: result.files.length, bytes: result.files.reduce((sum, file) => sum + file.size, 0) };
       break;
     }
@@ -164,7 +168,11 @@ export async function runWorkbench(args) {
       required(modulePath, "Usage: clank workbench provider <provider.mjs> [--export=<name>] [--project=<id> --destructive=true]");
       const module = await importLocal(modulePath);
       const provider = module[option("export") ?? "default"];
-      result = await runDeploymentProviderConformance(provider, { ...(option("project") ? { projectId: option("project") } : {}), destructive: option("destructive") === "true" });
+      const destructiveFlag = option("destructive");
+      if (destructiveFlag !== undefined && destructiveFlag !== "true" && destructiveFlag !== "false") {
+        throw new Error("--destructive must be true or false.");
+      }
+      result = await runDeploymentProviderConformance(provider, { ...(option("project") ? { projectId: option("project") } : {}), destructive: destructiveFlag === "true" });
       break;
     }
     case "contract": {
@@ -190,7 +198,7 @@ export async function runWorkbench(args) {
     || result?.matches === false
     || result?.ready === false
     || result?.decision?.ready === false
-    || (result?.action && result.action !== "continue")) process.exitCode = 1;
+    || (subcommand === "rollout" && result?.action && result.action !== "continue")) process.exitCode = 1;
 }
 
 function help() {
@@ -221,13 +229,45 @@ Usage:
 All commands support --json. Module-based commands execute the explicitly selected local module; no package hooks run.`);
 }
 
-async function jsonFile(path) { const target = resolve(path); const stats = await lstat(target); if (!stats.isFile() || stats.isSymbolicLink() || stats.size > MAX_JSON_BYTES) throw new Error(`JSON input is not a bounded regular file: ${path}`); try { return JSON.parse(await readFile(target, "utf8")); } catch { throw new Error(`JSON input is invalid: ${path}`); } }
-async function privateWrite(target, contents, force = false) { if (!force) return writeFile(target, contents, { flag: "wx", mode: 0o600 }); const temporary = join(dirname(target), `.${basename(target)}.clank-${process.pid}-${crypto.randomUUID()}`); try { await writeFile(temporary, contents, { flag: "wx", mode: 0o600 }); await rename(temporary, target); } catch (error) { await unlink(temporary).catch(() => {}); throw error; } }
-async function visualFile(path) {
+async function boundedRegularBytes(path, label) {
   const target = resolve(path);
-  const stats = await lstat(target);
-  if (!stats.isFile() || stats.isSymbolicLink() || stats.size > MAX_JSON_BYTES) throw new Error(`Visual input is not a bounded regular file: ${path}`);
-  const bytes = new Uint8Array(await readFile(target));
+  let handle;
+  try {
+    handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (error) {
+    if (error?.code === "ELOOP") throw new Error(`${label} is not a bounded regular file: ${path}`);
+    throw error;
+  }
+  try {
+    const stats = await handle.stat();
+    if (!stats.isFile() || stats.size > MAX_JSON_BYTES) throw new Error(`${label} is not a bounded regular file: ${path}`);
+    const buffer = Buffer.alloc(stats.size + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, length, buffer.length - length, null);
+      if (!bytesRead) break;
+      length += bytesRead;
+    }
+    if (length > MAX_JSON_BYTES) throw new Error(`${label} is not a bounded regular file: ${path}`);
+    return new Uint8Array(buffer.buffer, buffer.byteOffset, length);
+  } finally {
+    await handle.close();
+  }
+}
+async function jsonFile(path) {
+  const bytes = await boundedRegularBytes(path, "JSON input");
+  try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); }
+  catch { throw new Error(`JSON input is invalid: ${path}`); }
+}
+async function privateWrite(target, contents, force = false) {
+  await mkdir(dirname(target), { recursive: true });
+  if (!force) return writeFile(target, contents, { flag: "wx", mode: 0o600 });
+  const temporary = join(dirname(target), `.${basename(target)}.clank-${process.pid}-${crypto.randomUUID()}`);
+  try { await writeFile(temporary, contents, { flag: "wx", mode: 0o600 }); await rename(temporary, target); }
+  catch (error) { await unlink(temporary).catch(() => {}); throw error; }
+}
+async function visualFile(path) {
+  const bytes = await boundedRegularBytes(path, "Visual input");
   return pngSignature(bytes) ? decodePng(bytes) : visualImage(parseJson(bytes, path));
 }
 async function importLocal(path) { const target = resolve(path); const stats = await lstat(target); if (!stats.isFile() || stats.isSymbolicLink() || stats.size > MAX_JSON_BYTES) throw new Error("Module must be a bounded regular file."); return import(`${pathToFileURL(target).href}?workbench=${stats.mtimeMs}`); }
@@ -270,7 +310,16 @@ async function exportFiles(root, excludedPath) {
   await visit(root);
   return output;
 }
-function excludedExportEntry(name) { return EXCLUDED.has(name) || name.startsWith(".env.") || name.endsWith(".sqlite") || name.endsWith(".sqlite-wal") || name.endsWith(".sqlite-shm") || name.endsWith(".clank-export.json"); }
+function excludedExportEntry(name) {
+  const lower = name.toLowerCase();
+  return EXCLUDED.has(name) || EXCLUDED.has(lower) || lower.startsWith(".env.")
+    || lower.endsWith(".sqlite") || lower.endsWith(".sqlite-wal") || lower.endsWith(".sqlite-shm")
+    || lower.endsWith(".sqlite3") || lower.endsWith(".sqlite3-wal") || lower.endsWith(".sqlite3-shm")
+    || lower.endsWith(".db") || lower.endsWith(".pem") || lower.endsWith(".key")
+    || lower.endsWith(".p12") || lower.endsWith(".pfx")
+    || lower.endsWith(".clank.gz") || lower.endsWith(".proact.gz")
+    || lower.endsWith(".private.json") || lower.endsWith(".clank-export.json");
+}
 function visualImage(value) {
   if (!value || !Array.isArray(value.rgba)) throw new Error("Visual JSON must contain width, height, and an RGBA byte array.");
   if (value.rgba.some((channel) => !Number.isInteger(channel) || channel < 0 || channel > 255)) {

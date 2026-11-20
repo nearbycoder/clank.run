@@ -487,3 +487,43 @@ test("local file reads reject linked, oversized and publicly readable storage", 
     assert.deepEqual(await readdir(escapedShard), []);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test("webhook sender retries network errors, fails fast on 4xx while cancelling body, and job queue start is idempotent", async () => {
+  const secret = "a sufficiently long webhook signing secret for tests";
+  let networkAttempts = 0;
+  const sender = createWebhookSender({
+    retries: 2,
+    fetch: async () => {
+      networkAttempts++;
+      if (networkAttempts === 1) throw new Error("ECONNRESET");
+      return new Response(null, { status: 204 });
+    },
+  });
+  const delivered = await sender.send({ url: "https://hooks.example.test/events", event: "test.ok", payload: { ok: true }, secret });
+  assert.deepEqual(delivered, { status: 204, attempts: 2 });
+
+  let clientErrorAttempts = 0;
+  let cancelled = false;
+  const failing = createWebhookSender({
+    retries: 3,
+    fetch: async () => {
+      clientErrorAttempts++;
+      return new Response(new ReadableStream({ cancel() { cancelled = true; } }), { status: 400 });
+    },
+  });
+  await assert.rejects(failing.send({ url: "https://hooks.example.test/events", event: "test.fail", payload: { ok: false }, secret }), /400/);
+  assert.equal(clientErrorAttempts, 1, "non-retryable 4xx must not retry");
+  assert.equal(cancelled, true, "discarded error response body must be cancelled");
+
+  const db = await openSQLite(defineDatabase({}), { path: ":memory:" });
+  const queue = openJobQueue(db, {});
+  try {
+    const stopA = queue.start(500);
+    const stopB = queue.start(500);
+    stopB();
+    stopA();
+  } finally {
+    queue.close();
+    db.close();
+  }
+});

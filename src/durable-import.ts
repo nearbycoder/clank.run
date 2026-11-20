@@ -363,9 +363,9 @@ export async function openDurableImport(options: DurableImportOptions): Promise<
         const values = JSON.parse(chunk.contents);
         for (; nextOffset < values.length && records.length < batchSize; nextOffset++) {
           const row = job.processedRows + records.length + 2;
-          let value: Record<string, unknown>, skip = false;
-          try { value = target.schema.parse(values[nextOffset]) as Record<string, unknown>; } catch { issues.push({ row, code: "INVALID_ROW" }); value = {}; }
-          if (!allowed(options.authorize ? options.authorize(context as any, value, "apply") : true)) issues.push({ row, code: "FORBIDDEN" });
+          let value: Record<string, unknown>, skip = false, parseFailed = false;
+          try { value = target.schema.parse(values[nextOffset]) as Record<string, unknown>; } catch { issues.push({ row, code: "INVALID_ROW" }); value = {}; parseFailed = true; }
+          if (!parseFailed && !allowed(options.authorize ? options.authorize(context as any, value, "apply") : true)) issues.push({ row, code: "FORBIDDEN" });
           if (unique.length && !issues.some(issue => issue.row === row)) {
             let query = context.db.table(options.table).query();
             const identity = JSON.stringify(unique.map(field => value[field] ?? null));
@@ -469,6 +469,7 @@ export function createDurableImportClient<Values = Record<string, unknown>>(opti
     async uploadCsv(file, columns, settings = {}) {
       if (file.size > 100 * 1024 * 1024) throw new RangeError("Streamed CSV imports are limited to 100 MiB.");
       let job = settings.id ? await service.inspect(settings.id) : await service.create(settings.name ?? "CSV import"); settings.progress?.(job);
+      if (job.state !== "uploading") return job;
       let header: string | undefined, batch: string[] = [], sequence = 0, bytes = 0, rows = 0;
       const upload = async () => { if (!batch.length) return; const plan = planCsvImport(`${header}\n${batch.join("\n")}\n`, { columns, maxRows: 500 }); if (!plan.ok) throw new Error(`CSV validation failed at row ${rows + plan.issues[0]!.row}.`); settings.signal?.throwIfAborted(); job = await service.append(job.id, sequence++, plan.records); settings.progress?.(job); rows += batch.length; batch = []; bytes = 0; };
       for await (const record of csvRecords(file, settings.signal)) { if (header === undefined) { header = record; continue; } const size = new TextEncoder().encode(record).length; if (batch.length >= 500 || bytes + size > 4 * 1024 * 1024) await upload(); batch.push(record); bytes += size; }
@@ -517,7 +518,14 @@ export function mountReviewableImporter<Values = Record<string, unknown>>(contai
         const source = record.source[meta.headers.indexOf(column.source)] ?? ""; label.textContent = `${column.target}: source ${source} `; input.setAttribute("aria-label", `Correction for row ${record.row} ${column.target}`);
         editInputs.push(input); input.value = Object.hasOwn(corrections, column.target) ? String(corrections[column.target] ?? "") : source; input.style.maxWidth = "100%"; input.style.boxSizing = "border-box";
         input.addEventListener("input", () => { invalidate(); const values = edits.get(record.row) ?? {}; let value: unknown = input.value;
-          if (column.type === "number" || column.type === "integer") value = input.value.trim() ? Number(input.value) : null;
+          if (column.type === "number" || column.type === "integer") {
+            const trimmed = input.value.trim();
+            if (!trimmed) value = null;
+            else {
+              const numeric = Number(trimmed);
+              value = Number.isFinite(numeric) ? numeric : input.value;
+            }
+          }
           else if (column.type === "boolean") value = ["true", "1"].includes(input.value.toLowerCase()) ? true : ["false", "0"].includes(input.value.toLowerCase()) ? false : input.value;
           values[column.target] = value; edits.set(record.row, values);
         }); label.append(input); group.append(label);

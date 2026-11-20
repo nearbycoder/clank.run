@@ -3529,7 +3529,7 @@ export function workflowManifest(
   }));
 }
 
-const CRON_MACROS: Readonly<Record<string, string>> = Object.freeze({
+const CRON_MACROS: Readonly<Record<string, string>> = Object.freeze(Object.assign(Object.create(null), {
   "@yearly": "0 0 1 1 *",
   "@annually": "0 0 1 1 *",
   "@monthly": "0 0 1 * *",
@@ -3537,9 +3537,9 @@ const CRON_MACROS: Readonly<Record<string, string>> = Object.freeze({
   "@daily": "0 0 * * *",
   "@midnight": "0 0 * * *",
   "@hourly": "0 * * * *",
-});
-const MONTH_NAMES = Object.freeze({ jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 });
-const WEEKDAY_NAMES = Object.freeze({ sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 });
+}));
+const MONTH_NAMES = Object.freeze(Object.assign(Object.create(null), { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 }));
+const WEEKDAY_NAMES = Object.freeze(Object.assign(Object.create(null), { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 }));
 
 interface ParsedCron {
   minute: ReadonlySet<number>;

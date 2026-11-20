@@ -215,7 +215,7 @@ function App() {
       <div class="relative mx-auto max-w-6xl px-5 py-12 sm:px-8 sm:py-20">
         <header class="mb-12 max-w-3xl">
           <div class="mb-5 inline-flex items-center gap-2 rounded-full border border-black/8 bg-white/70 px-3 py-1.5 text-xs font-semibold shadow-sm backdrop-blur">
-            <span class="size-2 rounded-full bg-coral" /> CLANK / 0.6
+            <span class="size-2 rounded-full bg-coral" /> CLANK FRAMEWORK
           </div>
           <h1 class="mb-5 text-5xl font-semibold leading-[.98] tracking-[-.05em] sm:text-7xl">
             The web framework built for <span class="text-coral">people + agents.</span>

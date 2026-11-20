@@ -65,11 +65,18 @@ const schemaFacts = new WeakMap<object, SchemaFacts>();
  * connection whose counter cannot be read is simply asked every time.
  */
 export function schemaLookup(connection: Pick<SQLiteInternal, "prepare">, sql: string): boolean {
+  const inTransaction = Boolean(
+    (connection as { inTransaction?: boolean }).inTransaction
+    || (connection as { isTransaction?: boolean }).isTransaction,
+  );
   let facts = schemaFacts.get(connection);
   try {
     const counter = facts?.counter ?? connection.prepare("SELECT schema_version FROM pragma_schema_version");
     const version = counter.get()?.schema_version;
     if (typeof version === "number" && Number.isSafeInteger(version)) {
+      if (inTransaction && (!facts || facts.version !== version)) {
+        return Boolean(connection.prepare(sql).get());
+      }
       if (!facts) schemaFacts.set(connection, facts = { counter, version, answers: new Map() });
       else if (facts.version !== version) { facts.version = version; facts.answers.clear(); }
       let answer = facts.answers.get(sql);

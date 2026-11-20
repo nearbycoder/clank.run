@@ -58,11 +58,13 @@ interface IncomingRequest extends AsyncIterable<Uint8Array> {
 interface OutgoingResponse {
   statusCode: number;
   statusMessage: string;
+  headersSent?: boolean;
   setHeader(name: string, value: string | string[]): void;
   getHeader(name: string): string | string[] | number | undefined;
   removeHeader(name: string): void;
   write(chunk: Uint8Array): boolean;
   end(chunk?: string | Uint8Array): void;
+  destroy?(error?: Error): void;
   once(event: "close" | "drain", listener: () => void): void;
   removeListener(event: "close" | "drain", listener: () => void): void;
 }
@@ -112,7 +114,7 @@ export async function serve(app: FetchApplication | ((request: Request) => Respo
       // loopback defaults when application code filters an empty env list.
       ? { ...options, allowedHosts: [] }
       : isLoopbackHost(hostname)
-        ? { ...options, allowedHosts: ["localhost", "127.0.0.1", "::1", hostname] }
+        ? { ...options, allowedHosts: ["localhost", "127.0.0.1", "::1", "[::1]", hostname] }
         : options
     : options;
 
@@ -129,6 +131,10 @@ export async function serve(app: FetchApplication | ((request: Request) => Respo
       try { void Promise.resolve(effectiveOptions.onError?.(error)).catch(() => undefined); }
       catch { /* Private logging must not prevent a response from reaching the socket. */ }
       try {
+        if (outgoing.headersSent) {
+          outgoing.destroy?.(error instanceof Error ? error : undefined);
+          return;
+        }
         const status = error instanceof NodeRequestError ? error.status : 500;
         outgoing.statusCode = status;
         outgoing.setHeader("content-type", "application/json; charset=utf-8");
@@ -201,7 +207,10 @@ export function staticFiles(root: string, options: StaticFilesOptions = {}): Fet
       if (options.dotfiles !== "allow" && containsDotfile(relative)) {
         return new Response("Not found", { status: 404 });
       }
-      const base = await (basePromise ??= fs.realpath(path.resolve(root)));
+      const base = await (basePromise ??= fs.realpath(path.resolve(root)).catch((error) => {
+        basePromise = undefined;
+        throw error;
+      }));
       let candidate = path.resolve(base, `.${relative || "/"}`);
       if (candidate !== base && !candidate.startsWith(base + path.sep)) return new Response("Not found", { status: 404 });
       try {
@@ -278,15 +287,15 @@ async function dispatch(
   const received = incoming.headers;
   const forwardedFor = trustProxy ? firstListValue(received["x-forwarded-for"]) : undefined;
   const clientAddress = forwardedFor || incoming.socket.remoteAddress || "unknown";
-  const forwarded = trustProxy ? firstListValue(received["x-forwarded-proto"]) : undefined;
+  const forwarded = trustProxy ? firstListValue(received["x-forwarded-proto"]) || undefined : undefined;
   if (forwarded && forwarded !== "http" && forwarded !== "https") throw new NodeRequestError(400, "Invalid forwarded protocol.");
   const protocol = forwarded ?? (incoming.socket.encrypted ? "https" : "http");
-  const forwardedHost = trustProxy ? firstListValue(received["x-forwarded-host"]) : undefined;
+  const forwardedHost = trustProxy ? firstListValue(received["x-forwarded-host"]) || undefined : undefined;
   const parsedHost = safeHost(forwardedHost ?? headerValue(received.host) ?? "localhost");
   if (allowedHosts && !allowedHosts.has(parsedHost.host.toLowerCase()) && !allowedHosts.has(parsedHost.hostname.toLowerCase())) {
     throw new NodeRequestError(400, "Host is not allowed.");
   }
-  let record: Record<string, string> | undefined = {};
+  let record: Record<string, string> | undefined = Object.create(null) as Record<string, string>;
   for (const name in received) {
     const value = received[name];
     if (typeof value !== "string" && value !== undefined) { record = undefined; break; }
@@ -426,6 +435,7 @@ interface CompressionStreamLike {
   destroy(): void;
   on(event: "data", listener: (chunk: Uint8Array) => void): void;
   once(event: "end" | "error", listener: (value?: unknown) => void): void;
+  removeListener(event: "end" | "error", listener: (value?: unknown) => void): void;
 }
 
 type CompressCallback = (error: Error | null, result: Uint8Array) => void;
@@ -514,16 +524,21 @@ function preferredEncoding(header: string | null): "br" | "gzip" | null {
   if (!header) return null;
   const weights = new Map<string, number>();
   for (const part of header.split(",")) {
-    const [name, ...parameters] = part.trim().toLowerCase().split(";");
+    const [rawName, ...parameters] = part.trim().toLowerCase().split(";");
+    const name = rawName?.trim();
     if (!name) continue;
     const q = parameters.map((value) => value.trim()).find((value) => value.startsWith("q="));
     const weight = q === undefined ? 1 : Number(q.slice(2));
-    weights.set(name, Number.isFinite(weight) ? weight : 0);
+    weights.set(name, Number.isFinite(weight) && weight >= 0 && weight <= 1 ? weight : 0);
   }
   const weight = (name: string) => weights.get(name) ?? weights.get("*") ?? 0;
-  if (weight("br") > 0) return "br";
-  if (weight("gzip") > 0) return "gzip";
-  return null;
+  const br = weight("br");
+  const gzip = weight("gzip");
+  if (br <= 0 && gzip <= 0) return null;
+  const best = br >= gzip ? "br" : "gzip";
+  const bestWeight = best === "br" ? br : gzip;
+  if (weights.has("identity") && (weights.get("identity") ?? 0) > bestWeight) return null;
+  return best;
 }
 
 /** Stream a response body through a compressor, flushing after each chunk so streamed responses stay incremental. */
@@ -555,6 +570,7 @@ async function pumpCompressed(
         };
         outgoing.once("drain", resume);
         outgoing.once("close", resume);
+        if (isClosed()) resume();
       });
     }
   });
@@ -563,7 +579,15 @@ async function pumpCompressed(
       const { done, value } = await reader.read();
       if (done || isClosed()) break;
       compressor.write(value);
-      await new Promise<void>((resolve) => compressor.flush(flushKind, resolve));
+      if (failure) throw failure;
+      await new Promise<void>((resolve, reject) => {
+        const onError = (error?: unknown) => reject(error);
+        compressor.once("error", onError);
+        compressor.flush(flushKind, () => {
+          compressor.removeListener("error", onError);
+          resolve();
+        });
+      });
       if (failure) throw failure;
       afterChunk();
       if (drained) await drained;
@@ -650,6 +674,7 @@ function headerValue(value: string | string[] | undefined): string | undefined {
 function connectionClosed(): Error {
   const errors = Error as unknown as { stackTraceLimit?: number };
   const limit = errors.stackTraceLimit;
+  if (typeof limit !== "number") return new Error("Connection closed.");
   try { errors.stackTraceLimit = 0; } catch { return new Error("Connection closed."); }
   try { return new Error("Connection closed."); }
   finally { errors.stackTraceLimit = limit; }
@@ -661,10 +686,10 @@ const parsedHosts = new Map<string, { host: string; hostname: string }>();
 function safeHost(value: string): { host: string; hostname: string } {
   const known = parsedHosts.get(value);
   if (known) return known;
-  if (/[\u0000-\u0020/\\]/.test(value)) throw new NodeRequestError(400, "Invalid Host header.");
+  if (/[\u0000-\u0020/\\@?#]/.test(value)) throw new NodeRequestError(400, "Invalid Host header.");
   try {
     const url = new URL(`http://${value}`);
-    if (!url.hostname || url.username || url.password || url.pathname !== "/") throw new Error("invalid");
+    if (!url.hostname || url.username || url.password || url.pathname !== "/" || url.search || url.hash) throw new Error("invalid");
     const parsed = { host: url.host, hostname: url.hostname };
     if (value.length <= 255) {
       if (parsedHosts.size >= 256) parsedHosts.clear();

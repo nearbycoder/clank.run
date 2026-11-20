@@ -194,6 +194,7 @@ export function registrationOptionsForBrowser(
 ): PublicKeyCredentialCreationOptions {
   return {
     ...options,
+    pubKeyCredParams: [...options.pubKeyCredParams],
     challenge: decodeBase64Url(options.challenge, "challenge"),
     user: {
       ...options.user,
@@ -280,10 +281,17 @@ async function parseAuthenticatorData(
   if (credentialLength < 8 || credentialLength > 1_024 || credentialEnd >= bytes.byteLength) {
     throw new TypeError("Passkey credential ID length is invalid.");
   }
-  const publicKeyBytes = bytes.slice(credentialEnd);
-  const decoder = new CborDecoder(publicKeyBytes);
+  const rawPublicKeyBytes = bytes.slice(credentialEnd);
+  const decoder = new CborDecoder(rawPublicKeyBytes);
   decoder.value();
-  if (decoder.offset !== publicKeyBytes.byteLength) throw new TypeError("Passkey public key has trailing CBOR data.");
+  const publicKeyBytes = rawPublicKeyBytes.slice(0, decoder.offset);
+  if (decoder.offset !== rawPublicKeyBytes.byteLength) {
+    if ((flags & 0x80) === 0) throw new TypeError("Passkey public key has trailing CBOR data.");
+    const extensions = decoder.value();
+    if (!(extensions instanceof Map) || decoder.offset !== rawPublicKeyBytes.byteLength) {
+      throw new TypeError("Passkey authenticator extensions contain invalid CBOR data.");
+    }
+  }
   return {
     counter,
     userVerified,
@@ -458,7 +466,7 @@ class CborDecoder {
 }
 
 async function sha256Bytes(value: Uint8Array): Promise<Uint8Array> {
-  return new Uint8Array(await crypto.subtle.digest("SHA-256", value));
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", value as BufferSource));
 }
 
 function concat(left: Uint8Array, right: Uint8Array): Uint8Array {

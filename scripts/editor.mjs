@@ -1,5 +1,5 @@
 import { readFile, readdir } from 'node:fs/promises';
-import { resolve, relative, isAbsolute } from 'node:path';
+import { resolve, relative, isAbsolute, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { compile } from './compiler.mjs';
 
@@ -18,7 +18,7 @@ export async function runEditor({ input = process.stdin, output = process.stdout
   const reply = (id, result) => send({ jsonrpc: '2.0', id, result });
   const error = (id, code, message) => send({ jsonrpc: '2.0', id, error: { code, message } });
   const validUri = uri => {
-    try { const path = fileURLToPath(uri), rel = relative(resolve(root), path); return !isAbsolute(rel) && rel !== '..' && !rel.startsWith('../') && /\.(?:ts|tsx|mts)$/.test(path); } catch { return false; }
+    try { const path = fileURLToPath(uri), rel = relative(resolve(root), path); return !isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`) && /\.(?:ts|tsx|mts)$/.test(path); } catch { return false; }
   };
   const diagnostics = (uri, document) => {
     let found = [];
@@ -70,7 +70,10 @@ export async function runEditor({ input = process.stdin, output = process.stdout
       }
       if (buffer.length < expected) break;
       const payload = buffer.subarray(0, expected).toString(); buffer = buffer.subarray(expected); expected = null;
-      try { const value = JSON.parse(payload); if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(); handle(value); } catch { error(null, -32700, 'Malformed editor message.'); }
+      let value;
+      try { value = JSON.parse(payload); if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(); }
+      catch { error(null, -32700, 'Malformed editor message.'); continue; }
+      try { handle(value); } catch { if (value.id !== undefined) error(value.id, -32603, 'Internal editor error.'); }
       if (exited) return;
     }
   }

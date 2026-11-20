@@ -756,7 +756,7 @@ export function createFormFacade<Result = unknown>(options: FormFacadeOptions<Re
       for (const { field } of fields.values()) {
         if (field.valid.peek() !== false) continue;
         const target = root.querySelector<HTMLElement>(`#${cssEscape(field.controlId)}`)
-          ?? root.querySelector<HTMLElement>(`[name="${attributeEscape(field.name ?? "")}"]`);
+          ?? (field.name ? root.querySelector<HTMLElement>(`[name="${attributeEscape(field.name)}"]`) : null);
         if (target && typeof target.focus === "function") {
           target.focus();
           return true;
@@ -1782,7 +1782,8 @@ export function createOtpField(options: OtpFieldOptions): OtpFieldController {
         const current = otpCharacters(state.value.peek());
         const normalized = normalizeOtp(text, length, validationType, options.normalizeValue);
         if (normalized.rejected) options.onValueInvalid?.(normalized.rejected, createChangeDetails(reason, event));
-        if (normalized.value.length === 0) return clear(index, event);
+        if (text.length === 0) return clear(index, event);
+        if (normalized.value.length === 0) return false;
         let next: string;
         if (text.length > 1 || normalized.value.length > 1) {
           const inserted = otpCharacters(normalized.value);
@@ -2840,20 +2841,39 @@ function attributeEscape(value: string): string {
 type NumberParseResult = { kind: "empty" } | { kind: "invalid" } | { kind: "number"; value: number };
 
 function createNumberParser(locale?: Intl.LocalesArgument, format?: Intl.NumberFormatOptions): { parse(value: string): NumberParseResult } {
-  const parts = new Intl.NumberFormat(locale, { ...format, useGrouping: true }).formatToParts(-12345.6);
-  const group = parts.find((entry) => entry.type === "group")?.value ?? ",";
-  const decimal = parts.find((entry) => entry.type === "decimal")?.value ?? ".";
-  const minus = parts.find((entry) => entry.type === "minusSign")?.value ?? "-";
+  const formatter = new Intl.NumberFormat(locale, { ...format, useGrouping: true });
+  const decimalFormatter = new Intl.NumberFormat(locale, { useGrouping: true, minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  const decimalParts = decimalFormatter.formatToParts(-12345.6);
+  const parts = formatter.formatToParts(-12345.6);
+  const group = parts.find((entry) => entry.type === "group")?.value ?? decimalParts.find((entry) => entry.type === "group")?.value ?? ",";
+  const decimal = parts.find((entry) => entry.type === "decimal")?.value ?? decimalParts.find((entry) => entry.type === "decimal")?.value ?? ".";
+  const minus = parts.find((entry) => entry.type === "minusSign")?.value ?? decimalParts.find((entry) => entry.type === "minusSign")?.value ?? "-";
   const plusParts = new Intl.NumberFormat(locale, { ...format, signDisplay: "always" }).formatToParts(1);
   const plus = plusParts.find((entry) => entry.type === "plusSign")?.value ?? "+";
+  const affixSet = new Set<string>();
+  for (const sampleValue of [-12345.6, 1, 2]) {
+    for (const part of formatter.formatToParts(sampleValue)) {
+      if (part.type === "currency" || part.type === "unit" || part.type === "percentSign" || part.type === "literal") {
+        const token = part.value.trim();
+        if (token && token !== "(" && token !== ")" && token !== "-" && token !== "+" && token !== group && token !== decimal) {
+          affixSet.add(token);
+        }
+      }
+    }
+  }
+  const affixes = [...affixSet].sort((left, right) => right.length - left.length);
   const digits = new Map<string, string>();
   const digitFormatter = new Intl.NumberFormat(locale, { useGrouping: false, maximumFractionDigits: 0 });
   for (let index = 0; index < 10; index++) digits.set(digitFormatter.format(index), String(index));
   const percent = format?.style === "percent";
+  const accounting = format?.currencySign === "accounting";
   return {
     parse(input) {
       let value = String(input).trim();
       if (!value) return { kind: "empty" };
+      const negativeAccounting = accounting && value.startsWith("(") && value.endsWith(")");
+      if (negativeAccounting) value = value.slice(1, -1).trim();
+      for (const affix of affixes) value = value.split(affix).join("");
       for (const [localized, ascii] of digits) value = value.split(localized).join(ascii);
       value = value.split(group).join("");
       value = value.split(decimal).join(".");
@@ -2861,6 +2881,7 @@ function createNumberParser(locale?: Intl.LocalesArgument, format?: Intl.NumberF
       value = value.split(plus).join("+");
       value = value.replace(/[\s\u00a0\u202f]/g, "");
       value = value.replace(/[^0-9eE+\-.]/g, "");
+      if (negativeAccounting && value && !value.startsWith("-") && !value.startsWith("+")) value = `-${value}`;
       if (!/^[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?$/.test(value)) return { kind: "invalid" };
       const parsed = Number(value);
       if (!Number.isFinite(parsed)) return { kind: "invalid" };

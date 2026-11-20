@@ -1176,7 +1176,7 @@ function createEditableSelection<Value>(
         id: itemId(id, canonicalIndex), role: "option", tabIndex: -1,
         "aria-selected": () => selected(value),
         "aria-disabled": item.disabled || undefined,
-        "data-highlighted": () => highlightedIndex.value === filteredIndex() ? "" : undefined,
+        "data-highlighted": () => highlightedIndex.value >= 0 && highlightedIndex.value === filteredIndex() ? "" : undefined,
         "data-selected": () => selected(value) ? "" : undefined,
         "data-disabled": item.disabled ? "" : undefined,
         "data-clank-part": "item",

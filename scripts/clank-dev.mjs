@@ -200,15 +200,23 @@ export async function runDev(rawArguments) {
 
   try {
     await runCycle({ initial: true, cause: "initial" });
-    const watcher = watch(root, { recursive: true, signal: abort.signal });
-    try {
-      for await (const event of watcher) {
-        if (stopping) break;
-        if (!shouldRebuild(event.filename, config)) continue;
-        queueCycle(event.filename ? String(event.filename) : "change");
+    while (!stopping) {
+      const watcher = watch(root, { recursive: true, signal: abort.signal });
+      try {
+        for await (const event of watcher) {
+          if (stopping) break;
+          if (!shouldRebuild(event.filename, config)) continue;
+          queueCycle(event.filename ? String(event.filename) : "change");
+        }
+        break;
+      } catch (error) {
+        if (stopping || error?.name === "AbortError") break;
+        if (error?.code === "ENOENT") {
+          queueCycle("watch-reset");
+          continue;
+        }
+        throw error;
       }
-    } catch (error) {
-      if (!stopping && error?.name !== "AbortError") throw error;
     }
     await drainPromise;
     if (fatalError) throw fatalError;

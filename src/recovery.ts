@@ -532,19 +532,32 @@ async function openLocalBackupManager(options: BackupManagerOptions, assertCurre
     start(intervalMs) {
       if (closed) throw new Error("Backup manager is closed.");
       const interval = integerRange(intervalMs, "intervalMs", 60_000, Number.MAX_SAFE_INTEGER);
-      if (timer) return () => manager.close();
-      timer = setInterval(() => {
-        if (!creating && !closed) void manager.create({ reason: "scheduled" }).catch(() => undefined);
-      }, interval);
-      timer.unref?.();
-      return () => {
-        if (timer) clearInterval(timer);
+      const stop = () => {
+        if (timer) clearTimeout(timer);
         timer = undefined;
       };
+      if (timer) return stop;
+      const scheduleNext = (remaining: number) => {
+        const step = Math.min(remaining, 2_147_483_647);
+        timer = setTimeout(() => {
+          timer = undefined;
+          if (closed) return;
+          const left = remaining - step;
+          if (left > 0) {
+            scheduleNext(left);
+            return;
+          }
+          if (!creating) void manager.create({ reason: "scheduled" }).catch(() => undefined);
+          if (!closed) scheduleNext(interval);
+        }, step);
+        timer.unref?.();
+      };
+      scheduleNext(interval);
+      return stop;
     },
     close() {
       closed = true;
-      if (timer) clearInterval(timer);
+      if (timer) clearTimeout(timer);
       timer = undefined;
     },
   };
@@ -1223,20 +1236,33 @@ async function openObjectBackupManager(options: BackupManagerOptions, assertCurr
     start(intervalMs) {
       if (closed) throw new Error("Backup manager is closed.");
       const interval = integerRange(intervalMs, "intervalMs", 60_000, Number.MAX_SAFE_INTEGER);
-      if (timer) return () => manager.close();
-      timer = setInterval(() => {
-        if (!creating && !closed) void manager.create({ reason: "scheduled" }).catch(() => undefined);
-      }, interval);
-      timer.unref?.();
-      return () => {
-        if (timer) clearInterval(timer);
+      const stop = () => {
+        if (timer) clearTimeout(timer);
         timer = undefined;
       };
+      if (timer) return stop;
+      const scheduleNext = (remaining: number) => {
+        const step = Math.min(remaining, 2_147_483_647);
+        timer = setTimeout(() => {
+          timer = undefined;
+          if (closed) return;
+          const left = remaining - step;
+          if (left > 0) {
+            scheduleNext(left);
+            return;
+          }
+          if (!creating) void manager.create({ reason: "scheduled" }).catch(() => undefined);
+          if (!closed) scheduleNext(interval);
+        }, step);
+        timer.unref?.();
+      };
+      scheduleNext(interval);
+      return stop;
     },
     close() {
       closed = true;
       local.close();
-      if (timer) clearInterval(timer);
+      if (timer) clearTimeout(timer);
       timer = undefined;
     },
   };
@@ -1609,11 +1635,19 @@ async function decryptFile(
   const handle = await fs.open(source, "r");
   let header: Uint8Array;
   let tag: Uint8Array;
+  const readFully = async (target: Uint8Array, position: number): Promise<void> => {
+    let offset = 0;
+    while (offset < target.byteLength) {
+      const { bytesRead } = await handle.read(target, offset, target.byteLength - offset, position + offset);
+      if (bytesRead <= 0) throw new Error("Encrypted backup envelope is truncated.");
+      offset += bytesRead;
+    }
+  };
   try {
     current?.();header = new Uint8Array(MAGIC.byteLength + 12);
     tag = new Uint8Array(16);
-    await handle.read(header, 0, header.byteLength, 0);current?.();
-    await handle.read(tag, 0, tag.byteLength, stats.size - tag.byteLength);current?.();
+    await readFully(header, 0);current?.();
+    await readFully(tag, stats.size - tag.byteLength);current?.();
   } finally {
     await handle.close();
   }
@@ -1799,7 +1833,7 @@ async function encryptionKey(value: string | Uint8Array): Promise<Uint8Array> {
 
 async function hmac(value: string, key: Uint8Array,current?:()=>void): Promise<string> {
   current?.();
-  const imported = await crypto.subtle.importKey("raw", key, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);current?.();
+  const imported = await crypto.subtle.importKey("raw", key as BufferSource, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);current?.();
   const bytes = new Uint8Array(await crypto.subtle.sign("HMAC", imported, new TextEncoder().encode(value)));current?.();
   return base64Url(bytes);
 }
@@ -1852,7 +1886,7 @@ function randomId(bytes: number): string {
 }
 
 async function sha256Bytes(value: Uint8Array): Promise<string> {
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", value));
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", value as BufferSource));
   return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 

@@ -59,7 +59,12 @@ async function rehearse(options: RehearsalOptions, kind: RehearsalReport["kind"]
     || (check.includes !== undefined && (typeof check.includes !== "string" || check.includes.length > 4096)))) throw new TypeError("Invalid rehearsal checks.");
   if (options.boot && !checks.length) throw new TypeError("An application rehearsal needs at least one HTTP check.");
   const fsName = "node:fs/promises", osName = "node:os", pathName = "node:path", cryptoName = "node:crypto";
-  const [fs, os, path, crypto] = await Promise.all([import(fsName), import(osName), import(pathName), import(cryptoName)]);
+  const [fs, os, path, crypto] = await Promise.all([import(fsName), import(osName), import(pathName), import(cryptoName)]) as [
+    typeof import("node:fs/promises"),
+    typeof import("node:os"),
+    typeof import("node:path"),
+    typeof import("node:crypto"),
+  ];
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "clank-rehearsal-"));
   await fs.chmod(root, 0o700);
   const target = path.join(root, "application.sqlite");
@@ -79,6 +84,8 @@ async function rehearse(options: RehearsalOptions, kind: RehearsalReport["kind"]
   const deadline = new Promise<never>((_, reject) => { timer = setTimeout(() => {
     controller.abort(); reject(new Error("Rehearsal deadline exceeded."));
   }, timeoutMs); });
+  // Prevent an unhandled rejection if the timer fires while an awaited step settles.
+  void deadline.catch(() => undefined);
   const withinDeadline = <Value>(operation: Promise<Value>) => Promise.race([operation, deadline]);
   const databaseTasks = new Set<Promise<unknown>>();
   const databaseWithinDeadline = <Value>(operation: Promise<Value>) => {
@@ -89,17 +96,17 @@ async function rehearse(options: RehearsalOptions, kind: RehearsalReport["kind"]
   try {
     const restoreStarted = performance.now();
     if ("databasePath" in options.source) {
-      const stats = await fs.lstat(options.source.databasePath);
+      const stats = await withinDeadline(fs.lstat(options.source.databasePath));
       if (!stats.isFile() || stats.isSymbolicLink() || stats.size > maximum) throw new Error("Invalid rehearsal source.");
       await databaseWithinDeadline(backupSQLite(options.source.databasePath, target));
     } else {
       const backup = await withinDeadline(options.source.manager.read(options.source.backupId));
       if (backup.bytes.byteLength > maximum) throw new Error("Backup exceeds rehearsal limit.");
       const incoming = path.join(root, "verified-backup.sqlite");
-      await fs.writeFile(incoming, backup.bytes, { flag: "wx", mode: 0o600 });
+      await withinDeadline(fs.writeFile(incoming, backup.bytes, { flag: "wx", mode: 0o600 }));
       await databaseWithinDeadline(backupSQLite(incoming, target));
     }
-    restoredBytes = (await fs.stat(target)).size;
+    restoredBytes = (await withinDeadline(fs.stat(target))).size;
     if (restoredBytes > maximum) throw new Error("Restored database exceeds rehearsal limit.");
     timings.restoreMs = performance.now() - restoreStarted;
     const key = crypto.randomBytes(32);
@@ -107,7 +114,7 @@ async function rehearse(options: RehearsalOptions, kind: RehearsalReport["kind"]
     if (options.migrations) {
       phase = "migrations";
       const started = performance.now();
-      const stats = await fs.lstat(options.migrations.directory);
+      const stats = await withinDeadline(fs.lstat(options.migrations.directory));
       if (!stats.isDirectory() || stats.isSymbolicLink()) throw new Error("Invalid migration directory.");
       const plan = await databaseWithinDeadline(applyMigrations({ path: target, directory: options.migrations.directory, allowUnsafe: options.migrations.allowUnsafe, restrictToDatabase: true }));
       migrations = plan.pending.map(migration => migration.id);
@@ -126,7 +133,9 @@ async function rehearse(options: RehearsalOptions, kind: RehearsalReport["kind"]
       const pending = Promise.resolve().then(() => options.boot!({ databasePath: target, signal: controller.signal }));
       void pending.then(async app => { if (controller.signal.aborted) await app.close(); }).catch(privateError);
       application = await withinDeadline(pending);
-      server = await serve(application, { hostname: "127.0.0.1", port: 0 });
+      const pendingServer = serve(application, { hostname: "127.0.0.1", port: 0 });
+      void pendingServer.then(async bound => { if (controller.signal.aborted) await bound.close(); }).catch(privateError);
+      server = await withinDeadline(pendingServer);
       timings.bootMs = performance.now() - bootStarted;
       phase = "checks";
       const checksStarted = performance.now();
@@ -154,8 +163,8 @@ async function rehearse(options: RehearsalOptions, kind: RehearsalReport["kind"]
   }
   timings.totalMs = performance.now() - started;
   return Object.freeze({ protocol: "clank-rehearsal/1", kind, ok: failure === null, failurePhase: failure,
-    restoredBytes, appliedMigrations: Object.freeze(migrations), changes: Object.freeze(changes.map(Object.freeze)),
-    checks: Object.freeze(results.map(Object.freeze)), timings: Object.freeze(timings) });
+    restoredBytes, appliedMigrations: Object.freeze(migrations), changes: Object.freeze(changes.map(entry => Object.freeze(entry))),
+    checks: Object.freeze(results.map(entry => Object.freeze(entry))), timings: Object.freeze(timings) });
 }
 
 async function inspectDatabase(file: string, key: Uint8Array): Promise<Map<string, { rows: number; schema: string; digest: string }>> {

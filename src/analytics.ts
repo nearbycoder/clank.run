@@ -132,7 +132,7 @@ export function defineAnalytics<
     if (!Array.isArray(funnel.steps) || funnel.steps.length < 2 || funnel.steps.length > MAX_FUNNEL_STEPS) {
       throw new TypeError(`Analytics funnel ${name} must have 2-${MAX_FUNNEL_STEPS} steps.`);
     }
-    const steps = funnel.steps.map((step, index) => {
+    const steps = funnel.steps.map((step: unknown, index: number) => {
       const value = boundedText(step, `${name}.steps[${index}]`, 1, 100);
       if (!Object.hasOwn(events, value)) throw new TypeError(`Analytics funnel ${name} references unknown event ${value}.`);
       return value;
@@ -140,7 +140,7 @@ export function defineAnalytics<
     if (new Set(steps).size !== steps.length) {
       throw new TypeError(`Analytics funnel ${name} steps must use distinct event names.`);
     }
-    const sampleRates = new Set(steps.map((step) => events[step].sampleRate));
+    const sampleRates = new Set(steps.map((step: string) => events[step].sampleRate));
     if (sampleRates.size !== 1) {
       throw new TypeError(`Analytics funnel ${name} events must use the same sampleRate for valid conversion rates.`);
     }
@@ -410,7 +410,7 @@ export async function openAnalytics<Definition extends AnalyticsDefinition<any, 
   };
 
   const manifest = analyticsManifest(definition, minimumCohortSize);
-  return Object.freeze({
+  const runtime: AnalyticsRuntime<Definition> = {
     definition,
     manifest,
     track,
@@ -472,7 +472,8 @@ export async function openAnalytics<Definition extends AnalyticsDefinition<any, 
         newestAt: row.newest_at === null ? null : Number(row.newest_at),
       });
     },
-  }) as AnalyticsRuntime<Definition>;
+  };
+  return Object.freeze(runtime);
 }
 
 export interface AnalyticsClientOptions<Definition extends AnalyticsDefinition<any, any>> {
@@ -561,7 +562,7 @@ export function createAnalyticsClient<Definition extends AnalyticsDefinition<any
         properties: parsed,
         occurredAt: finiteTimestamp(now(), "analytics clock"),
         idempotencyKey: crypto.randomUUID(),
-      }) as ClientEventFor<AnalyticsEventsOf<Definition>>);
+      }) as unknown as ClientEventFor<AnalyticsEventsOf<Definition>>);
       if (queue.length >= MAX_BATCH) void flush().catch(report);
       else schedule();
       return Object.freeze({ queued: true });
@@ -572,7 +573,7 @@ export function createAnalyticsClient<Definition extends AnalyticsDefinition<any
       closed = true;
       if (timer !== undefined) clearTimeout(timer);
       timer = undefined;
-      await flush();
+      while (queue.length > 0) await flush();
     },
     get queued() { return queue.length; },
   };
@@ -607,13 +608,13 @@ function queryAnalytics(
   const measureExpression = measure === undefined ? "NULL" : `AVG(json_extract(properties_json, ${sqlJsonPath(measure)}))`;
   const totalRow = internal.prepare(`SELECT COUNT(*) AS event_count, COUNT(DISTINCT subject_key) AS subjects,
     ${measureExpression} AS average FROM clank_analytics_events
-    WHERE event_name = ? AND occurred_at >= ? AND occurred_at < ?`).get(input.event, range.from, range.to)!;
+    WHERE event_name = ? AND occurred_at >= ? AND occurred_at < ? AND expires_at > ?`).get(input.event, range.from, range.to, now)!;
   const totalSubjects = Number(totalRow.subjects);
   const totalVisible = totalSubjects >= minimumCohortSize;
   const seriesRows = internal.prepare(`SELECT CAST((occurred_at - ?) / ? AS INTEGER) AS bucket,
     COUNT(*) AS event_count, COUNT(DISTINCT subject_key) AS subjects, ${measureExpression} AS average
-    FROM clank_analytics_events WHERE event_name = ? AND occurred_at >= ? AND occurred_at < ?
-    GROUP BY bucket ORDER BY bucket`).all(range.from, intervalMs, input.event, range.from, range.to);
+    FROM clank_analytics_events WHERE event_name = ? AND occurred_at >= ? AND occurred_at < ? AND expires_at > ?
+    GROUP BY bucket ORDER BY bucket`).all(range.from, intervalMs, input.event, range.from, range.to, now);
   const byBucket = new Map(seriesRows.map((row) => [Number(row.bucket), row]));
   const series: AnalyticsSeriesPoint[] = [];
   for (let bucket = 0; bucket < buckets; bucket += 1) {
@@ -631,9 +632,9 @@ function queryAnalytics(
   if (dimension !== undefined) {
     const rows = internal.prepare(`SELECT json_extract(properties_json, ${sqlJsonPath(dimension)}) AS dimension_value,
       COUNT(*) AS event_count, COUNT(DISTINCT subject_key) AS subjects, ${measureExpression} AS average
-      FROM clank_analytics_events WHERE event_name = ? AND occurred_at >= ? AND occurred_at < ?
+      FROM clank_analytics_events WHERE event_name = ? AND occurred_at >= ? AND occurred_at < ? AND expires_at > ?
       GROUP BY dimension_value ORDER BY event_count DESC, CAST(dimension_value AS TEXT) LIMIT ${MAX_DIMENSION_VALUES + 1}`)
-      .all(input.event, range.from, range.to);
+      .all(input.event, range.from, range.to, now);
     if (rows.length > MAX_DIMENSION_VALUES) throw new Error("Analytics dimension exceeded its declared cardinality bound.");
     for (const row of rows) {
       const count = Number(row.event_count);
@@ -676,15 +677,16 @@ function queryFunnel(
   const range = queryRange(input?.from, input?.to, now);
   const placeholders = funnel.steps.map(() => "?").join(", ");
   const rows = internal.prepare(`SELECT subject_key, event_name, occurred_at FROM clank_analytics_events
-    WHERE event_name IN (${placeholders}) AND occurred_at >= ? AND occurred_at < ?
-    ORDER BY subject_key, occurred_at, event_id LIMIT ?`).all(...funnel.steps, range.from, range.to, maxScanEvents + 1);
+    WHERE event_name IN (${placeholders}) AND occurred_at >= ? AND occurred_at < ? AND expires_at > ?
+    ORDER BY subject_key, occurred_at, event_id LIMIT ?`).all(...funnel.steps, range.from, range.to, now, maxScanEvents + 1);
   if (rows.length > maxScanEvents) throw new Error(`Analytics funnel exceeds the ${maxScanEvents}-event scan bound.`);
   const reached = new Array<number>(funnel.steps.length).fill(0);
   let currentSubject = "";
   let nextStep = 0;
+  let maxStep = 0;
   let startedAt = 0;
   const finish = () => {
-    for (let index = 0; index < nextStep; index += 1) reached[index] += 1;
+    for (let index = 0; index < maxStep; index += 1) reached[index] += 1;
   };
   for (const row of rows) {
     const subject = String(row.subject_key);
@@ -692,24 +694,25 @@ function queryFunnel(
       if (currentSubject) finish();
       currentSubject = subject;
       nextStep = 0;
+      maxStep = 0;
       startedAt = 0;
     }
     const event = String(row.event_name);
     const occurredAt = Number(row.occurred_at);
-    if (nextStep < funnel.steps.length && event === funnel.steps[0]) {
+    if (maxStep >= funnel.steps.length) continue;
+    if (nextStep > 0 && event === funnel.steps[nextStep]) {
+      if (occurredAt - startedAt <= funnel.withinMs) {
+        nextStep += 1;
+        if (nextStep > maxStep) maxStep = nextStep;
+        continue;
+      }
+      nextStep = 0;
+      startedAt = 0;
+    }
+    if (event === funnel.steps[0]) {
       nextStep = 1;
       startedAt = occurredAt;
-      continue;
-    }
-    if (nextStep > 0 && nextStep < funnel.steps.length && event === funnel.steps[nextStep]) {
-      if (occurredAt - startedAt <= funnel.withinMs) nextStep += 1;
-      else if (event === funnel.steps[0]) {
-        nextStep = 1;
-        startedAt = occurredAt;
-      } else {
-        nextStep = 0;
-        startedAt = 0;
-      }
+      if (maxStep < 1) maxStep = 1;
     }
   }
   if (currentSubject) finish();

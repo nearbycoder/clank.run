@@ -109,12 +109,20 @@ if (arguments_[0] === "fleet") {
   if (typeof values.get("--config") !== "string" || (action === "certification" && values.size !== 1)
     || (action === "certify" && (values.get("--disposable") !== true || !/^[1-9]\d{0,9}$/.test(values.get("--quota-id") ?? "")))) throw new Error("Certification requires the documented explicit arguments.");
   const { open } = await import("node:fs/promises"), { constants } = await import("node:fs");
-  const handle = await open(values.get("--config"), constants.O_RDONLY | constants.O_NOFOLLOW);
+  const handle = await open(values.get("--config"), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   let config;
   try {
     const stat = await handle.stat();
     if (!stat.isFile() || stat.size > 16384) throw new Error("Certification configuration must be a bounded regular JSON file.");
-    config = JSON.parse(await handle.readFile("utf8"));
+    const bytes = Buffer.alloc(16385);
+    let length = 0;
+    while (length < bytes.length) {
+      const part = await handle.read(bytes, length, bytes.length - length, null);
+      if (part.bytesRead <= 0) break;
+      length += part.bytesRead;
+    }
+    if (length > 16384) throw new Error("Certification configuration must be a bounded regular JSON file.");
+    config = JSON.parse(bytes.subarray(0, length).toString("utf8"));
   } finally { await handle.close(); }
   if (!config || typeof config !== "object" || Array.isArray(config) || Object.keys(config).some((key) => !["directory", "profile"].includes(key))) throw new Error("Invalid certification configuration.");
   const { certifyLinuxHost, inspectLinuxHostCertification } = await import("../dist/host-certification.js");
@@ -123,7 +131,7 @@ if (arguments_[0] === "fleet") {
   process.exitCode = (action === "certify" ? result.status === "passed" : result.current) ? 0 : 1;
 } else {
 if (arguments_.length > 0) {
-  throw new Error("clank-provider accepts only --help.");
+  throw new Error("clank-provider accepts only --help, certify, certification, or fleet.");
 }
 
 const port = number(process.env.PORT, 4600, 1, 65_535);

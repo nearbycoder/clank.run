@@ -43,8 +43,8 @@ async function fixture(t){
   const artifact=async()=>{
     const source=join(root,'release');await mkdir(join(source,'dist'),{recursive:true});await mkdir(join(source,'migrations'));
     await writeFile(join(source,'migrations/0001_ledger.sql'),"CREATE TABLE writer_events(id INTEGER PRIMARY KEY,pid INTEGER,at INTEGER);CREATE TABLE tenant_data(value TEXT NOT NULL);INSERT INTO tenant_data VALUES('retained tenant data');");
-    await writeFile(join(source,'dist/server.mjs'),`import{createServer}from'node:http';import{DatabaseSync}from'node:sqlite';import{existsSync,writeFileSync}from'node:fs';const db=new DatabaseSync(process.env.CLANK_DATABASE_PATH);db.exec('PRAGMA busy_timeout=5000');createServer(async(q,s)=>{if(q.url==='/healthz'&&existsSync(${JSON.stringify(join(root,'health-hold'))})){writeFileSync(${JSON.stringify(join(root,'health-entered'))},String(process.pid));while(existsSync(${JSON.stringify(join(root,'health-hold'))}))await new Promise(resolve=>setTimeout(resolve,10));}s.end(q.url==='/healthz'?'ok':JSON.stringify({pid:process.pid,value:db.prepare('SELECT value FROM tenant_data').get().value}));}).listen(Number(process.env.PORT),process.env.HOST);`);
-    await writeFile(join(source,'dist/worker.mjs'),"import{DatabaseSync}from'node:sqlite';const db=new DatabaseSync(process.env.CLANK_DATABASE_PATH);db.exec('PRAGMA busy_timeout=5000');const add=db.prepare('INSERT INTO writer_events(pid,at)VALUES(?,?)'),write=()=>add.run(process.pid,Date.now());write();setInterval(write,20);");
+    await writeFile(join(source,'dist/server.mjs'),`import{createServer}from'node:http';import{DatabaseSync}from'node:sqlite';import{existsSync,writeFileSync}from'node:fs';const db=new DatabaseSync(process.env.CLANK_DATABASE_PATH);db.exec('PRAGMA busy_timeout=15000');createServer(async(q,s)=>{if(q.url==='/healthz'&&existsSync(${JSON.stringify(join(root,'health-hold'))})){writeFileSync(${JSON.stringify(join(root,'health-entered'))},String(process.pid));while(existsSync(${JSON.stringify(join(root,'health-hold'))}))await new Promise(resolve=>setTimeout(resolve,10));}s.end(q.url==='/healthz'?'ok':JSON.stringify({pid:process.pid,value:db.prepare('SELECT value FROM tenant_data').get().value}));}).listen(Number(process.env.PORT),process.env.HOST);`);
+    await writeFile(join(source,'dist/worker.mjs'),"import{DatabaseSync}from'node:sqlite';const db=new DatabaseSync(process.env.CLANK_DATABASE_PATH);db.exec('PRAGMA busy_timeout=15000;PRAGMA journal_mode=WAL');const add=db.prepare('INSERT INTO writer_events(pid,at)VALUES(?,?)'),write=()=>add.run(process.pid,Date.now());write();setInterval(write,20);");
     return createDeploymentBundle(source,parseDeploymentConfig({version:1,entry:'dist/server.mjs',include:['dist','migrations'],
       database:{path:'app.sqlite',migrations:'migrations'},health:{path:'/healthz',timeoutMs:10000},env:{},
       jobs:{entry:'dist/worker.mjs',workers:1,scheduler:false,concurrency:1,queues:[]}}));
@@ -87,8 +87,8 @@ for(const interruption of ['SIGKILL','SIGSTOP'])test(`existing standby restores 
   const uploaded=await first.handle(new Request(origin+`/api/projects/${project.id}/releases`,{method:'POST',headers:{origin,cookie:session.cookie,'x-clank-csrf':session.csrf,
     'content-type':'application/vnd.clank.deploy+gzip','x-clank-content-sha256':await deploymentDigest(bytes),'x-clank-idempotency-key':'supervisor-actual-release-0001'},body:bytes}));
   const deployment=await uploaded.json();assert.equal(uploaded.status,201,JSON.stringify(deployment));
-  const observer=new DatabaseSync(join(f.dataDirectory,'projects',project.id,'data/app.sqlite'));observer.exec('PRAGMA busy_timeout=5000');t.after(()=>observer.close());
-  const control=new DatabaseSync(join(f.dataDirectory,'control.sqlite'));control.exec('PRAGMA busy_timeout=5000');t.after(()=>control.close());
+  const observer=new DatabaseSync(join(f.dataDirectory,'projects',project.id,'data/app.sqlite'));observer.exec('PRAGMA busy_timeout=15000');t.after(()=>observer.close());
+  const control=new DatabaseSync(join(f.dataDirectory,'control.sqlite'));control.exec('PRAGMA busy_timeout=15000');t.after(()=>control.close());
   const writers=observer.prepare('SELECT DISTINCT pid FROM writer_events'),count=observer.prepare('SELECT count(*) AS count FROM writer_events WHERE pid=?');
   let until=Date.now()+10000;while(!writers.all().length){assert.ok(Date.now()<until);await sleep(25);}const old=writers.all().map(row=>row.pid);assert.equal(old.length,1);
   const probe=controller=>controller.handle(new Request('https://supervisor-fixture.apps.example.test/'));
@@ -152,7 +152,7 @@ test('actual leader death during application health recovery cannot publish or l
   const response=await seed.handle(new Request(origin+`/api/projects/${project.id}/releases`,{method:'POST',headers:{origin,cookie:session.cookie,'x-clank-csrf':session.csrf,
     'content-type':'application/vnd.clank.deploy+gzip','x-clank-content-sha256':await deploymentDigest(bytes),'x-clank-idempotency-key':'supervisor-starting-release-0001'},body:bytes}));assert.equal(response.status,201,await response.text());
   await seed.stop();
-  const observer=new DatabaseSync(join(f.dataDirectory,'projects',project.id,'data/app.sqlite'));observer.exec('PRAGMA busy_timeout=5000');t.after(()=>observer.close());
+  const observer=new DatabaseSync(join(f.dataDirectory,'projects',project.id,'data/app.sqlite'));observer.exec('PRAGMA busy_timeout=15000');t.after(()=>observer.close());
   const writers=observer.prepare('SELECT DISTINCT pid FROM writer_events');assert.equal(writers.all().length,1);
   const hold=join(f.root,'health-hold'),entered=join(f.root,'health-entered');await writeFile(hold,'hold');let interrupted;
   const starting=f.start({},child=>{interrupted=child;});const rejected=assert.rejects(starting,/exited before ready/);let until=Date.now()+10000;

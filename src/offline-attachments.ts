@@ -124,7 +124,7 @@ export async function openOfflineAttachmentQueue(options: OfflineAttachmentQueue
   const update = (id: string, work: (item: StoredAttachment) => StoredAttachment) => change(rows => rows.map(row => row.id === id ? work(row) : row));
   const checked = (object: BucketObject, row: StoredAttachment): BucketAttachmentReference => {
     if (!object) throw Object.assign(new Error("Upload acknowledgment is unknown."),{status:502,code:"ATTACHMENT_ACK_UNKNOWN"});
-    if (!object || object.ownerId !== userId || object.bucket !== bucketName || object.key !== row.key || object.size !== row.size || object.sha256 !== row.sha256
+    if (object.ownerId !== userId || object.bucket !== bucketName || object.key !== row.key || object.size !== row.size || object.sha256 !== row.sha256
       || object.contentType !== row.blob.type || object.visibility !== "private" || typeof object.generation !== "string" || !/^[A-Za-z0-9_-]{1,256}$/u.test(object.generation)
       || !/^[A-Za-z0-9_-]{1,256}$/u.test(object.id)) throw Object.assign(new Error("Uploaded attachment does not match the queued object."),{status:409,code:"ATTACHMENT_CHANGED"});
     return Object.freeze({bucket:bucketName,key:row.key,objectId:object.id,sha256:row.sha256,generation:object.generation});
@@ -141,7 +141,11 @@ export async function openOfflineAttachmentQueue(options: OfflineAttachmentQueue
       const blob = new Blob([value],{type:contentType}), bytes = await blob.arrayBuffer(); current();
       const sha256 = [...new Uint8Array(await crypto.subtle.digest("SHA-256",bytes))].map(byte => byte.toString(16).padStart(2,"0")).join(""); current();
       const id = `${Date.now()}.${crypto.randomUUID()}`;
-      await change(rows => [...rows,{id,path,bucket:bucketName,key:"offline-"+id.split(".")[1],owner:userId,input:captured,blob,size:blob.size,sha256,object:null,status:"pending",attempts:0,nextAttemptAt:0}]); return id;
+      await locks.request(name,{signal:lifecycle.signal},async () => {
+        current();
+        await change(rows => [...rows,{id,path,bucket:bucketName,key:"offline-"+id.split(".")[1],owner:userId,input:captured,blob,size:blob.size,sha256,object:null,status:"pending",attempts:0,nextAttemptAt:0}]);
+      });
+      return id;
     },
     async flush() {
       current(); await locks.request(name,{signal:lifecycle.signal},async () => {

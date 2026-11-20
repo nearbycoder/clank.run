@@ -145,7 +145,7 @@ export function createLocalSearchIndex(options: LocalSearchOptions = {}): LocalS
       }
       const titles = sort === "title" ? new Map([...(candidates ?? [])].map(([id]) => [id, normalize(documents.get(id)!.document.title)])) : undefined;
       const ranked = [...(candidates ?? [])].sort((a, b) => {
-        if (sort === "relevance") return b[1] - a[1] || a[0].localeCompare(b[0]);
+        if (sort === "relevance") return b[1] - a[1] || compare(a[0], b[0]);
         const titleOrder = titles ? compare(titles.get(a[0])!, titles.get(b[0])!) : 0;
         return titleOrder || compare(a[0], b[0]);
       });

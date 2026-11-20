@@ -96,7 +96,7 @@ export interface McpServer<Context = unknown> {
     readonly apps: ReadonlyMap<string, McpAppDefinition>;
     readonly revision: string;
     readonly supportsToolListChanged: boolean;
-    manifest(scopes?: ReadonlySet<string>): {
+    manifest(scopes?: ReadonlySet<string>, allowedActions?: ReadonlySet<string>): {
         protocol: "mcp";
         protocolVersion: typeof MCP_PROTOCOL_VERSION;
         revision: string;

@@ -12,7 +12,7 @@ async function fixture(t){
  for(const name of ['listener','disposal','mount']){const path=join(root,name);fs.mkdirSync(path,{mode:0o700});dirs.push(await pinSQLiteDirectory(path));}
  let broker;const sockets=[];
  t.after(async()=>{for(const socket of sockets)socket.destroy();try{await broker?.close();}finally{await Promise.allSettled(dirs.map(p=>p.close()));fs.rmSync(root,{recursive:true,force:true});}});
- return {root,dirs,async open(){broker=await openSourceWorkerSocketBroker(...dirs);return broker;},connect(){const socket=net.createConnection(join(root,'mount','sqlite.sock'));socket.on('error',()=>{});sockets.push(socket);return socket;}};
+ return {root,dirs,async open(){broker=await openSourceWorkerSocketBroker(...dirs);return broker;},connect(){const socket=net.createConnection(join(dirs[2].anchor,'sqlite.sock'));socket.on('error',()=>{});sockets.push(socket);return socket;}};
 }
 function line(socket){return new Promise((resolve,reject)=>{let text='';socket.setEncoding('utf8');const data=value=>{text+=value;const end=text.indexOf('\n');if(end>=0){socket.off('data',data);resolve(text.slice(0,end));}};socket.on('data',data);socket.once('error',reject);socket.once('close',()=>reject(Error('peer closed before response')));});}
 function connected(socket){return new Promise((resolve,reject)=>{socket.once('connect',resolve);socket.once('error',reject);});}

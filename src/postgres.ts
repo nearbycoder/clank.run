@@ -128,7 +128,7 @@ async function connect(options: Required<Pick<PostgresOptions,"host"|"port"|"dat
   try { exchange({ kind:"connect", options }); } catch(error) { void worker.terminate(); throw error; }
   worker.unref();
   return {
-    get poisoned() { return poisoned; },
+    get poisoned() { return poisoned || closed; },
     query(sql, values = [], commit = false) { return exchange({ kind:"query", sql, parameters:values },commit); },
     close() { if (closed) return; closed = true; void worker.terminate(); },
   };

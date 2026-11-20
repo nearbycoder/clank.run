@@ -193,3 +193,32 @@ test("resources ignore stale async results", async () => {
   assert.equal(result.data.value, "new");
   assert.equal(result.status.value, "ready");
 });
+
+test("effects isolate cleanup observer/writes and flush initial self-writes", () => {
+  const trigger = signal(0);
+  const side = signal(0);
+  const cleanupRead = signal(0);
+  let runs = 0;
+  const stop = effect(() => {
+    runs++;
+    trigger.value;
+    return () => {
+      cleanupRead.value;
+      trigger.value = 99;
+    };
+  });
+  trigger.value = 1;
+  assert.equal(runs, 2, "cleanup write to trigger must not re-queue the effect");
+  cleanupRead.value = 1;
+  assert.equal(runs, 2, "signals read during cleanup must not subscribe the effect");
+  stop();
+
+  const observed = [];
+  const stopObserved = effect(() => { observed.push(side.value); });
+  const stopWriter = effect(() => {
+    if (side.value === 0) side.value = 1;
+  });
+  assert.deepEqual(observed, [0, 1], "initial effect writes flush dependent effects immediately");
+  stopWriter();
+  stopObserved();
+});

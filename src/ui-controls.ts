@@ -1378,8 +1378,8 @@ export function createToggleGroup<Value extends string>(
   const disabled = booleanState(options.disabled, `${id}.disabled`);
   const readOnly = booleanState(options.readOnly, `${id}.readOnly`);
   const definition = (value: Value) => requireItem(items, value, "Toggle group");
-  const itemDisabled = (item: ChoiceItemDefinition<Value>) => disabled.peek() || readBoolean(item.disabled);
-  const itemReadOnly = (item: ChoiceItemDefinition<Value>) => readOnly.peek() || readBoolean(item.readOnly);
+  const itemDisabled = (item: ChoiceItemDefinition<Value>) => disabled.value || readBoolean(item.disabled);
+  const itemReadOnly = (item: ChoiceItemDefinition<Value>) => readOnly.value || readBoolean(item.readOnly);
   const setValue = (next: Value | null | readonly Value[], reason: ToggleGroupChangeReason = "programmatic", event?: Event) => {
     if (disabled.peek() || readOnly.peek()) return false;
     return state.set(normalize(next, "Toggle group value"), reason, event);
@@ -1557,7 +1557,7 @@ export function createMeter(options: MeterOptions): MeterController {
   });
   const percentage = computed(() => (state.value.value - range.min) / (range.max - range.min) * 100, { name: `${id}.percentage` });
   const formatter = new Intl.NumberFormat(options.locale, options.format ?? { style: "percent" });
-  const formattedValue = () => formatter.format((options.format?.style ?? "percent") === "percent"
+  const formattedValue = () => formatter.format((options.format ? options.format.style === "percent" : true)
     ? percentage.value / 100
     : state.value.value);
   const valueText = () => options.ariaValueText
@@ -1670,7 +1670,7 @@ export function createProgress(options: ProgressOptions): ProgressController {
     const current = state.value.value;
     const percent = percentage.value;
     if (current === null || percent === null) return null;
-    return formatter.format((options.format?.style ?? "percent") === "percent" ? percent / 100 : current);
+    return formatter.format((options.format ? options.format.style === "percent" : true) ? percent / 100 : current);
   };
   const valueText = () => {
     const current = state.value.value;

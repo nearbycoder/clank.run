@@ -25,13 +25,13 @@ export async function openLabels(options: LabelOptions): Promise<{ handle(reques
       if (!name || !/^#[a-f0-9]{6}$/iu.test(input.color)) throw new Error("Choose a name and six-digit color.");
       if (rows.some(row => row._id !== input.id && row.name.toLocaleLowerCase("en-US") === name.toLocaleLowerCase("en-US"))) throw new Error("That label name already exists.");
       let row;
-      if (input.id) { const current = table.get(input.id); if (!current || input.expectedVersion !== current._version) throw new Error("Label changed or is unavailable."); row = table.patch(input.id, { name, color: input.color.toLowerCase() }, { ifVersion: input.expectedVersion }); }
+      if (input.id) { const current = table.get(input.id as any); if (!current || input.expectedVersion !== current._version) throw new Error("Label changed or is unavailable."); row = table.patch(input.id as any, { name, color: input.color.toLowerCase() }, { ifVersion: input.expectedVersion }); }
       else { if (input.expectedVersion !== undefined || rows.length >= 100) throw new Error("Label limit reached or invalid revision."); row = table.get(table.insert({ name, color: input.color.toLowerCase() })); }
       return view(row, db.table("personalLabelLinks").collect());
     } }),
-    remove: mutation({ args: { id: s.string(), expectedVersion: s.number({ integer: true, min: 1 }) }, handler: ({ db }, { id, expectedVersion }) => { const table = db.table("personalLabels"), row = table.get(id); if (!row || row._version !== expectedVersion) throw new Error("Label changed or is unavailable."); for (const link of db.table("personalLabelLinks").query().where("label", id).collect()) db.table("personalLabelLinks").delete(link._id); table.delete(id, { ifVersion: expectedVersion }); } }),
+    remove: mutation({ args: { id: s.string(), expectedVersion: s.number({ integer: true, min: 1 }) }, handler: ({ db }, { id, expectedVersion }) => { const table = db.table("personalLabels"), row = table.get(id as any); if (!row || row._version !== expectedVersion) throw new Error("Label changed or is unavailable."); for (const link of db.table("personalLabelLinks").query().where("label", id).collect()) db.table("personalLabelLinks").delete(link._id); table.delete(id as any, { ifVersion: expectedVersion }); } }),
     assign: mutation({ args: { resource: s.string({ min: 1, max: 200 }), id: s.string(), selected: s.boolean() }, handler: ({ db }, { resource, id, selected }) => {
-      if (!db.table("personalLabels").get(id)) throw new Error("Label is unavailable."); const table = db.table("personalLabelLinks"), links = table.query().where("resource", resource).collect(), existing = links.find(link => link.label === id);
+      if (!db.table("personalLabels").get(id as any)) throw new Error("Label is unavailable."); const table = db.table("personalLabelLinks"), links = table.query().where("resource", resource).collect(), existing = links.find(link => link.label === id);
       if (!selected) { if (existing) table.delete(existing._id); return; }
       if (existing) return; if (links.length >= 20 || table.collect().length >= 5000) throw new Error("Label assignment limit reached."); table.insert({ resource, label: id });
     } }),

@@ -392,16 +392,10 @@ function hydrateComponent(parent: Node, vnode: VNode, cursor: HydrationCursor, p
     disposeScope();
     throw error;
   }
-  let active = true;
-  return {
-    get nodes() { return mounted.nodes; },
-    dispose(remove = true) {
-      if (!active) return;
-      active = false;
-      removeOnDispose = remove;
-      disposeScope();
-    },
-  };
+  return new ComponentMount(mounted, (remove) => {
+    removeOnDispose = remove;
+    disposeScope();
+  });
 }
 
 function hydrateElement(parent: Node, vnode: VNode, cursor: HydrationCursor, context: MountContext): Mounted {
@@ -567,15 +561,14 @@ class ElementMount implements Mounted {
 
 class ComponentMount implements Mounted {
   mounted: Mounted;
-  disposeScope: Cleanup;
+  disposeScope: (remove: boolean) => void;
   active = true;
-  constructor(mounted: Mounted, disposeScope: Cleanup) { this.mounted = mounted; this.disposeScope = disposeScope; }
+  constructor(mounted: Mounted, disposeScope: (remove: boolean) => void) { this.mounted = mounted; this.disposeScope = disposeScope; }
   get nodes(): Node[] { return this.mounted.nodes; }
   dispose(remove = true): void {
     if (!this.active) return;
     this.active = false;
-    if (!remove) this.mounted.dispose(false);
-    this.disposeScope();
+    this.disposeScope(remove);
   }
 }
 
@@ -736,9 +729,12 @@ function mountPortal(
     marker.parentNode?.removeChild(marker);
     throw error;
   }
+  let active = true;
   return {
     get nodes() { return portal.disabled ? [...children.nodes, marker] : [marker]; },
     dispose(remove = true) {
+      if (!active) return;
+      active = false;
       try { children.dispose(portal.disabled ? remove : true); }
       finally { if (remove) marker.parentNode?.removeChild(marker); }
     },
@@ -868,25 +864,34 @@ function mountKeyed<T>(parent: Node, block: KeyedBlock<T>, before: Node | null, 
     const nextOrdered: KeyedEntry<T>[] = [];
     const previous: number[] = [];
 
-    keyedValues.forEach(({ item, index, key }) => {
-      let entry = entries.get(key);
-      previous.push(entry ? entry.index.peek() : -1);
-      if (entry) {
-        entry.updateItem(item);
-        entry.index.value = index;
-      } else {
-        const indexState = signal(index);
-        const reactiveItem = createReactiveItem(item);
-        entry = {
-          key,
-          updateItem: reactiveItem.update,
-          index: indexState,
-          mounted: mountValue(parent, block.renderItem(reactiveItem.value, () => indexState.value), end, context),
-        };
-      }
-      next.set(key, entry);
-      nextOrdered.push(entry);
-    });
+    const created: Mounted[] = [];
+    try {
+      batch(() => {
+        keyedValues.forEach(({ item, index, key }) => {
+          let entry = entries.get(key);
+          previous.push(entry ? entry.index.peek() : -1);
+          if (entry) {
+            entry.updateItem(item);
+            entry.index.value = index;
+          } else {
+            const indexState = signal(index);
+            const reactiveItem = createReactiveItem(item);
+            const mounted = mountValue(parent, block.renderItem(reactiveItem.value, () => indexState.value), end, context);
+            created.push(mounted);
+            entry = {
+              key,
+              updateItem: reactiveItem.update,
+              index: indexState,
+              mounted,
+            };
+          }
+          next.set(key, entry);
+          nextOrdered.push(entry);
+        });
+      });
+    } catch (error) {
+      cleanupAfterError(error, created.reverse().map((mounted) => () => mounted.dispose()));
+    }
 
     const removed = [...entries].filter(([key]) => !next.has(key)).map(([, entry]) => entry);
     entries = next;
@@ -995,25 +1000,34 @@ function hydrateKeyed<T>(parent: Node, block: KeyedBlock<T>, cursor: HydrationCu
       const next = new Map<unknown, KeyedEntry<T>>();
       const nextOrdered: KeyedEntry<T>[] = [];
       const previous: number[] = [];
-      keyedValues.forEach(({ item, index, key }) => {
-        let entry = entries.get(key);
-        previous.push(entry ? entry.index.peek() : -1);
-        if (entry) {
-          entry.updateItem(item);
-          entry.index.value = index;
-        } else {
-          const indexState = signal(index);
-          const reactiveItem = createReactiveItem(item);
-          entry = {
-            key,
-            updateItem: reactiveItem.update,
-            index: indexState,
-            mounted: mountValue(parent, block.renderItem(reactiveItem.value, () => indexState.value), end, context),
-          };
-        }
-        next.set(key, entry);
-        nextOrdered.push(entry);
-      });
+      const created: Mounted[] = [];
+      try {
+        batch(() => {
+          keyedValues.forEach(({ item, index, key }) => {
+            let entry = entries.get(key);
+            previous.push(entry ? entry.index.peek() : -1);
+            if (entry) {
+              entry.updateItem(item);
+              entry.index.value = index;
+            } else {
+              const indexState = signal(index);
+              const reactiveItem = createReactiveItem(item);
+              const mounted = mountValue(parent, block.renderItem(reactiveItem.value, () => indexState.value), end, context);
+              created.push(mounted);
+              entry = {
+                key,
+                updateItem: reactiveItem.update,
+                index: indexState,
+                mounted,
+              };
+            }
+            next.set(key, entry);
+            nextOrdered.push(entry);
+          });
+        });
+      } catch (error) {
+        cleanupAfterError(error, created.reverse().map((mounted) => () => mounted.dispose()));
+      }
 
       const removed = [...entries].filter(([key]) => !next.has(key)).map(([, entry]) => entry);
       entries = next;
@@ -1155,12 +1169,13 @@ function mountVNode(parent: Node, vnode: VNode, before: Node | null, context: Mo
 function mountComponent(parent: Node, vnode: VNode, before: Node | null, parentContext: MountContext): Mounted {
   let mounted!: Mounted;
   let disposeScope: Cleanup = () => {};
+  let removeOnDispose = true;
   try {
     createRoot((dispose) => {
       disposeScope = dispose;
       const evaluation = evaluateComponent(vnode, parentContext.contexts);
       mounted = mountValue(parent, evaluation.output, before, evaluation.contexts === parentContext.contexts ? parentContext : { ...parentContext, contexts: evaluation.contexts });
-      onCleanup(() => mounted.dispose());
+      onCleanup(() => mounted.dispose(removeOnDispose));
       for (const callback of evaluation.mounts) {
         const cleanup = callback();
         if (typeof cleanup === "function") onCleanup(cleanup);
@@ -1170,7 +1185,10 @@ function mountComponent(parent: Node, vnode: VNode, before: Node | null, parentC
     disposeScope();
     throw error;
   }
-  return new ComponentMount(mounted, disposeScope);
+  return new ComponentMount(mounted, (remove) => {
+    removeOnDispose = remove;
+    disposeScope();
+  });
 }
 
 /** @internal Evaluates one component with context/lifecycle ownership for DOM and SSR renderers. */
@@ -1298,8 +1316,8 @@ function bindClassProperties(element: Element, props: Record<string, unknown>): 
   if (!hasList && (typeof baseInput === "string" || baseInput === null || baseInput === undefined || baseInput === false)) {
     // A literal class never changes: no effect needed.
     const value = typeof baseInput === "string" ? classTokens(baseInput) : "";
-    if (value) element.setAttribute("class", value);
-    else element.removeAttribute("class");
+    if (value) { if (element.getAttribute("class") !== value) element.setAttribute("class", value); }
+    else if (element.hasAttribute("class")) element.removeAttribute("class");
     return undefined;
   }
   return effect(() => {
@@ -1317,8 +1335,8 @@ function bindClassProperties(element: Element, props: Record<string, unknown>): 
       }
     }
     const value = [...tokens].join(" ");
-    if (value) element.setAttribute("class", value);
-    else element.removeAttribute("class");
+    if (value) { if (element.getAttribute("class") !== value) element.setAttribute("class", value); }
+    else if (element.hasAttribute("class")) element.removeAttribute("class");
   });
 }
 
@@ -1428,13 +1446,14 @@ const eventBindings = new Map<string, EventBinding>();
 function eventBinding(property: string): EventBinding {
   let binding = eventBindings.get(property);
   if (!binding) {
-    let name = property.startsWith("on:") ? property.slice(3) : property.slice(2);
-    let capture = false;
-    let once = false;
-    let passive = false;
-    if (name.endsWith("Capture")) { name = name.slice(0, -7); capture = true; }
-    if (name.endsWith("Once")) { name = name.slice(0, -4); once = true; }
-    if (name.endsWith("Passive")) { name = name.slice(0, -7); passive = true; }
+    let name = property.charCodeAt(2) === 58 ? property.slice(3) : property.slice(2);
+    let capture = false, once = false, passive = false;
+    for (;;) {
+      if (!capture && name.endsWith("Capture")) { name = name.slice(0, -7); capture = true; }
+      else if (!once && name.endsWith("Once")) { name = name.slice(0, -4); once = true; }
+      else if (!passive && name.endsWith("Passive")) { name = name.slice(0, -7); passive = true; }
+      else break;
+    }
     binding = { name: name.toLowerCase(), options: Object.freeze({ capture, once, passive }) };
     if (eventBindings.size < 1024) eventBindings.set(property, binding);
   }
@@ -1541,7 +1560,7 @@ function setStyleValue(element: HTMLElement, name: string, value: unknown): void
   }
 }
 
-const attributeAliases: Record<string, string> = {
+const attributeAliases: Record<string, string> = Object.assign(Object.create(null), {
   className: "class",
   htmlFor: "for",
   agentId: "data-clank-id",
@@ -1550,7 +1569,7 @@ const attributeAliases: Record<string, string> = {
   agentDescription: "data-clank-description",
   agentHidden: "data-clank-hidden",
   intent: "data-clank-intent",
-};
+});
 
 function setProperty(element: Element, property: string, value: unknown): void {
   if (setMultipleSelectValue(element, property, value)) return;
@@ -1582,7 +1601,7 @@ function setProperty(element: Element, property: string, value: unknown): void {
     return;
   }
   if (value === false || value === null || value === undefined) {
-    if (property in element && !name.startsWith("data-") && !name.startsWith("aria-")) {
+    if (property in element && !(property in Object.prototype) && !name.startsWith("data-") && !name.startsWith("aria-")) {
       try {
         const target = element as Element & Record<string, unknown>;
         const next = property === "value" ? "" : false;
@@ -1600,7 +1619,7 @@ function setProperty(element: Element, property: string, value: unknown): void {
     if (!element.hasAttribute(name)) element.setAttribute(name, "");
     return;
   }
-  if (property in element && !name.startsWith("data-") && !name.startsWith("aria-") && property !== "className" && property !== "htmlFor") {
+  if (property in element && !(property in Object.prototype) && !name.startsWith("data-") && !name.startsWith("aria-") && property !== "className" && property !== "htmlFor") {
     try {
       const target = element as Element & Record<string, unknown>;
       if (!Object.is(target[property], value)) target[property] = value;

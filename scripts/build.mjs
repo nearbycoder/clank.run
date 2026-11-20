@@ -290,6 +290,6 @@ export async function build({ quiet = false } = {}) {
   if (!quiet) console.log(`Built Clank in ${(performance.now() - started).toFixed(1)}ms (zero dependencies).`);
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await build();
 }

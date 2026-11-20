@@ -708,70 +708,75 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
   await preparePrivateDirectory(fs, path, path.dirname(catalogPath));
   await assertSafeCatalogFile(fs, catalogPath, true);
   const native = new sqlite.DatabaseSync(catalogPath);
-  await assertSafeCatalogFile(fs, catalogPath, false);
-  await fs.chmod(catalogPath, 0o600);
-  native.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA busy_timeout = 5000;");
-  native.exec(`CREATE TABLE IF NOT EXISTS clank_bucket_objects (
-    bucket TEXT NOT NULL,
-    object_id TEXT NOT NULL,
-    owner_id TEXT NOT NULL,
-    object_key TEXT NOT NULL,
-    storage_key TEXT NOT NULL,
-    size INTEGER NOT NULL,
-    sha256 TEXT NOT NULL,
-    content_type TEXT NOT NULL,
-    visibility TEXT NOT NULL,
-    cache_control TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL,
-    image_json TEXT,
-    variant_of TEXT,
-    variant_name TEXT,
-    PRIMARY KEY (bucket, owner_id, object_key),
-    UNIQUE (bucket, object_id)
-  ) STRICT;
-  CREATE INDEX IF NOT EXISTS clank_bucket_objects_list
-    ON clank_bucket_objects (bucket, owner_id, updated_at DESC, object_id DESC);
-  CREATE TABLE IF NOT EXISTS clank_bucket_reservations (
-    reservation_id TEXT PRIMARY KEY,
-    bucket TEXT NOT NULL,
-    object_id TEXT NOT NULL,
-    owner_id TEXT NOT NULL,
-    object_key TEXT NOT NULL,
-    storage_key TEXT NOT NULL,
-    size INTEGER NOT NULL,
-    content_type TEXT NOT NULL,
-    expected_sha256 TEXT,
-    expires_at INTEGER NOT NULL,
-    resumable INTEGER NOT NULL,
-    received INTEGER NOT NULL DEFAULT 0,
-    lock_token TEXT,
-    lock_expires_at INTEGER,
-    replaces_size INTEGER,
-    replaces_storage_key TEXT,
-    variant_of TEXT,
-    variant_name TEXT,
-    UNIQUE (bucket, owner_id, object_key)
-  ) STRICT;
-  CREATE INDEX IF NOT EXISTS clank_bucket_reservations_expiry
-    ON clank_bucket_reservations (expires_at);
-  CREATE TABLE IF NOT EXISTS clank_bucket_garbage (
-    storage_key TEXT PRIMARY KEY,
-    created_at INTEGER NOT NULL
-  ) STRICT;
-  CREATE TABLE IF NOT EXISTS clank_bucket_versions (
-    version_id TEXT PRIMARY KEY, bucket TEXT NOT NULL, owner_id TEXT NOT NULL,
-    object_key TEXT NOT NULL, storage_key TEXT NOT NULL UNIQUE, size INTEGER NOT NULL,
-    metadata_json TEXT NOT NULL, retained_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
-  ) STRICT;
-  CREATE INDEX IF NOT EXISTS clank_bucket_versions_history
-    ON clank_bucket_versions(bucket, owner_id, object_key, retained_at DESC);
-  CREATE TABLE IF NOT EXISTS clank_bucket_restore_receipts (
-    bucket TEXT NOT NULL, owner_id TEXT NOT NULL, operation_id TEXT NOT NULL,
-    version_id TEXT NOT NULL, fingerprint TEXT NOT NULL, receipt TEXT NOT NULL,
-    retained_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
-    PRIMARY KEY(bucket, owner_id, operation_id)
-  ) STRICT;`);
+  try {
+    await assertSafeCatalogFile(fs, catalogPath, false);
+    await fs.chmod(catalogPath, 0o600);
+    native.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA busy_timeout = 5000;");
+    native.exec(`CREATE TABLE IF NOT EXISTS clank_bucket_objects (
+      bucket TEXT NOT NULL,
+      object_id TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      object_key TEXT NOT NULL,
+      storage_key TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      sha256 TEXT NOT NULL,
+      content_type TEXT NOT NULL,
+      visibility TEXT NOT NULL,
+      cache_control TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      image_json TEXT,
+      variant_of TEXT,
+      variant_name TEXT,
+      PRIMARY KEY (bucket, owner_id, object_key),
+      UNIQUE (bucket, object_id)
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS clank_bucket_objects_list
+      ON clank_bucket_objects (bucket, owner_id, updated_at DESC, object_id DESC);
+    CREATE TABLE IF NOT EXISTS clank_bucket_reservations (
+      reservation_id TEXT PRIMARY KEY,
+      bucket TEXT NOT NULL,
+      object_id TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      object_key TEXT NOT NULL,
+      storage_key TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      content_type TEXT NOT NULL,
+      expected_sha256 TEXT,
+      expires_at INTEGER NOT NULL,
+      resumable INTEGER NOT NULL,
+      received INTEGER NOT NULL DEFAULT 0,
+      lock_token TEXT,
+      lock_expires_at INTEGER,
+      replaces_size INTEGER,
+      replaces_storage_key TEXT,
+      variant_of TEXT,
+      variant_name TEXT,
+      UNIQUE (bucket, owner_id, object_key)
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS clank_bucket_reservations_expiry
+      ON clank_bucket_reservations (expires_at);
+    CREATE TABLE IF NOT EXISTS clank_bucket_garbage (
+      storage_key TEXT PRIMARY KEY,
+      created_at INTEGER NOT NULL
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS clank_bucket_versions (
+      version_id TEXT PRIMARY KEY, bucket TEXT NOT NULL, owner_id TEXT NOT NULL,
+      object_key TEXT NOT NULL, storage_key TEXT NOT NULL UNIQUE, size INTEGER NOT NULL,
+      metadata_json TEXT NOT NULL, retained_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS clank_bucket_versions_history
+      ON clank_bucket_versions(bucket, owner_id, object_key, retained_at DESC);
+    CREATE TABLE IF NOT EXISTS clank_bucket_restore_receipts (
+      bucket TEXT NOT NULL, owner_id TEXT NOT NULL, operation_id TEXT NOT NULL,
+      version_id TEXT NOT NULL, fingerprint TEXT NOT NULL, receipt TEXT NOT NULL,
+      retained_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+      PRIMARY KEY(bucket, owner_id, operation_id)
+    ) STRICT;`);
+  } catch (error) {
+    try { native.close(); } catch { /* Best-effort cleanup after initialization error. */ }
+    throw error;
+  }
   let closed = false;
   let transactionActive = false;
   const report = (error: unknown) => {
@@ -1541,6 +1546,7 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
     key: string,
     readOptions: BucketIdentity & { expiresInMs?: number } = {},
   ): Promise<BucketReadIntent> => {
+    ensureOpen();
     const owner = ownerFor(definition, readOptions);
     const row = rowForKey(definition.name, owner, bucketKey(key));
     if (!row) throw new BucketError(404, "BUCKET_OBJECT_NOT_FOUND", "Bucket object not found.");
@@ -2152,7 +2158,7 @@ export function createBucketClient(nameInput: string, options: BucketClientOptio
       return json<BucketReadIntent>(await request(`${endpoint}/read-intents`, {
         method: "POST",
         credentials: "same-origin",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...csrfHeaders() },
         body: JSON.stringify({ key, expiresInMs }),
       }));
     },
@@ -2161,7 +2167,7 @@ export function createBucketClient(nameInput: string, options: BucketClientOptio
     },
     async createVersionReadIntent(key, versionId, expiresInMs) {
       return json<BucketReadIntent>(await request(`${endpoint}/version-read-intents`, { method: "POST", credentials: "same-origin",
-        headers: { "content-type": "application/json" }, body: JSON.stringify({ key, versionId, expiresInMs }) }));
+        headers: { "content-type": "application/json", ...csrfHeaders() }, body: JSON.stringify({ key, versionId, expiresInMs }) }));
     },
     async restoreVersion(key, versionId, restoreOptions) {
       const { operationId, ifSha256 } = restoreOptions;
@@ -2507,7 +2513,7 @@ function safeOrigin(value: string): string {
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
     throw new TypeError("publicOrigin must be an absolute HTTP(S) origin without credentials or a path.");
   }
-  if (url.protocol !== "https:" && !["localhost", "127.0.0.1", "::1"].includes(url.hostname)) {
+  if (url.protocol !== "https:" && !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) {
     throw new TypeError("publicOrigin must use HTTPS outside loopback.");
   }
   return url.origin;

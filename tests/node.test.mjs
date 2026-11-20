@@ -542,3 +542,27 @@ test("Node adapter writes helper responses in one piece, including ones from ano
     assert.equal(head.body.length, 0);
   } finally { await server.close(); }
 });
+
+test("Node adapter honors Accept-Encoding q-values, rejects unsafe Host characters, and handles empty X-Forwarded-Proto", async () => {
+  const payload = "hello world ".repeat(200);
+  const server = await serve((request) => new Response(payload, {
+    headers: { "content-type": "text/plain; charset=utf-8", "x-seen-url": request.url },
+  }), { port: 0, compression: true, trustProxy: true, allowedHosts: ["127.0.0.1", "localhost", "[::1]"] });
+  try {
+    const preferIdentity = await rawGet(`${server.url}/`, { "accept-encoding": "identity;q=1.0, br;q=0.5, gzip;q=0.5" });
+    assert.equal(preferIdentity.status, 200);
+    assert.equal(preferIdentity.headers["content-encoding"], undefined);
+    assert.equal(preferIdentity.body.toString(), payload);
+
+    const preferGzip = await rawGet(`${server.url}/`, { "accept-encoding": "br;q=0, gzip;q=0.8" });
+    assert.equal(preferGzip.status, 200);
+    assert.equal(preferGzip.headers["content-encoding"], "gzip");
+
+    const emptyProto = await rawGet(`${server.url}/check`, { "x-forwarded-proto": "   " });
+    assert.equal(emptyProto.status, 200);
+    assert.match(emptyProto.headers["x-seen-url"], /^http:\/\/127\.0\.0\.1:\d+\/check$/u);
+
+    const badHost = await rawGet(`${server.url}/`, { host: "evil.test@127.0.0.1" });
+    assert.equal(badHost.status, 400);
+  } finally { await server.close(); }
+});

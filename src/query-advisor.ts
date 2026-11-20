@@ -19,8 +19,8 @@ export function adviseQueries(queries: readonly DatabaseQueryDiagnostic[], optio
     const findings: string[] = [];
     if (query.maximumMs >= slow) findings.push("Slow execution observed; compare the plan and representative data before changing indexes.");
     if (query.runs >= repeated) findings.push("Repeated query shape; inspect loops, batching, and cache invalidations.");
-    if (query.plan.some((step) => /^SCAN /u.test(step))) findings.push("SQLite scans a table or index; check selectivity on representative data.");
-    if (query.plan.some((step) => step.includes("TEMP B-TREE"))) findings.push("SQLite builds a temporary sorting structure.");
+    if (query.plan.some((step: string) => /^SCAN /u.test(step))) findings.push("SQLite scans a table or index; check selectivity on representative data.");
+    if (query.plan.some((step: string) => step.includes("TEMP B-TREE"))) findings.push("SQLite builds a temporary sorting structure.");
     if (query.suggestedIndex) findings.push("Candidate index requires migration review and a before/after plan comparison.");
     return Object.freeze({ query, averageMs: query.runs ? query.totalMs / query.runs : 0, findings: Object.freeze(findings) });
   }).sort((a, b) => b.query.totalMs - a.query.totalMs));

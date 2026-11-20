@@ -3,8 +3,7 @@
   "entry": "dist/server.js",
   "include": [
     "dist",
-    "vendor",
-    "migrations"
+    "vendor"
   ],
   "build": {
     "command": [

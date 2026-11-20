@@ -1105,3 +1105,25 @@ test("organization unlink controls retain the exact version and retry key after 
   const find=(node,text)=>{if(node.localName==="button"&&node.textContent===text)return node;for(const child of node.childNodes){const result=find(child,text);if(result)return result}},click=text=>find(root,text).listeners.get("click")({}),settle=()=>new Promise(resolve=>setImmediate(resolve));
   try {click("Refresh organization identities");await settle();click("Unlink identity from company");await settle();click("Unlink identity from company");await settle();assert.equal(requests.length,2);assert.deepEqual(requests[0],requests[1]);assert.equal(requests[0].expectedVersion,7);assert.match(requests[0].idempotencyKey,/^[a-f0-9-]{36}$/u);user.value=null;session.value=null;assert.doesNotMatch(root.textContent,/issuer.test|Response lost|subject/);}finally{dispose()}
 });
+
+test("component mount cleanups run LIFO before removal and Object.prototype attribute names stay safe", () => {
+  const order = [];
+  function Child() {
+    onMount(() => {
+      order.push("mount-1");
+      return () => order.push("cleanup-1");
+    });
+    onMount(() => {
+      order.push("mount-2");
+      return () => order.push("cleanup-2");
+    });
+    onCleanup(() => order.push("root-cleanup"));
+    return h("div", { constructor: "safe", toString: "ok" }, "content");
+  }
+  const root = new FakeElement("main");
+  const dispose = render(root, h(Child));
+  assert.equal(root.childNodes[0].getAttribute("constructor"), "safe");
+  assert.equal(root.childNodes[0].getAttribute("toString"), "ok");
+  dispose();
+  assert.deepEqual(order, ["mount-1", "mount-2", "cleanup-2", "cleanup-1", "root-cleanup"]);
+});

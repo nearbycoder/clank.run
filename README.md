@@ -406,5 +406,5 @@ Clank is [MIT licensed](LICENSE). Contributions are welcome—start with
 [`SECURITY.md`](SECURITY.md).
 
 The official npm package is [`@clank.run/framework`](https://www.npmjs.com/package/@clank.run/framework).
-It installs the `clank` and `clank-platform` commands. The unrelated unscoped `clank` package is a
+It installs the `clank`, `clank-platform`, `clank-runner`, and `clank-provider` commands. The unrelated unscoped `clank` package is a
 different project.

@@ -1299,8 +1299,10 @@ export function createToastProvider(options: ToastProviderOptions = {}): ToastPr
 
   // Keep swipe state private to the provider while exposing it through root props.
   const swipeOffsets = new Map<string, { x: number; y: number; direction?: ToastSwipeDirection }>();
+  const swipeVersion = signal(0);
   const setSwipeOffset = (toastId: string, x: number, y: number, direction?: ToastSwipeDirection) => {
     swipeOffsets.set(toastId, { x, y, ...(direction ? { direction } : {}) });
+    swipeVersion.value++;
     updateSwipe(toastId, x, y, direction);
   };
 
@@ -1320,6 +1322,7 @@ export function createToastProvider(options: ToastProviderOptions = {}): ToastPr
       lastAt: now,
       target,
     };
+    swipeVersion.value++;
     try { target.setPointerCapture?.(event.pointerId); } catch { /* Pointer handlers remain usable without capture. */ }
     manager.pause(`swipe:${toastId}`);
   };
@@ -1352,6 +1355,7 @@ export function createToastProvider(options: ToastProviderOptions = {}): ToastPr
     const velocity = distance / elapsed;
     try { state.target.releasePointerCapture?.(state.pointerId); } catch { /* Capture may already have ended. */ }
     swipe = null;
+    swipeVersion.value++;
     manager.resume(`swipe:${toastId}`);
     if (distance >= swipeThreshold || velocity >= swipeVelocity) {
       manager.close(toastId, "swipe");
@@ -1406,7 +1410,7 @@ export function createToastProvider(options: ToastProviderOptions = {}): ToastPr
       observer?.disconnect();
       if (roots.get(toastId) === html) roots.delete(toastId);
       if (heights.delete(toastId)) layoutVersion.value++;
-      swipeOffsets.delete(toastId);
+      if (swipeOffsets.delete(toastId)) swipeVersion.value++;
       titlePresences.delete(toastId);
       descriptionPresences.delete(toastId);
     };
@@ -1496,9 +1500,10 @@ export function createToastProvider(options: ToastProviderOptions = {}): ToastPr
         "data-starting-style": () => record(toastId)?.state === "starting" ? "" : undefined,
         "data-ending-style": () => record(toastId)?.state === "ending" ? "" : undefined,
         "data-paused": () => manager.paused.value ? "" : undefined,
-        "data-swiping": () => swipe?.id === toastId ? "" : undefined,
-        "data-swipe-direction": () => swipeOffsets.get(toastId)?.direction,
+        "data-swiping": () => { swipeVersion.value; return swipe?.id === toastId ? "" : undefined; },
+        "data-swipe-direction": () => { swipeVersion.value; return swipeOffsets.get(toastId)?.direction; },
         style: () => {
+          swipeVersion.value;
           const offset = swipeOffsets.get(toastId) ?? { x: 0, y: 0 };
           return {
             touchAction: swipeDirection === "left" || swipeDirection === "right" ? "pan-y" : "pan-x",

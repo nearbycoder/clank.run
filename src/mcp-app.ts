@@ -184,7 +184,13 @@ export function createMcpAppClient(
         reject(new Error(`MCP app request timed out: ${method}`));
       }, timeoutMs);
       pending.set(id, { resolve, reject, timeout });
-      post({ jsonrpc: "2.0", id, method, params });
+      try {
+        post({ jsonrpc: "2.0", id, method, params });
+      } catch (error) {
+        pending.delete(id);
+        clearTimeout(timeout);
+        reject(error);
+      }
     });
   };
   const notify = (method: string, params: Readonly<Record<string, unknown>> = {}) => {
@@ -192,6 +198,7 @@ export function createMcpAppClient(
     post({ jsonrpc: "2.0", method, params });
   };
   const respond = (id: string | number | null, result?: unknown, error?: { code: number; message: string }) => {
+    if (closed) return;
     post({ jsonrpc: "2.0", id, ...(error ? { error } : { result: result ?? {} }) });
   };
 
@@ -205,8 +212,11 @@ export function createMcpAppClient(
       if (!entry) return;
       pending.delete(message.id);
       clearTimeout(entry.timeout);
-      if (record(message.error) && typeof message.error.message === "string") {
-        entry.reject(new Error(message.error.message));
+      if ("error" in message && message.error !== undefined) {
+        const errorMessage = record(message.error) && typeof message.error.message === "string"
+          ? message.error.message
+          : "MCP app host returned an error.";
+        entry.reject(new Error(errorMessage));
       } else {
         entry.resolve(message.result);
       }
@@ -262,6 +272,7 @@ export function createMcpAppClient(
     get host() { return host; },
     get hostContext() { return hostContext; },
     connect() {
+      if (closed) return Promise.reject(new Error("MCP app client is closed."));
       if (connecting) return connecting;
       connecting = request("ui/initialize", {
         appInfo: { name: options.name, version },
@@ -368,6 +379,7 @@ export function createMcpAppClient(
       if (closed) return;
       closed = true;
       connected = false;
+      connecting = undefined;
       environment.source.removeEventListener("message", listener);
       rejectPending(reason);
     },

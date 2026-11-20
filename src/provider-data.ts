@@ -625,6 +625,7 @@ export async function openDeploymentProviderDataStore(
 
         let committed = false;
         let exposedPrepared: PreparedDeploymentRuntimeData | null = null;
+        let next: StoredState | undefined;
         try {
           if (runtime.databaseSnapshot) {
             const incoming = path.join(locations.recovery, `${transactionId}.incoming.sqlite`);
@@ -675,7 +676,7 @@ export async function openDeploymentProviderDataStore(
           exposedPrepared = prepared;
           await validate(prepared);
           throwIfAborted(input.signal);
-          const next: StoredState = {
+          next = {
             protocol: DEPLOYMENT_PROVIDER_DATA_PROTOCOL,
             active,
             previous: state?.active ?? null,
@@ -693,7 +694,7 @@ export async function openDeploymentProviderDataStore(
           await recoverJournal(locations, next);
           return publicStoredState(next);
         } catch (error) {
-          if (!committed) {
+          if (!committed || !next) {
             if (discard && exposedPrepared) {
               try {
                 await discard(exposedPrepared, error);
@@ -1799,7 +1800,7 @@ async function syncDirectory(fs: NodeFs, directory: string): Promise<void> {
 }
 
 async function digest(value: Uint8Array): Promise<string> {
-  const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", value));
+  const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", value as BufferSource));
   return [...bytes].map((part) => part.toString(16).padStart(2, "0")).join("");
 }
 

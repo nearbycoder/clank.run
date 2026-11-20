@@ -114,7 +114,6 @@ These examples demonstrate framework breadth. They do not replace domain-specifi
 - Form paths are intentionally top-level. Compose controllers for nested editors and independent wizard steps.
 - A capability-gated local file store and upload endpoint are included for trusted single-host deployments; production object storage, CDN delivery, and image transformation remain provider integrations.
 - Virtualized collections are included; combine them with authorized server paging for datasets that exceed bounded client memory.
-- Dialogs are rendered in place rather than through a portal.
 - The built-in process supervisor remains single-leader even though durable distributed coordination primitives and verified remote release transfer are available.
 - The trusted process runner is not a sandbox; use the Docker runner for stronger isolation.
 - Clank now provides verified domain eligibility for Caddy On-Demand TLS and a complete generic
@@ -140,7 +139,7 @@ A release is acceptable only after:
 
 Clank deliberately does not install a TypeScript package. Its built-in compiler validates syntax lowering, while the checked-in declarations define the consumer contract. CI separately provisions TypeScript 5.9.3 and Node declarations outside the framework, enforces
 a normalized no-new-diagnostics baseline, and checks positive/negative fixtures against a packed
-consumer with declaration checking enabled. The remaining 278 pre-existing source diagnostics are
-tracked debt, not a claim of strict semantic correctness. See [type-contract verification](development-tools.md#semantic-type-contract-verification).
+consumer with declaration checking enabled. All pre-existing source diagnostics in the baseline have
+been resolved (0 remaining). See [type-contract verification](development-tools.md#semantic-type-contract-verification).
 
 See `docs/security.md` and `docs/platform-security.md` for the separate security checklists.

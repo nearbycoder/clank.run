@@ -143,14 +143,15 @@ function bufferedBody(response: Response): BufferedBody | undefined {
 /** @internal Character count of an unread buffered body, or undefined for any other response. */
 export function bufferedBodyLength(response: Response): number | undefined {
   const length = bufferedBody(response)?.call(response, false);
-  return typeof length === "number" ? length : undefined;
+  return typeof length === "number" && Number.isFinite(length) && length >= 0 ? length : undefined;
 }
 /** @internal Claims an unread buffered body for a direct write. The response then reports its body as used. */
 export function takeBufferedBody(response: Response): string | undefined {
   const text = bufferedBody(response)?.call(response, true);
   return typeof text === "string" ? text : undefined;
 }
-let lastTrustedAddress: readonly [raw: string | undefined, normalized: string] = [undefined, ""];
+const UNSET_ADDRESS = Symbol("unset");
+let lastTrustedAddress: readonly [raw: string | typeof UNSET_ADDRESS, normalized: string] = [UNSET_ADDRESS, ""];
 
 interface CanonicalTarget {readonly method:"POST";readonly url:string;readonly target:string;verified?:boolean}
 /** @internal Separate POST target evidence; never anonymous observation or authentication. */
@@ -258,7 +259,12 @@ function resolveExactProof(request: Request, proof: ExactProof): boolean {
   const raw = exactRawFields(pending.rawHeaders, pending.trustProxy);
   if (!raw) { const evidence = evidenceOf(request); if (evidence?.exact === proof) evidence.exact = undefined; return false; }
   const url = new URL(proof.url), fields = exactHeaderFields(request.headers, false), current = exactHeaderFields(request.headers);
-  if (request.url !== proof.url || request.method !== pending.method || request.body || url.pathname !== pending.target || url.search || url.hash
+  if (url.pathname !== pending.target || url.search || url.hash) {
+    const evidence = evidenceOf(request);
+    if (evidence?.exact === proof) evidence.exact = undefined;
+    return false;
+  }
+  if (request.url !== proof.url || request.method !== pending.method || request.body
     || fields === undefined || current === undefined || fields !== raw.canonical
     || request.headers.get("x-clank-client-ip") !== pending.injected) return false;
   // Retain no browser/referrer/forwarding values from here on: only their bounded digest.
@@ -289,7 +295,7 @@ export function registerRequestHandoff(request: Request, callback: () => undefin
 export function takeRequestHandoff(request: Request): (() => void) | undefined {
   const proof = evidenceOf(request)?.exact; if (!proof || proof.taken) return undefined;
   proof.taken = true; const callback = proof.handoff; proof.handoff = undefined;
-  if (!callback) return undefined;
+  if (!callback) { proof.pending = undefined; return undefined; }
   let called = false;
   return () => {
     if (called) return; called = true;
@@ -301,7 +307,7 @@ export function takeRequestHandoff(request: Request): (() => void) | undefined {
 /** @internal Ends only shadow observation; it never cancels the primary request. */
 export function cancelRequestHandoff(request: Request): void {
   const proof = evidenceOf(request)?.exact;
-  if (proof) { proof.active = false; proof.handoff = undefined; const detach = proof.detach; proof.detach = undefined; try { detach?.(); } catch {} }
+  if (proof) { proof.active = false; proof.handoff = undefined; proof.pending = undefined; const detach = proof.detach; proof.detach = undefined; try { detach?.(); } catch {} }
 }
 /** @internal Controller cancellation detaches consumer-driven byte notifications. */
 export function requestHandoffActive(request: Request, detach?: () => void): boolean {
@@ -388,7 +394,8 @@ export function assertSafeAttributeValue(tag: string, name: string, value: unkno
   if (attribute === "innerhtml" || attribute === "outerhtml") {
     throw new TypeError(`${name} is raw HTML; use dangerouslySetInnerHTML only with trusted markup.`);
   }
-  if (!URL_ATTRIBUTES.has(attribute) && !(tag.toLowerCase() === "object" && attribute === "data")) return;
+  const lowerTag = tag.toLowerCase();
+  if (!URL_ATTRIBUTES.has(attribute) && !(lowerTag === "object" && attribute === "data")) return;
   if (value === null || value === undefined || typeof value === "boolean") return;
   // JSON arrays and other coercible values become strings at the DOM/SSR sink.
   // Apply the URL policy to that representation too, not only primitive strings.
@@ -398,7 +405,7 @@ export function assertSafeAttributeValue(tag: string, name: string, value: unkno
     throw new TypeError(`Unsafe URL scheme for ${name}.`);
   }
   if (!protocol.startsWith("data:")) return;
-  const imageData = (tag === "img" || tag === "source")
+  const imageData = (lowerTag === "img" || lowerTag === "source")
     && /^data:image\/(?:avif|gif|jpeg|png|webp);base64,/i.test(url.trim());
   if (!imageData) throw new TypeError(`Unsafe data URL for ${name}.`);
 }

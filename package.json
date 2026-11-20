@@ -20,6 +20,10 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
     "./temporary-access": { "types": "./dist/temporary-access.d.ts", "import": "./dist/temporary-access.js" },
     "./organization-security-policy": { "types": "./dist/organization-security-policy.d.ts", "import": "./dist/organization-security-policy.js" },
     "./customer-status": { "types": "./dist/customer-status.d.ts", "import": "./dist/customer-status.js" },
@@ -46,34 +50,21 @@
     "./release-attestation": { "types": "./dist/release-attestation.d.ts", "import": "./dist/release-attestation.js" },
     "./usage-forecast": { "types": "./dist/usage-forecast.d.ts", "import": "./dist/usage-forecast.js" },
     "./bookmarks": { "types": "./dist/bookmarks.d.ts", "import": "./dist/bookmarks.js" },
-
     "./activity": { "types": "./dist/activity.d.ts", "import": "./dist/activity.js" },
-
     "./feedback": { "types": "./dist/feedback.d.ts", "import": "./dist/feedback.js" },
-
     "./availability": { "types": "./dist/availability.d.ts", "import": "./dist/availability.js" },
-
     "./dashboard-layouts": { "types": "./dist/dashboard-layouts.d.ts", "import": "./dist/dashboard-layouts.js" },
     "./labels": { "types": "./dist/labels.d.ts", "import": "./dist/labels.js" },
-
     "./checklists": { "types": "./dist/checklists.d.ts", "import": "./dist/checklists.js" },
-
     "./reminders": { "types": "./dist/reminders.d.ts", "import": "./dist/reminders.js" },
-
     "./drafts": { "types": "./dist/drafts.d.ts", "import": "./dist/drafts.js" },
-
     "./undo-history": { "types": "./dist/undo-history.d.ts", "import": "./dist/undo-history.js" },
-
     "./command-palette": { "types": "./dist/command-palette.d.ts", "import": "./dist/command-palette.js" },
-
     "./shortcuts": { "types": "./dist/shortcuts.d.ts", "import": "./dist/shortcuts.js" },
-
     "./tours": { "types": "./dist/tours.d.ts", "import": "./dist/tours.js" },
     "./csv-export": { "types": "./dist/csv-export.d.ts", "import": "./dist/csv-export.js" },
     "./recycle-bin": { "types": "./dist/recycle-bin.d.ts", "import": "./dist/recycle-bin.js" },
-
     "./record-history": { "types": "./dist/record-history.d.ts", "import": "./dist/record-history.js" },
-
     "./comments": { "types": "./dist/comments.d.ts", "import": "./dist/comments.js" },
     "./saved-views": { "types": "./dist/saved-views.d.ts", "import": "./dist/saved-views.js" },
     "./local-search": { "types": "./dist/local-search.d.ts", "import": "./dist/local-search.js" },
@@ -87,10 +78,6 @@
     "./webhook-outbox": { "types": "./dist/webhook-outbox.d.ts", "import": "./dist/webhook-outbox.js" },
     "./application-performance": { "types": "./dist/application-performance.d.ts", "import": "./dist/application-performance.js" },
     "./query-advisor": { "types": "./dist/query-advisor.d.ts", "import": "./dist/query-advisor.js" },
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    },
     "./trace-timeline": { "types": "./dist/trace-timeline.d.ts", "import": "./dist/trace-timeline.js" },
     "./offline": { "types": "./dist/offline.d.ts", "import": "./dist/offline.js" },
     "./preview-fixtures": { "types": "./dist/preview-fixtures.d.ts", "import": "./dist/preview-fixtures.js" },

@@ -898,6 +898,7 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
           } catch {
             throw new AuthError("INVALID_PASSKEY", "Passkey authentication failed.", 401);
           }
+          requireActiveUser(String(passkey.user_id) as AuthUserId);
           const advanced = internal.prepare(`UPDATE clank_auth_passkeys SET counter = ?, last_used_at = ?
             WHERE credential_id = ? AND user_id = ? AND counter = ?`)
             .run(
@@ -919,7 +920,7 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
             });
             return authJson({ ok: true, ...authState(requireCurrentSession(stepAuth)) });
           }
-          const result = await createSession(String(passkey.user_id) as AuthUserId, undefined, definition.passkeys.requireUserVerification ? "passkey" : "password");
+          const result = await createSession(String(passkey.user_id) as AuthUserId, undefined, verified.userVerified ? "passkey" : "password");
           return sessionResponse(definition, request, result.rawToken, result.auth);
         }
         const auth = await resolve(request);
@@ -2064,6 +2065,12 @@ function createRateLimiter(store?: AuthRateLimitStore) {
       for (const [entry, times] of entries) {
         if (times.every((time) => now - time >= windowMs)) entries.delete(entry);
         if (entries.size <= 8_000) break;
+      }
+      if (entries.size > 10_000) {
+        for (const entry of entries.keys()) {
+          entries.delete(entry);
+          if (entries.size <= 8_000) break;
+        }
       }
     }
     return undefined;

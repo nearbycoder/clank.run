@@ -46,7 +46,7 @@ export async function replayJournal(databasePath: string, envelopes: string[], k
         database.prepare("UPDATE clank_pitr_state SET sequence=?,digest=?,committed_at=?,state_hash=? WHERE id=1")
           .run(entry.sequence, digest, entry.committedAt, plaintext.stateHash);
         database.exec("COMMIT");
-      } catch (error) { database.exec("ROLLBACK"); throw error; }
+      } catch (error) { try { database.exec("ROLLBACK"); } catch {} throw error; }
       state = database.prepare("SELECT * FROM clank_pitr_state WHERE id=1").get();
     }
     return { epoch, sequence: Number(state.sequence), committedAt: Number(state.committed_at), databasePath };
@@ -64,7 +64,7 @@ export async function finishReplay(databasePath: string): Promise<void> {
       // Source export receipts belong to the old epoch. Retaining their table
       // would make enrolling the restored database fail as a partial protocol.
       database.exec("DROP TABLE IF EXISTS clank_pitr_remote_exports; DROP TABLE clank_pitr_journal; DROP TABLE clank_pitr_state; COMMIT");
-    } catch (error) { database.exec("ROLLBACK"); throw error; }
+    } catch (error) { try { database.exec("ROLLBACK"); } catch {} throw error; }
     database.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   } finally { database.close(); }
 }
@@ -123,12 +123,12 @@ export async function initializeTransfer(databasePath:string,identity:any,baseBa
       if(Number(inserted.changes)!==1)throw new Error("Transfer enrollment was not retained.");
       const result=transferInspection(database,crypto,{identity,archiveSha256,initialCursor:cursorOf(state)});
       database.exec("COMMIT");return result;
-    }catch(error){database.exec("ROLLBACK");throw error;}
+    }catch(error){try{database.exec("ROLLBACK");}catch{}throw error;}
   });
 }
 export async function inspectTransfer(databasePath:string,binding:any,request?:any){
   return transferDatabase(databasePath,(database,crypto)=>{
-    database.exec("BEGIN");try{const result=transferInspection(database,crypto,binding,request);database.exec("COMMIT");return result;}catch(error){database.exec("ROLLBACK");throw error;}
+    database.exec("BEGIN");try{const result=transferInspection(database,crypto,binding,request);database.exec("COMMIT");return result;}catch(error){try{database.exec("ROLLBACK");}catch{}throw error;}
   });
 }
 /** One native transaction contains all application effects, its exact cursor and acknowledgment. */
@@ -181,7 +181,7 @@ export async function applyTransfer(databasePath:string,request:any,keyBytes:num
       const accepted=transferInspection(database,crypto,{identity:request.identity},request);
       if(!accepted.replayed||String(database.prepare("PRAGMA integrity_check").get()?.integrity_check)!=="ok")throw new Error("Transfer acknowledgment or integrity check failed.");
       database.exec("COMMIT");return {...accepted,appliedEntries:batch.envelopes.length,replayed:false};
-    }catch(error){database.exec("ROLLBACK");throw error;}
+    }catch(error){try{database.exec("ROLLBACK");}catch{}throw error;}
   });
 }
 
@@ -196,7 +196,8 @@ export async function prepareTransferBase(databasePath:string,envelopePath:strin
   try{
     const stats=await handle.stat();
     if(!stats.isFile()||stats.nlink!==1||stats.size!==manifest.databaseBytes+header.length+tag.length)throw new Error("Transfer encrypted base has an invalid bound.");
-    if((await handle.read(header,0,header.length,0)).bytesRead!==header.length||(await handle.read(tag,0,tag.length,stats.size-tag.length)).bytesRead!==tag.length||!header.subarray(0,magic.length).equals(magic))throw new Error("Transfer encrypted base header is invalid.");
+    const readFully=async(target:Uint8Array,position:number):Promise<boolean>=>{let offset=0;while(offset<target.length){const {bytesRead}=await handle.read(target,offset,target.length-offset,position+offset);if(bytesRead<=0)return false;offset+=bytesRead;}return true;};
+    if(!(await readFully(header,0))||!(await readFully(tag,stats.size-tag.length))||!header.subarray(0,magic.length).equals(magic))throw new Error("Transfer encrypted base header is invalid.");
     const decipher=crypto.createDecipheriv("aes-256-gcm",key,header.subarray(magic.length));decipher.setAAD(buffer.from(JSON.stringify(manifest)));decipher.setAuthTag(tag);
     await streams.pipeline(handle.createReadStream({start:header.length,end:stats.size-tag.length-1,autoClose:false}),decipher,native.createWriteStream(databasePath,{flags:"wx",mode:0o600}));
     const digest=crypto.createHash("sha256");let bytes=0;

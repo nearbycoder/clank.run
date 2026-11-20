@@ -120,7 +120,8 @@ if (config.kind === 'ingress' && !config.resume) {
       await writeFile(join(directory, 'dist', 'server.js'), `import{createServer}from'node:http';const s=createServer((q,r)=>{r.setHeader('content-type','text/plain');r.end(q.url==='/healthz'?'ok':'load-app-${index}');});s.listen(Number(process.env.PORT),process.env.HOST);process.on('SIGTERM',()=>s.close(()=>process.exit(0)));`);
       const deployment = parseDeploymentConfig({ version: 1, entry: 'dist/server.js', include: ['dist', 'migrations'],
         database: { path: 'app.sqlite', migrations: 'migrations' }, health: { path: '/healthz', timeoutMs: 5000 }, env: {} });
-      const artifact = await createDeploymentBundle(directory, deployment, { frameworkVersion: '0.22.0', nodeVersion: process.version });
+      const frameworkVersion = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')).version;
+      const artifact = await createDeploymentBundle(directory, deployment, { frameworkVersion, nodeVersion: process.version });
       const response = await runtime.handle(new Request(`http://127.0.0.1:33930/api/projects/${id}/releases`, {
         method: 'POST', headers: { cookie: user.cookie, origin: 'http://127.0.0.1:33930', 'x-clank-csrf': user.csrf,
           'content-type': 'application/vnd.clank.deploy+gzip', 'content-length': String(artifact.byteLength),

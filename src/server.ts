@@ -124,7 +124,7 @@ export function createApp<State extends Record<string, unknown> = Record<string,
       try {
         let endpoint: Endpoint | undefined;
         let params: Record<string, string> = {};
-        const method = request.method, pathname = url.pathname;
+        const method = request.method.toUpperCase(), pathname = url.pathname;
         for (let position = 0; position < endpoints.length; position++) {
           const entry = endpoints[position]!;
           if (entry.method !== method && entry.method !== "*") continue;

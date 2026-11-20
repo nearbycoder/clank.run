@@ -75,15 +75,21 @@ export function observeReactivity(listener: (event: ReactiveDiagnostic) => void)
 function track(source: Source): void {
   const observer = activeObserver;
   if (!tracking || !observer || !observer.active || source.seen === observer.pass) return;
-  const report = diagnosticListeners.size > 0 && !reads(observer, source);
-  source.seen = observer.pass;
-  if (!observer.stale && observer.sources[observer.cursor] === source) observer.cursor++;
-  else {
-    observer.stale ??= observer.sources.splice(observer.cursor);
-    observer.cursor = observer.sources.push(source);
-    source.observers.add(observer);
+  if (!observer.stale && observer.sources[observer.cursor] === source) {
+    source.seen = observer.pass;
+    observer.cursor++;
+    if (diagnosticListeners.size) diagnostic("dependency", observer, source);
+    return;
   }
-  if (report) diagnostic("dependency", observer, source);
+  if (reads(observer, source)) {
+    source.seen = observer.pass;
+    return;
+  }
+  source.seen = observer.pass;
+  observer.stale ??= observer.sources.splice(observer.cursor);
+  observer.cursor = observer.sources.push(source);
+  source.observers.add(observer);
+  if (diagnosticListeners.size) diagnostic("dependency", observer, source);
 }
 
 function reads(observer: Observer, source: Source): boolean {
@@ -343,8 +349,8 @@ class ReactiveEffect implements Observer {
     this.callback = callback;}
 
   schedule(source?: Source): void {
-    // While running, only sources read again in this pass count.
-    if (!this.active || this.#reading && source && source.seen !== this.pass && !reads(this, source)) return;
+    // While running, only sources read again in this pass count; writes during previous cleanup never re-queue.
+    if (!this.active || this.#running && (!this.#reading || source && source.seen !== this.pass && !reads(this, source))) return;
     pendingEffects.add(this);
     flushEffects();
   }
@@ -360,6 +366,7 @@ class ReactiveEffect implements Observer {
     try {
       const previousCleanup = this.#cleanup;
       this.#cleanup = undefined;
+      activeObserver = null;
       previousCleanup?.();
       this.pass = ++passes;
       this.cursor = 0;
@@ -393,7 +400,9 @@ class ReactiveEffect implements Observer {
     detach(this);
     const cleanup = this.#cleanup;
     this.#cleanup = undefined;
-    cleanup?.();
+    const previous = activeObserver;
+    activeObserver = null;
+    try { cleanup?.(); } finally { activeObserver = previous; }
   }
 }
 
@@ -407,8 +416,12 @@ export function effect(
 ): Cleanup {
   const observer = new ReactiveEffect(callback);
   const dispose = registerCleanup(() => observer.dispose());
-  if (!options.defer) observer.run();
-  else observer.schedule();
+  if (!options.defer) {
+    const wasFlushing = flushing;
+    flushing = true;
+    try { observer.run(); } finally { flushing = wasFlushing; }
+    flushEffects();
+  } else observer.schedule();
   return dispose;
 }
 
@@ -464,8 +477,14 @@ export function createRoot<T>(callback: (dispose: Cleanup) => T): T {
     if (!scope.active) return;
     scope.active = false;
     const errors: unknown[] = [];
-    for (const cleanup of scope.cleanups.splice(0).reverse()) {
-      try { cleanup(); } catch (error) { errors.push(error); }
+    const previous = activeObserver;
+    activeObserver = null;
+    try {
+      for (const cleanup of scope.cleanups.splice(0).reverse()) {
+        try { cleanup(); } catch (error) { errors.push(error); }
+      }
+    } finally {
+      activeObserver = previous;
     }
     if (errors.length === 1) throw errors[0];
     if (errors.length > 1) throw new AggregateError(errors, "Multiple Clank cleanup callbacks failed.");

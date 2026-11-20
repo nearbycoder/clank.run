@@ -233,7 +233,6 @@ export function createCollaborationHub(options: CreateCollaborationHubOptions): 
       }
       const body = await readJson(request, 32 * 1024) as Record<string, unknown>;
       const operation = operationValue(body.operation);
-      if (operation === "stream") throw new CollaborationHttpError(400, "INVALID_OPERATION", "Streams use GET.");
       const roomId = roomValue(body.room);
       const principal = await authorized(options, request, roomId, operation);
       if (!await options.verifyCsrf(request, principal)) {
@@ -426,9 +425,10 @@ export function createAuthCollaborationHub<Profile extends object>(
       if (!resolved.user || !resolved.session) return null;
       if (options.authorizeRoom && !await options.authorizeRoom(resolved, attempt)) return null;
       requests.set(request, resolved);
-      const profileName = (resolved.user.profile as { name?: unknown }).name;
+      const profile = resolved.user.profile as { name?: unknown } | null | undefined;
+      const profileName = profile && typeof profile === "object" ? profile.name : undefined;
       const proposed = options.displayName?.(resolved.user)
-        ?? (typeof profileName === "string" ? profileName : resolved.user.email);
+        ?? (typeof profileName === "string" && profileName.trim() ? profileName : resolved.user.email);
       return { id: resolved.user.id, name: text(proposed, "collaborator display name", 100) };
     },
     async verifyCsrf(request) {
@@ -517,7 +517,8 @@ export function createCollaborationClient(options: CreateCollaborationClientOpti
     if (connected.protocol !== "clank-collaboration-connect/1" || typeof connected.connection !== "string") {
       throw new Error("Collaboration connect response is invalid.");
     }
-    connection = connected.connection;
+    const activeConnection: string = connected.connection;
+    connection = activeConnection;
     apply(connected.snapshot);
     reconnectAttempt = 0;
     state.value = "connected";
@@ -525,9 +526,10 @@ export function createCollaborationClient(options: CreateCollaborationClientOpti
     heartbeat = setInterval(() => {
       if (connection) void post({ operation: "heartbeat", room, connection }).catch(() => undefined);
     }, integer(connected.heartbeatMs, "collaboration heartbeat", 1_000, 60_000));
+    (heartbeat as ReturnType<typeof setInterval> & { unref?: () => void }).unref?.();
     const controller = new AbortController();
     streamAbort = controller;
-    void consume(endpoint, room, connection, request, controller.signal, event => {
+    void consume(endpoint, room, activeConnection, request, controller.signal, event => {
       if (desired && generation === currentGeneration && !controller.signal.aborted) apply(event);
     })
       .then(() => reconnect(currentGeneration))
@@ -551,7 +553,9 @@ export function createCollaborationClient(options: CreateCollaborationClientOpti
     reconnectAttempt++;
     state.value = "reconnecting";
     const delay = Math.min(10_000, 250 * 2 ** Math.min(reconnectAttempt - 1, 6));
-    await wait(delay);
+    const timerAbort = new AbortController();
+    streamAbort = timerAbort;
+    await wait(delay, timerAbort.signal);
     if (!desired || generation !== currentGeneration) return;
     try { await establish(currentGeneration); }
     catch (error) {
@@ -561,7 +565,7 @@ export function createCollaborationClient(options: CreateCollaborationClientOpti
     }
   };
 
-  return Object.freeze({
+  const client: CollaborationClient = {
     state,
     participants,
     lastEvent,
@@ -605,7 +609,8 @@ export function createCollaborationClient(options: CreateCollaborationClientOpti
       state.value = "closed";
       if (active) await post({ operation: "disconnect", room, connection: active }).catch(() => undefined);
     },
-  });
+  };
+  return Object.freeze(client);
 }
 
 async function consume(
@@ -630,20 +635,25 @@ async function consume(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    if (buffer.length > 64 * 1024) throw new Error("Collaboration stream event is too large.");
-    let boundary;
-    while ((boundary = buffer.indexOf("\n\n")) !== -1) {
-      const block = buffer.slice(0, boundary).replace(/\r/gu, "");
-      buffer = buffer.slice(boundary + 2);
-      const data = block.split("\n").filter((line) => line.startsWith("data: ")).map((line) => line.slice(6)).join("\n");
-      if (!data) continue;
-      if (data.length > 32 * 1024) throw new Error("Collaboration stream event is too large.");
-      apply(JSON.parse(data));
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/gu, "\n");
+      if (buffer.length > 64 * 1024) throw new Error("Collaboration stream event is too large.");
+      let boundary;
+      while ((boundary = buffer.indexOf("\n\n")) !== -1) {
+        const block = buffer.slice(0, boundary).replace(/\r/gu, "");
+        buffer = buffer.slice(boundary + 2);
+        const data = block.split("\n").filter((line) => line.startsWith("data: ")).map((line) => line.slice(6)).join("\n");
+        if (!data) continue;
+        if (data.length > 32 * 1024) throw new Error("Collaboration stream event is too large.");
+        apply(JSON.parse(data));
+      }
     }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
   }
 }
 
@@ -943,8 +953,18 @@ function deepFreeze<Value>(value: Value): Value {
   return value;
 }
 
-function wait(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+function wait(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, milliseconds);
+    (timer as ReturnType<typeof setTimeout> & { unref?: () => void }).unref?.();
+    signal?.addEventListener("abort", done, { once: true });
+  });
 }
 
 class CollaborationHttpError extends Error {
