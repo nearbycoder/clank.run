@@ -20,12 +20,12 @@ export async function openChecklists(options: ChecklistOptions): Promise<{ handl
     save: mutation({ args: { id: s.optional(s.string()), expectedVersion: s.optional(s.number({ integer: true, min: 1 })), title: s.string({ min: 1, max: 100 }), items: s.array(itemSchema, { max: 100 }), key: s.string({ min: 1, max: 128 }) }, handler: ({ db }, input) => {
       const title = input.title.trim(), items = input.items.map(item => ({ ...item, text: item.text.trim() })), table = db.table("personalChecklists");
       if (!title || items.some(item => !item.text) || new Set(items.map(item => item.id)).size !== items.length) throw new Error("Checklist title and unique nonempty items are required.");
-      if (input.id) { const current = table.get(input.id); if (!current || current._version !== input.expectedVersion) throw new Error("Checklist changed. Refresh before editing."); return view(table.patch(input.id, { title, items }, { ifVersion: input.expectedVersion })); }
+      if (input.id) { const current = table.get(input.id as any); if (!current || current._version !== input.expectedVersion) throw new Error("Checklist changed. Refresh before editing."); return view(table.patch(input.id as any, { title, items }, { ifVersion: input.expectedVersion })); }
       if (input.expectedVersion !== undefined) throw new Error("New checklists do not have a version.");
       const existing = table.query().where("key", input.key).first(); if (existing) return view(existing);
       if (table.collect().length >= 100) throw new Error("Checklist limit reached."); return view(table.get(table.insert({ title, items, key: input.key })));
     } }),
-    remove: mutation({ args: { id: s.string(), expectedVersion: s.number({ integer: true, min: 1 }) }, handler: ({ db }, { id, expectedVersion }) => { const table = db.table("personalChecklists"), row = table.get(id); if (!row || row._version !== expectedVersion) throw new Error("Checklist changed or is unavailable."); table.delete(id, { ifVersion: expectedVersion }); } }),
+    remove: mutation({ args: { id: s.string(), expectedVersion: s.number({ integer: true, min: 1 }) }, handler: ({ db }, { id, expectedVersion }) => { const table = db.table("personalChecklists"), row = table.get(id as any); if (!row || row._version !== expectedVersion) throw new Error("Checklist changed or is unavailable."); table.delete(id as any, { ifVersion: expectedVersion }); } }),
   }));
   const runtime = await openBackend(backend, { path: options.path, prefix: options.prefix ?? "__clank/checklists" }); return { handle: request => runtime.handle(request), close: () => runtime.close() };
 }

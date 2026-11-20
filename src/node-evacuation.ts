@@ -94,6 +94,7 @@ export function openNodeEvacuations(sql: SQLiteInternal): NodeEvacuations {
         try { if (Number(sql.prepare("UPDATE clank_platform_evacuations SET lease_until = ? WHERE id = ? AND lease_id = ? AND lease_until > ?").run(Date.now() + 30_000, id, lease, Date.now()).changes) !== 1) lost = true; }
         catch { lost = true; }
       }, 5000);
+      timer.unref?.();
       const assertCurrent = () => { if (lost) throw new Error("Evacuation execution lease was lost."); plan = get(id); hooks.verify(plan); if (!sql.prepare("SELECT 1 FROM clank_platform_evacuations WHERE id=? AND lease_id=? AND lease_until>?").get(id, lease, Date.now())) throw new Error("Evacuation execution lease was lost."); };
       try {
         assertCurrent();
@@ -129,7 +130,8 @@ export function openNodeEvacuations(sql: SQLiteInternal): NodeEvacuations {
         try { update(id, lease, { state: "paused", error: "Evacuation paused. Inspect provider and recovery status, then resume this exact plan." }); } catch { /* A successor owns recovery. */ }
         throw error;
       } finally {
-        clearInterval(timer); sql.prepare("UPDATE clank_platform_evacuations SET lease_id=NULL, lease_until=0 WHERE id=? AND lease_id=?").run(id, lease);
+        clearInterval(timer);
+        try { sql.prepare("UPDATE clank_platform_evacuations SET lease_id=NULL, lease_until=0 WHERE id=? AND lease_id=?").run(id, lease); } catch { /* Best-effort lease release. */ }
       }
     },
     cancel(id, hooks) {

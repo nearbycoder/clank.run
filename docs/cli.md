@@ -35,6 +35,9 @@ The templates are:
 | --- | --- | --- |
 | Authenticated Todo | `clank create my-app --template=auth-todo` | Auth, private SQLite data, durable jobs, SSR, hydration, Tailwind, migrations, and live sync |
 | Minimal full-stack | `clank create my-app --template=minimal` | SSR, hydration, reactive TypeScript, Tailwind, health checks, and deployment |
+| Approval queue | `clank create my-app --template=approval-queue` | Authenticated workflow with typed UI, MCP actions, fixtures, and business-rule tests |
+| Customer portal | `clank create my-app --template=customer-portal` | Authenticated workflow with typed UI, MCP actions, fixtures, and business-rule tests |
+| Booking | `clank create my-app --template=booking` | Authenticated workflow with typed UI, MCP actions, fixtures, and business-rule tests |
 
 `auth-todo` remains the default when `--template` is omitted. In a non-interactive terminal, bare `clank` prints the complete help instead of waiting for input. Agents and scripts should continue to use explicit commands and `--json` surfaces.
 

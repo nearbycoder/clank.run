@@ -91,3 +91,14 @@ test('opt-in TSX hydration locations refer to original source coordinates and ex
   assert.throws(() => transformTSX('const v = <p/>', { hydrationDiagnostics: 'true' }), /boolean/);
   assert.throws(() => transformTSX('const v = <p/>', { hydrationDiagnostics: true, filename: 'bad?token=secret.tsx' }), /basename/);
 });
+
+test("TSX keeps concatenated string expressions reactive, rejects unclosed tags, and handles trailing backslashes in JSX attributes", () => {
+  const concat = transformTSX(`const view = <p>{"Count: " + count.value + "!"}</p>;`);
+  assert.match(concat.code, /__clankExpression\(\(\) => \("Count: " \+ count\.value \+ "!"\)\)/);
+
+  const backslashAttr = transformTSX(`const view = <input pattern="C:\\" name="path" />;`);
+  assert.match(backslashAttr.code, /"pattern": "C:\\\\"/);
+  assert.match(backslashAttr.code, /"name": "path"/);
+
+  assert.throws(() => transformTSX(`const view = <div><span>ok</span>;`), /Unclosed JSX <div>/);
+});

@@ -96,9 +96,9 @@ provisioned trusted copy locally, build first, then run:
 node scripts/type-contracts.mjs --typescript /trusted/typescript/lib/typescript.js --type-roots /trusted/node_modules/@types
 ```
 
-The source check uses the normal strict `tsconfig.json`. Its normalized baseline records the
-290 diagnostics originally present at main commit `4b990199965204f1200fcd0fb4ca2b7eb0b02bbc`,
-reduced to 278 by subsequent reviewed fixes. Any new
+The source check uses the normal strict `tsconfig.json`. Its normalized baseline originally recorded
+290 diagnostics at main commit `4b990199965204f1200fcd0fb4ca2b7eb0b02bbc`, and has since been
+driven down to 0. Any new
 file/code/message occurrence fails, including additional occurrences of an existing error.
 Line movements do not create new errors. Decreasing debt passes without expanding the baseline;
 remove resolved entries during a reviewed cleanup. Never regenerate the baseline from a failing

@@ -214,23 +214,29 @@ function todoBackend() {
   }));
 }
 
-test("SQLite documents validate, query, index, patch, and roll back atomically", async () => {
+test("SQLite documents validate, query, index, patch, and roll back atomically", async (t) => {
+  let tick = 1_700_000_000_000;
+  const clock = t.mock.method(Date, "now", () => ++tick);
   const runtime = await openBackend(todoBackend(), { path: ":memory:" });
-  const first = runtime.mutation("todos.add", { title: "First" }).value;
-  runtime.mutation("todos.add", { title: "Second" });
-  assert.equal(runtime.version, 2);
-  assert.deepEqual(runtime.query("todos.list", {}).value.map((todo) => todo.title), ["First", "Second"]);
-  assert.deepEqual(runtime.query("todos.list", { done: false }).value.map((todo) => todo.title), ["First", "Second"]);
-  runtime.mutation("todos.toggle", { id: first });
-  assert.equal(runtime.query("todos.list", { done: true }).value[0].title, "First");
-  assert.throws(() => runtime.mutation("todos.fail", {}), /rollback/);
-  assert.equal(runtime.query("todos.list", {}).value.length, 2);
-  assert.equal(
-    runtime.database.read((db) => db.table("todos").history()).some((entry) => entry.document.title === "must roll back"),
-    false,
-  );
-  assert.throws(() => runtime.mutation("todos.add", { title: "" }), /at least 1/);
-  runtime.close();
+  try {
+    const first = runtime.mutation("todos.add", { title: "First" }).value;
+    runtime.mutation("todos.add", { title: "Second" });
+    assert.equal(runtime.version, 2);
+    assert.deepEqual(runtime.query("todos.list", {}).value.map((todo) => todo.title), ["First", "Second"]);
+    assert.deepEqual(runtime.query("todos.list", { done: false }).value.map((todo) => todo.title), ["First", "Second"]);
+    runtime.mutation("todos.toggle", { id: first });
+    assert.equal(runtime.query("todos.list", { done: true }).value[0].title, "First");
+    assert.throws(() => runtime.mutation("todos.fail", {}), /rollback/);
+    assert.equal(runtime.query("todos.list", {}).value.length, 2);
+    assert.equal(
+      runtime.database.read((db) => db.table("todos").history()).some((entry) => entry.document.title === "must roll back"),
+      false,
+    );
+    assert.throws(() => runtime.mutation("todos.add", { title: "" }), /at least 1/);
+  } finally {
+    clock.mock.restore();
+    runtime.close();
+  }
 });
 
 test("database and backend contracts are immutable after definition", () => {

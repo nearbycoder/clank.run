@@ -294,23 +294,45 @@ export function createPlatformInvitationDeliveryScheduler(options: {
     if (!delivery || closed) return;
     pruneInvitationDeliveries(internal);
     const claims = claim(Date.now());
+    const started = new Set<string>();
     try {
-      await runBounded(claims, concurrency, work, () => closed);
+      await runBounded(claims, concurrency, async (entry) => {
+        started.add(entry.invitationId);
+        await work(entry);
+      }, () => closed);
     } finally {
       const now = Date.now();
       internal.transaction(() => {
         for (const entry of claims) {
-          internal.prepare(`UPDATE clank_platform_invitation_deliveries SET
-            state = 'retry', next_attempt_at = ?, lease_token = NULL, lease_until = NULL,
-            last_error = ?, updated_at = ?
-            WHERE invitation_id = ? AND lease_token = ?`)
-            .run(
-              now + retryBaseMs,
-              "Invitation email delivery was interrupted and will retry.",
-              now,
-              entry.invitationId,
-              entry.leaseToken,
-            );
+          if (!started.has(entry.invitationId)) {
+            internal.prepare(`UPDATE clank_platform_invitation_deliveries SET
+              state = 'retry', attempt_count = MAX(0, attempt_count - 1), next_attempt_at = ?, lease_token = NULL, lease_until = NULL,
+              last_error = ?, updated_at = ?
+              WHERE invitation_id = ? AND lease_token = ?`)
+              .run(
+                now + retryBaseMs,
+                "Invitation email delivery was interrupted before dispatch and will retry.",
+                now,
+                entry.invitationId,
+                entry.leaseToken,
+              );
+          } else {
+            const terminal = entry.attempt >= maxAttempts;
+            internal.prepare(`UPDATE clank_platform_invitation_deliveries SET
+              state = ?, next_attempt_at = ?, lease_token = NULL, lease_until = NULL,
+              last_error = ?, updated_at = ?
+              WHERE invitation_id = ? AND lease_token = ?`)
+              .run(
+                terminal ? "failed" : "retry",
+                terminal ? null : now + retryBaseMs,
+                terminal
+                  ? "Invitation email delivery was interrupted after its final attempt."
+                  : "Invitation email delivery was interrupted and will retry.",
+                now,
+                entry.invitationId,
+                entry.leaseToken,
+              );
+          }
         }
       });
     }

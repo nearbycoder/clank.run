@@ -172,6 +172,7 @@ export const s = {
       if (
         typeof input !== "string"
         || !/^\d{4}-\d{2}-\d{2}T.+(?:Z|[+-]\d{2}:\d{2})$/u.test(input)
+        || !validDate(input.slice(0, 10))
         || !Number.isFinite(Date.parse(input))
       ) return issue(path, "Expected an ISO 8601 date-time with a timezone.", "date-time", input);
       return input;
@@ -221,14 +222,14 @@ export const s = {
       if (settings.min !== undefined && input.length < settings.min) return issue(path, `Must contain at least ${settings.min} items.`);
       if (settings.max !== undefined && input.length > settings.max) return issue(path, `Must contain at most ${settings.max} items.`);
       const issues: ValidationIssue[] = [];
-      const output = input.map((entry, index) => {
-        try { return parseAt(item, entry, path, index); }
+      const output = new Array<T>(input.length);
+      for (let index = 0; index < input.length; index++) {
+        try { output[index] = parseAt(item, input[index], path, index); }
         catch (error) {
           if (error instanceof ValidationError) issues.push(...error.issues);
           else throw error;
-          return undefined as T;
         }
-      });
+      }
       if (issues.length) throw new ValidationError(issues);
       return output;
     }, {

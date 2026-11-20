@@ -417,3 +417,32 @@ test("Stripe webhook request and response bodies are bounded", async () => {
   });
   await assert.rejects(api.createCheckout(checkoutInput()), BillingProviderError);
 });
+
+test("Stripe subscription events fall back to item period end when top-level current_period_end is null", async () => {
+  const billing = provider();
+  const baseSubscription = {
+    id: "sub_1234567890",
+    object: "subscription",
+    customer: "cus_1234567890",
+    status: "active",
+    cancel_at_period_end: false,
+    current_period_end: null,
+    metadata: metadata(),
+    items: {
+      data: [{
+        object: "subscription_item",
+        quantity: 1,
+        current_period_end: timestamp + 3_600,
+        price: { id: prices.pro },
+      }],
+    },
+  };
+  const fromItem = await billing.verifyWebhook(signedRequest(event("customer.subscription.updated", baseSubscription)));
+  assert.equal(fromItem.currentPeriodEnd, now + 3_600_000);
+
+  const noPeriod = await billing.verifyWebhook(signedRequest(event("customer.subscription.updated", {
+    ...baseSubscription,
+    items: { data: [{ ...baseSubscription.items.data[0], current_period_end: null }] },
+  })));
+  assert.equal(noPeriod.currentPeriodEnd, null);
+});

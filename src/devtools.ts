@@ -65,7 +65,7 @@ export function createDevtools(options: { maxEvents?: number; hydration?: boolea
         ...(!disposed && options.timeline ? { timeline: options.timeline() } : {}) });
     },
     clear() { events.length = hydration.length = 0; truncated = false; },
-    dispose() { disposed = true; stop(); stopHydration(); events.length = hydration.length = 0; active.clear(); },
+    dispose() { disposed = true; stop(); stopHydration(); events.length = hydration.length = 0; truncated = false; active.clear(); },
   };
 }
 

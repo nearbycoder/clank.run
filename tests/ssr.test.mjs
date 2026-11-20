@@ -313,3 +313,26 @@ test("mixed asynchronous components retain order and nested keyed/portal markers
   assert.equal(await renderToString(view), '<!--clank:portal--><ul><!--clank:for--><li data-id="a"><!--clank:start-->&lt;Alpha&gt;<!--clank:end--></li><li data-id="b"><!--clank:start-->Beta &amp; co<!--clank:end--></li><!--clank:/for--></ul><!--clank:/portal-->');
   assert.deepEqual(cleaned.sort(), ["a", "b"]);
 });
+
+test("SSR isolates async child release lists and handles Object.prototype attribute names safely", async () => {
+  const html = await renderToString(h("div", { constructor: "safe", toString: "ok" }, "hello"));
+  assert.match(html, /constructor="safe"/);
+  assert.match(html, /toString="ok"/);
+
+  const events = [];
+  let releaseParent;
+  function Child() {
+    onCleanup(() => events.push("child"));
+    return Promise.resolve(h("span", {}, "child"));
+  }
+  function Parent() {
+    onCleanup(() => events.push("parent"));
+    return [h(Child), new Promise((resolve) => { releaseParent = () => resolve(h("em", {}, "tail")); })];
+  }
+  const rendered = renderToString(h(Parent));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(events, ["child"]);
+  releaseParent();
+  assert.equal(await rendered, "<span>child</span><em>tail</em>");
+  assert.deepEqual(events, ["child", "parent"]);
+});

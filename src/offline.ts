@@ -138,7 +138,13 @@ export interface OfflineConflictResolverOptions {
   /** Include the supplied server version in the optimistic mutation arguments. */
   buildInput(values: Readonly<Record<string, unknown>>, server: OfflineConflictServer, item: OfflineMutation): unknown;
 }
-const sameConflictValue = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
+const canonicalConflict = (value: unknown): string => {
+  if (value === undefined) return "undefined";
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalConflict).join(",")}]`;
+  return `{${Object.keys(value as Record<string, unknown>).sort().map((key) => `${JSON.stringify(key)}:${canonicalConflict((value as Record<string, unknown>)[key])}`).join(",")}}`;
+};
+const sameConflictValue = (left: unknown, right: unknown) => canonicalConflict(left) === canonicalConflict(right);
 export function compareOfflineConflict(original: Readonly<Record<string, unknown>>, local: Readonly<Record<string, unknown>>, server: Readonly<Record<string, unknown>>): readonly OfflineConflictField[] {
   const fields = [...new Set([...Object.keys(original), ...Object.keys(local), ...Object.keys(server)])];
   if (fields.length > 100) throw new RangeError("Reconcile at most 100 fields.");
@@ -150,7 +156,7 @@ export function mountOfflineConflictResolver(container: HTMLElement, queue: Offl
   const document = container.ownerDocument, section = document.createElement("section"), status = document.createElement("p"), list = document.createElement("div");
   section.setAttribute("aria-label", "Resolve offline conflicts"); status.setAttribute("role", "status"); section.append(status, list); container.append(section);
   let closed = false, generation = 0;
-  const show = async () => {
+  const show = async (preserveStatus = false) => {
     const expected = ++generation;
     list.replaceChildren();
     for (const item of queue.snapshot().filter(row => row.status === "conflict")) {
@@ -181,7 +187,7 @@ export function mountOfflineConflictResolver(container: HTMLElement, queue: Offl
               const values: Record<string, unknown> = Object.create(null);
               for (const field of fields) { const selected = selections.get(field.field)!.value; if (!selected) throw new Error("Choose a resolution for every conflicting field."); const value = selected === "local" ? field.local : field.server; if (value !== undefined) values[field.field] = value; }
               await queue.retry(item.id, options.buildInput(values, latest, item), { original: latest.values, local: values });
-              if (!closed) { status.textContent = "Resolved change queued. Synchronize to send it."; void show(); }
+              if (!closed) { status.textContent = "Resolved change queued. Synchronize to send it."; void show(true); }
             } catch (error) { if (!closed) status.textContent = error instanceof Error ? error.message : "Could not reconcile this change."; }
             finally { apply.disabled = false; }
           });
@@ -191,7 +197,7 @@ export function mountOfflineConflictResolver(container: HTMLElement, queue: Offl
         finally { open.disabled = false; }
       });
     }
-    if (!list.childNodes.length) status.textContent = "No offline conflicts.";
+    if (!list.childNodes.length && !preserveStatus) status.textContent = "No offline conflicts.";
   };
   const unsubscribe = queue.subscribe(() => { void show(); }); void show();
   return () => { closed = true; generation++; unsubscribe(); section.remove(); };

@@ -646,6 +646,7 @@ export function createDeploymentCoordinatorClient(
       const length = lengthHeader === null ? Number.NaN : Number(lengthHeader);
       const digestHeader = response.headers.get("x-clank-content-sha256");
       if (!isArtifactDigest(digestHeader)) {
+        await response.body?.cancel().catch(() => undefined);
         throw new DeploymentCoordinatorError(
           502,
           "INVALID_ARTIFACT_RESPONSE",
@@ -654,6 +655,7 @@ export function createDeploymentCoordinatorClient(
       }
       const digest = digestHeader;
       if (Number.isSafeInteger(length) && length > maxArtifactBytes) {
+        await response.body?.cancel().catch(() => undefined);
         throw new DeploymentCoordinatorError(
           502,
           "ARTIFACT_TOO_LARGE",
@@ -666,6 +668,7 @@ export function createDeploymentCoordinatorClient(
         || length < 0
         || length > maxArtifactBytes
       ) {
+        await response.body?.cancel().catch(() => undefined);
         throw new DeploymentCoordinatorError(
           502,
           "INVALID_ARTIFACT_RESPONSE",
@@ -730,6 +733,7 @@ export function createDeploymentCoordinatorClient(
       const length = lengthHeader === null ? Number.NaN : Number(lengthHeader);
       const digestHeader = response.headers.get("x-clank-content-sha256");
       if (!isArtifactDigest(digestHeader)) {
+        await response.body?.cancel().catch(() => undefined);
         throw new DeploymentCoordinatorError(
           502,
           "INVALID_RUNTIME_RESPONSE",
@@ -742,6 +746,7 @@ export function createDeploymentCoordinatorClient(
         || length < 0
         || length > maxRuntimeBytes
       ) {
+        await response.body?.cancel().catch(() => undefined);
         throw new DeploymentCoordinatorError(
           502,
           "INVALID_RUNTIME_RESPONSE",
@@ -1377,6 +1382,7 @@ async function readJson(request: Request, limit: number): Promise<unknown> {
 async function readResponseJson(response: Response, limit: number): Promise<unknown> {
   const length = Number(response.headers.get("content-length") ?? 0);
   if (Number.isFinite(length) && length > limit) {
+    await response.body?.cancel().catch(() => undefined);
     throw new DeploymentCoordinatorError(502, "RESPONSE_TOO_LARGE", "Deployment coordinator response is too large.");
   }
   try {
@@ -1398,10 +1404,14 @@ async function readBytes(
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
+  let completed = false;
   try {
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        completed = true;
+        break;
+      }
       size += value.byteLength;
       if (size > limit) {
         throw new CoordinatorRequestError(413, "BODY_TOO_LARGE", "Deployment coordinator message is too large.");
@@ -1409,6 +1419,7 @@ async function readBytes(
       chunks.push(value);
     }
   } finally {
+    if (!completed) await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
   const output = new Uint8Array(size);

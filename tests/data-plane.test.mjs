@@ -998,3 +998,35 @@ test('managed ingress resets a local circuit when a new release reuses its port'
   const replacement = await ingress.handle(new Request('https://reuse.example.test/'));
   assert.equal(replacement.status, 200); assert.equal(await replacement.text(), 'new-release'); assert.equal(calls, 2);
 });
+
+test("managed ingress requests identity encoding and strips stale content-encoding/content-length, and verified domains remain verified past challenge expiry", async () => {
+  let seenAcceptEncoding;
+  const ingress = createManagedIngress({
+    routes: () => [{ id: "enc-route", projectId: "enc-project", hosts: ["enc.example.test"], upstream: "http://127.0.0.1:4812", active: true }],
+    fetch: async (_url, init) => {
+      seenAcceptEncoding = new Headers(init.headers).get("accept-encoding");
+      return new Response("decompressed-upstream-body", {
+        status: 200,
+        headers: { "content-type": "text/plain", "content-encoding": "gzip", "content-length": "10" },
+      });
+    },
+  });
+  const proxied = await ingress.handle(new Request("https://enc.example.test/", { headers: { "accept-encoding": "br, gzip" } }));
+  assert.equal(seenAcceptEncoding, "identity");
+  assert.equal(proxied.headers.get("content-encoding"), null);
+  assert.equal(proxied.headers.get("content-length"), null);
+  assert.equal(await proxied.text(), "decompressed-upstream-body");
+
+  let now = 1_700_000_000_000;
+  const domains = createDomainManager({
+    store: createMemoryDomainStore(),
+    now: () => now,
+    resolveTxt: async () => [[challenge.recordValue]],
+  });
+  const challenge = await domains.begin("project_1", "verified.example.test");
+  const verified = await domains.verify(challenge.id);
+  assert.equal(verified.status, "verified");
+  now = challenge.expiresAt + 60_000;
+  const reverified = await domains.verify(challenge.id);
+  assert.equal(reverified.status, "verified");
+});

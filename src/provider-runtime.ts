@@ -337,7 +337,7 @@ export function createDeploymentRuntimeIngress(
         const response = await fetcher(target, {
           method: request.method,
           headers,
-          body,
+          body: body as BodyInit | undefined,
           redirect: "manual",
           signal: AbortSignal.any([controller.signal, request.signal]),
         });
@@ -824,7 +824,7 @@ function pruneRetired(bindings: Map<string, RuntimeBinding>): void {
 }
 
 async function digest(value: Uint8Array): Promise<Uint8Array> {
-  return new Uint8Array(await crypto.subtle.digest("SHA-256", value));
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", value as BufferSource));
 }
 
 function equalBytes(left: Uint8Array, right: Uint8Array): boolean {

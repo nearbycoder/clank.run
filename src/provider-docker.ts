@@ -1517,7 +1517,7 @@ export async function openDockerDeploymentRuntimeLauncher(
       try {
         check(); tracked!.observation = observation; retained = true;
         check(); const remaining = Math.max(1, Number((authority.deadline - (globalThis as any).process.hrtime.bigint()) / 1000000n));
-        await waitForHealth(globalThis.fetch, record!.candidate.upstream, plan!.config.health.path, Math.min(plan!.config.health.timeoutMs, remaining), AbortSignal.any([request.signal, record!.controller.signal, AbortSignal.timeout(remaining)]), () => record!.status === "failed"); check();
+        await waitForHealth(fetcher, record!.candidate.upstream, plan!.config.health.path, Math.min(plan!.config.health.timeoutMs, remaining), AbortSignal.any([request.signal, record!.controller.signal, AbortSignal.timeout(remaining)]), () => record!.status === "failed"); check();
         await observation.verifyRunning(); check();
         if (!tracked!.runningCapability) {
           const capability = Object.freeze({}); tracked!.runningCapability = capability;
@@ -1934,7 +1934,8 @@ async function observeAdoptedRuntimeOutput(record:RuntimeRecord,executable:strin
  const stopped=(error?:unknown)=>{if(ended)return;ended=true;resolve();if(!expected){record.logsTruncated=true;appendRuntimeLog(record,runtime,"platform","Application output observer is unavailable.");report(error??new Error("Adopted application output observer exited."));}};
  child.once("error",error=>stopped(error));child.once("exit",()=>stopped());
  captureRuntimeOutput(record,runtime,"stdout",child.stdout);captureRuntimeOutput(record,runtime,"stderr",child.stderr);
- return {close(){return closing??=(async()=>{expected=true;if(!ended)child.kill("SIGTERM");await Promise.race([settled,new Promise<void>(done=>setTimeout(done,1000))]);if(!ended){child.kill("SIGKILL");await Promise.race([settled,new Promise<void>(done=>setTimeout(done,2000))]);}if(!ended)throw new Error("Adopted output observer cleanup is unsettled.");})();}};
+ const waitSettled=(ms:number)=>new Promise<void>(done=>{const timer=setTimeout(done,ms);void settled.then(()=>{clearTimeout(timer);done();});});
+ return {close(){return closing??=(async()=>{expected=true;if(!ended)child.kill("SIGTERM");await waitSettled(1000);if(!ended){child.kill("SIGKILL");await waitSettled(2000);}if(!ended)throw new Error("Adopted output observer cleanup is unsettled.");})();}};
 }
 
 function captureRuntimeOutput(
@@ -2149,10 +2150,17 @@ function shortDiagnosticString(value: unknown, label: string): string {
 
 async function waitForChildExit(child: NativeChild, timeoutMs: number): Promise<void> {
   if (child.exitCode !== null && child.exitCode !== undefined) return;
-  await Promise.race([
-    new Promise<void>((resolve) => child.once("exit", () => resolve())),
-    new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
-  ]);
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(done, timeoutMs);
+    child.once("exit", done);
+  });
 }
 
 async function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
@@ -2204,14 +2212,6 @@ function dockerBindSource(value: string): string {
     throw new TypeError("Provider Docker bind paths cannot contain colon, comma, or control characters.");
   }
   return value;
-}
-
-function safeCommand(value: unknown, label: string): string {
-  const command = nonEmpty(value, label);
-  if (command.length > 4_096 || command.includes("\0")) {
-    throw new TypeError(`${label} is invalid.`);
-  }
-  return command;
 }
 
 async function canonicalDirectory(
@@ -2268,11 +2268,6 @@ function roleLabel(process: ContainerProcess): string {
 
 function runtimeLabel(record: RuntimeRecord): string {
   return `${record.candidate.projectId}/g${record.candidate.generation}`;
-}
-
-function boundedFailure(value: string): string {
-  const normalized = value.replace(/[\u0000-\u001f\u007f]+/gu, " ").trim();
-  return normalized.slice(0, 1_024) || "no diagnostic output";
 }
 
 function safeError(error: unknown): string {

@@ -228,7 +228,7 @@ export async function inspectPlatformStorage(
     rootOtherBytes: rootOther.allocatedBytes,
     accountedAllocatedBytes: accounted.allocatedBytes,
     accountedApparentBytes: accounted.apparentBytes,
-    unattributedFilesystemBytes: filesystem.usedBytes === null
+    unattributedFilesystemBytes: typeof filesystem.usedBytes !== "number"
       ? null
       : Math.max(0, filesystem.usedBytes - accounted.allocatedBytes),
   };

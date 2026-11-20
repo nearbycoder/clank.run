@@ -332,6 +332,27 @@ test("public limits reject invalid timers, concurrency, schedules, and clocks", 
   assert.throws(() => clock.set(9), /backwards/);
 });
 
+test("catchAll recovers compound typed failures without swallowing defects and Task.race isolates branch contexts", async () => {
+  const compoundFailure = Task.failCause(Cause.sequential([Cause.failure("first"), Cause.failure("second")]))
+    .catchAll((error) => Task.succeed(`recovered:${error}`));
+  assert.equal(await Task.runPromise(compoundFailure), "recovered:first");
+
+  const withDefect = Task.failCause(Cause.sequential([Cause.failure("first"), Cause.defect(new Error("boom"))]))
+    .catchAll(() => Task.succeed("must-not-swallow"));
+  const defectExit = await Task.runExit(withDefect);
+  assert.equal(defectExit._tag, "Failure");
+  assert.equal(defectExit.cause._tag, "Sequential");
+
+  const clock = new TestClock();
+  const Label = service("Label");
+  const left = Task.sleep(50).flatMap(() => Task.service(Label)).provide(Layer.succeed(Label, "left"));
+  const right = Task.sleep(10).flatMap(() => Task.service(Label)).provide(Layer.succeed(Label, "right"));
+  const winner = Task.runPromise(Task.race(left, right), { clock });
+  await settle();
+  clock.advance(10);
+  assert.equal(await winner, "right");
+});
+
 async function settle() {
   await Promise.resolve();
   await new Promise((resolve) => setImmediate(resolve));

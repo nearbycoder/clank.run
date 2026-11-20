@@ -1,4 +1,4 @@
-import type { Action } from "./ai.ts";
+import { ValidationError, type Action } from "./ai.ts";
 import { createAppPlan, type AppBlueprint, type AppPlan } from "./blueprint.ts";
 
 /** Review envelope used by conversational App Studio clients. */
@@ -121,7 +121,9 @@ export async function testActionContract(action: Action<any, any>, context: Reco
       await action(candidate.input, context);
       results.push({ name: candidate.name, passed: candidate.expected === "success", ...(candidate.expected === "success" ? {} : { message: "Invalid input was accepted." }) });
     } catch (error) {
-      results.push({ name: candidate.name, passed: candidate.expected === "validation-error", ...(candidate.expected === "validation-error" ? {} : { message: error instanceof Error ? error.message : "Action failed." }) });
+      const isValidation = error instanceof ValidationError;
+      const passed = candidate.expected === "validation-error" && isValidation;
+      results.push({ name: candidate.name, passed, ...(passed ? {} : { message: error instanceof Error ? error.message : "Action failed." }) });
     }
   }
   return deepFreeze({ protocol: "clank-contract-test/1", action: action.manifest.name, ok: results.every((result) => result.passed), cases: results });
@@ -199,7 +201,7 @@ function schema(value: SchemaSnapshot, label: string): SchemaSnapshot {
     const indexes: Record<string, readonly string[]> = Object.create(null);
     for (const [index, fields] of indexEntries) {
       identifier(index, `${label} index`);
-      indexes[index] = sorted(fields, `${label} index fields`, 1);
+      indexes[index] = uniqueList(fields, `${label} index fields`, 1);
       for (const field of fields) if (!columns[field]) throw new TypeError(`${label} index ${index} references an unknown column.`);
     }
     tables[name] = { columns, indexes };
@@ -211,7 +213,7 @@ function indexChange(kind: "create-index", table: string, index: string, fields:
 function sqlType(column: SchemaColumn): string { return ({ text: "TEXT", integer: "INTEGER", real: "REAL", blob: "BLOB", json: "TEXT", boolean: "INTEGER" } as const)[column.type]; }
 function quote(value: string): string { return `"${value.replace(/"/gu, '""')}"`; }
 function literal(value: string | number | boolean | null): string { if (value === null) return "NULL"; if (typeof value === "boolean") return value ? "1" : "0"; if (typeof value === "number") return String(value); return `'${value.replace(/'/gu, "''")}'`; }
-function sample(schema: Record<string, any>): unknown { if (schema.default !== undefined) return clone(schema.default); if (schema.const !== undefined) return clone(schema.const); if (Array.isArray(schema.enum)) return clone(schema.enum[0]); if (Array.isArray(schema.anyOf)) return sample(schema.anyOf[0] ?? {}); switch (schema.type) { case "object": { const output: Record<string, unknown> = {}; for (const key of schema.required ?? Object.keys(schema.properties ?? {})) output[key] = sample(schema.properties?.[key] ?? {}); return output; } case "array": return schema.minItems > 0 ? [sample(schema.items ?? {})] : []; case "string": return schema.format === "email" ? "test@example.com" : schema.format === "date" ? "2026-08-01" : schema.format === "date-time" ? "2026-08-01T00:00:00.000Z" : schema.format === "uri" ? "https://example.com" : "x".repeat(Math.max(1, schema.minLength ?? 1)); case "integer": return schema.minimum ?? 1; case "number": return schema.minimum ?? 1; case "boolean": return true; case "null": return null; default: return {}; } }
+function sample(schema: Record<string, any>): unknown { if (schema.default !== undefined) return clone(schema.default); if (schema.const !== undefined) return clone(schema.const); if (Array.isArray(schema.enum)) return clone(schema.enum[0]); if (Array.isArray(schema.anyOf)) return sample(schema.anyOf[0] ?? {}); switch (schema.type) { case "object": { const output: Record<string, unknown> = {}; for (const key of schema.required ?? Object.keys(schema.properties ?? {})) output[key] = sample(schema.properties?.[key] ?? {}); return output; } case "array": { const count = Math.max(0, Math.min(100, Number.isSafeInteger(schema.minItems) ? schema.minItems : 0)); return Array.from({ length: count }, () => sample(schema.items ?? {})); } case "string": { if (schema.format === "email") return "test@example.com"; if (schema.format === "date") return "2026-08-01"; if (schema.format === "date-time") return "2026-08-01T00:00:00.000Z"; if (schema.format === "uri") return "https://example.com"; const minLength = Number.isSafeInteger(schema.minLength) && schema.minLength >= 0 ? schema.minLength : 1; const maxLength = Number.isSafeInteger(schema.maxLength) && schema.maxLength >= 0 ? schema.maxLength : Number.MAX_SAFE_INTEGER; return "x".repeat(Math.min(maxLength, Math.max(minLength, maxLength === 0 ? 0 : 1))); } case "integer": return schema.minimum ?? (typeof schema.maximum === "number" ? Math.min(1, Math.floor(schema.maximum)) : 1); case "number": return schema.minimum ?? (typeof schema.maximum === "number" ? Math.min(1, schema.maximum) : 1); case "boolean": return true; case "null": return null; default: return {}; } }
 function schemaAllowsNull(schema: Record<string, any>): boolean { return schema.type === "null" || (Array.isArray(schema.anyOf) && schema.anyOf.some((member) => member?.type === "null")); }
 function redact(value: unknown, keys: ReadonlySet<string>, depth = 0): unknown { if (depth > 20) return "[depth-limited]"; if (value === undefined) return null; if (value === null || typeof value === "number" || typeof value === "boolean") return value; if (typeof value === "string") return value.length > 16_000 ? `${value.slice(0, 16_000)}…` : value; if (Array.isArray(value)) return value.slice(0, 1_000).map((item) => redact(item, keys, depth + 1)); if (plain(value)) { const output: Record<string, unknown> = Object.create(null); for (const [key, item] of Object.entries(value).slice(0, 1_000)) output[key] = keys.has(key.toLowerCase()) ? "[redacted]" : redact(item, keys, depth + 1); return output; } return String(value).slice(0, 16_000); }
 function safeError(error: unknown): string { const message = error instanceof Error ? error.message : "Action failed."; return message.replace(/[\r\n\0]/gu, " ").slice(0, 1_000); }
@@ -219,7 +221,8 @@ function identifier(value: unknown, label: string): string { if (typeof value !=
 function bounded(value: unknown, label: string, max: number): string { if (typeof value !== "string" || value.trim().length === 0 || value.length > max || value.includes("\0")) throw new TypeError(`${label} is invalid.`); return value.trim(); }
 function integer(value: unknown, label: string, min: number, max: number): number { if (!Number.isSafeInteger(value) || Number(value) < min || Number(value) > max) throw new TypeError(`${label} must be an integer from ${min} through ${max}.`); return Number(value); }
 function finite(value: unknown, label: string, min: number, max: number): number { if (typeof value !== "number" || !Number.isFinite(value) || value < min || value > max) throw new TypeError(`${label} must be from ${min} through ${max}.`); return value; }
-function sorted(value: unknown, label: string, minimum = 0): readonly string[] { if (!Array.isArray(value) || value.length < minimum || value.length > 10_000 || value.some((item) => typeof item !== "string" || item.length > 500 || item.includes("\0"))) throw new TypeError(`${label} is invalid.`); return deepFreeze([...new Set(value)].sort()); }
+function uniqueList(value: unknown, label: string, minimum = 0): readonly string[] { if (!Array.isArray(value) || value.length < minimum || value.length > 10_000 || value.some((item) => typeof item !== "string" || item.length > 500 || item.includes("\0"))) throw new TypeError(`${label} is invalid.`); return deepFreeze([...new Set(value)]); }
+function sorted(value: unknown, label: string, minimum = 0): readonly string[] { return deepFreeze([...uniqueList(value, label, minimum)].sort()); }
 function validColumnDefault(column: SchemaColumn): boolean { const value = column.default; if (value === undefined) return true; if (value === null) return column.nullable === true; if (column.type === "text" || column.type === "json" || column.type === "blob") return typeof value === "string"; if (column.type === "integer") return Number.isSafeInteger(value); if (column.type === "real") return typeof value === "number" && Number.isFinite(value); return column.type === "boolean" && typeof value === "boolean"; }
 function member<T extends string>(value: unknown, values: readonly T[], label: string): T { if (!values.includes(value as T)) throw new TypeError(`${label} is invalid.`); return value as T; }
 function clone(value: unknown): any { return JSON.parse(canonical(value)); }

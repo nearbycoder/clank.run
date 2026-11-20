@@ -247,7 +247,7 @@ export function createStripeBillingProvider(
     return await pending;
   };
 
-  return Object.freeze({
+  const provider: BillingProvider = {
     name: "stripe",
     planIds,
     async createCheckout(input) {
@@ -336,7 +336,8 @@ export function createStripeBillingProvider(
         throw new BillingWebhookError(error);
       }
     },
-  });
+  };
+  return Object.freeze(provider);
 }
 
 async function verifyStripeSignature(
@@ -380,7 +381,7 @@ async function verifyStripeSignature(
   );
   for (const signature of signatures) {
     if (!/^[a-f0-9]{64}$/u.test(signature)) continue;
-    if (await crypto.subtle.verify("HMAC", key, hex(signature), payload)) return timestamp;
+    if (await crypto.subtle.verify("HMAC", key, hex(signature) as BufferSource, payload)) return timestamp;
   }
   throw new TypeError("Stripe signature does not match.");
 }
@@ -590,14 +591,17 @@ function subscriptionPlanId(
 }
 
 function subscriptionPeriodEnd(value: Record<string, any>): number | null {
-  if (value.current_period_end !== undefined) {
+  if (value.current_period_end !== undefined && value.current_period_end !== null) {
     return seconds(value.current_period_end, "subscription.current_period_end");
   }
   const rows = plain(value.items) && Array.isArray(value.items.data) ? value.items.data : [];
-  const periods = rows.slice(0, 100).map((row) => {
+  const periods: number[] = [];
+  for (const row of rows.slice(0, 100)) {
     if (!plain(row)) throw new TypeError("Stripe subscription item is invalid.");
-    return seconds(row.current_period_end, "subscription item current_period_end");
-  });
+    if (row.current_period_end !== undefined && row.current_period_end !== null) {
+      periods.push(seconds(row.current_period_end, "subscription item current_period_end"));
+    }
+  }
   return periods.length ? Math.max(...periods) : null;
 }
 

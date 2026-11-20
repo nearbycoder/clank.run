@@ -261,7 +261,7 @@ async function openRecovery(database: SQLiteDatabase<any>, options: PointInTimeR
       after() { for (const { session } of sessions) session.close(); sessions = []; },
       close() { for (const { session } of sessions) session.close(); sentinel.close(); key.fill(0); },
     };
-    } catch (error) { connection.exec("ROLLBACK"); throw error; }
+    } catch (error) { try { connection.exec("ROLLBACK"); } catch {} throw error; }
   });
   const manager = bridge?{create:()=> (openBackupManager as any)[SQLITE_INTERNAL].source(bridge.token,bridge.root,bridge.pins),close(){}}:await openBackupManager({ databasePath: connection.path, repositoryDirectory: path.join(directory, "base"), encryptionKey: key, keyId, maxBackups: 2, maxDatabaseBytes: stateMaximum * 4 });bridge?.current();
   let timer: ReturnType<typeof setInterval> | undefined, flight: Promise<PointInTimeRecoveryStatus> | undefined, closed = false;
@@ -293,7 +293,7 @@ async function openRecovery(database: SQLiteDatabase<any>, options: PointInTimeR
           const rows=connection.prepare("SELECT * FROM clank_pitr_state LIMIT 2").all();
           if(Number(updated.changes)!==1||rows.length!==1||JSON.stringify(rows[0])!==JSON.stringify(next))throw new Error("Private base acknowledgment was not retained exactly.");
           bridge.current();connection.exec("COMMIT");bridge.current();initializedState=next;
-        }catch(error){connection.exec("ROLLBACK");throw error;}
+        }catch(error){try{connection.exec("ROLLBACK");}catch{}throw error;}
       });
     }
     const manifest = { protocol: "clank-pitr-repository/1", epoch: state().epoch, keyId, baseBackupId: state().base_id };
@@ -312,7 +312,7 @@ async function openRecovery(database: SQLiteDatabase<any>, options: PointInTimeR
         await syncWrite(path.join(directory, `${String(cursor).padStart(16, "0")}.json`), String(row.envelope));
         sourceAdmission();controlled(()=>{
           if(!bridge){connection.prepare("UPDATE clank_pitr_state SET exported=? WHERE id=1").run(cursor);return;}
-          connection.exec("BEGIN IMMEDIATE");try{const updated=connection.prepare("UPDATE clank_pitr_state SET exported=? WHERE id=1 AND exported=?").run(cursor,cursor-1);if(Number(updated.changes)!==1||connection.prepare("SELECT exported FROM clank_pitr_state WHERE id=1").get()?.exported!==cursor)throw new Error("Private journal publication was not retained.");bridge.current();connection.exec("COMMIT");bridge.current();}catch(error){connection.exec("ROLLBACK");throw error;}
+          connection.exec("BEGIN IMMEDIATE");try{const updated=connection.prepare("UPDATE clank_pitr_state SET exported=? WHERE id=1 AND exported=?").run(cursor,cursor-1);if(Number(updated.changes)!==1||connection.prepare("SELECT exported FROM clank_pitr_state WHERE id=1").get()?.exported!==cursor)throw new Error("Private journal publication was not retained.");bridge.current();connection.exec("COMMIT");bridge.current();}catch(error){try{connection.exec("ROLLBACK");}catch{}throw error;}
         });sourceAdmission();
       }
       const headRow = state();
@@ -539,7 +539,7 @@ async function openRecovery(database: SQLiteDatabase<any>, options: PointInTimeR
           if(!Number.isSafeInteger(retained.bytes)||Number(retained.bytes)<0||Number(retained.bytes)+bytes>maxRemoteExportBytes)throw new Error("Recovery export receipt byte capacity is exhausted; retained receipts are preserved.");
           connection.prepare("INSERT INTO clank_pitr_remote_exports VALUES(?,?,?,?,?)").run(bounds.operationId,limits.bytes,limits.entries,encoded,bytes);
           assertSealed();connection.exec("COMMIT");
-        }catch(error){connection.exec("ROLLBACK");throw error;}
+        }catch(error){try{connection.exec("ROLLBACK");}catch{}throw error;}
         assertSealed();if(closed)throw new Error("Recovery source closed after export receipt publication.");
       }
       return archive;
@@ -571,10 +571,12 @@ Object.defineProperty(openPointInTimeRecovery,SQLITE_INTERNAL,{value:Object.free
     root=await createPinnedSQLiteChildDirectory(parent,".clank-source-recovery-"+context.binding.sourceIncarnation,current);pins.push(root);current();
     const publish=async(file:string,contents:string)=>{
       current();if(path.dirname(file)!==root!.anchor)throw new Error("Invalid private repository publication.");
-      const temporary=file+".tmp-"+globalThis.crypto.randomUUID(),handle=await fs.open(temporary,"wx",0o600);let identity:any;
-      try{current();identity=await handle.stat();current();await checked(()=>handle.writeFile(contents));await checked(()=>handle.sync());}finally{await handle.close();}current();
-      await checked(()=>fs.link(temporary,file));
-      current();const actual=native.lstatSync(temporary);if(actual.dev!==identity.dev||actual.ino!==identity.ino)throw new Error("Private repository temporary changed.");native.unlinkSync(temporary);
+      const temporary=file+".tmp-"+globalThis.crypto.randomUUID(),handle=await fs.open(temporary,"wx",0o600);let identity:any,linked=false;
+      try{
+        try{current();identity=await handle.stat();current();await checked(()=>handle.writeFile(contents));await checked(()=>handle.sync());}finally{await handle.close();}current();
+        await checked(()=>fs.link(temporary,file));linked=true;
+        current();const actual=native.lstatSync(temporary);if(actual.dev!==identity.dev||actual.ino!==identity.ino)throw new Error("Private repository temporary changed.");native.unlinkSync(temporary);
+      }catch(error){if(!linked)try{native.unlinkSync(temporary);}catch{}throw error;}
       const directory=await fs.open(root!.anchor,"r");try{current();await checked(()=>directory.sync());}finally{await directory.close();}current();
     };
     const capture=context.binding.capture;
@@ -1055,7 +1057,7 @@ async function inspectSealedSource(options:PointInTimeTransferSourceInspectionOp
   const current=restoreGuard(options.maxDurationMs,()=>assertUndefined(assertion)),maximum=bounded(options.maxDatabaseBytes??512*1024*1024,"maxDatabaseBytes",4096,512*1024*1024),stateMaximum=bounded(options.maxStateBytes??32*1024*1024,"maxStateBytes",1024,128*1024*1024);
   const tail=exportTail?options as PointInTimeTransferSealedExportOptions:undefined;
   const request={binding,after,stateMaximum,maximum,...(tail?{expectedCursor:transferCursor(tail.expectedCursor),throughSequence:bounded(tail.throughSequence,"throughSequence",1,Number.MAX_SAFE_INTEGER),limits:transferBounds(tail)}:{})};
-  let pinned:PinnedSQLiteDirectory|undefined;
+  let pinned:PinnedSQLiteDirectory|undefined,succeeded=false;
   try {
     current();const fsName="node:fs",pathName="node:path";const [fs,path]=await Promise.all([import(fsName),import(pathName)]);current();
     if((globalThis as any).process.platform!=="linux"||typeof sourcePath!=="string"||!sourcePath||sourcePath.includes("\0"))throw new Error("Source inspection requires an exact private Linux file.");
@@ -1066,8 +1068,9 @@ async function inspectSealedSource(options:PointInTimeTransferSourceInspectionOp
     const check=()=>{current();const visible=fs.lstatSync(parent),actual=fs.lstatSync(anchored);if(visible.dev!==directory.dev||visible.ino!==directory.ino||actual.dev!==file.dev||actual.ino!==file.ino||!actual.isFile()||actual.nlink!==1)throw new Error("Retained source path changed during inspection.");};
     check();const result=await runSQLiteTask<PointInTimeTransferSourceSeal|PointInTimeTransferBatch>("recovery","inspectSourceSeal",[source,{...request,fileIdentity:{dev:file.dev,ino:file.ino},key:Array.from(key)}],[pinned]);check();
     // The worker returns only validated bounded immutable protocol data.
+    succeeded=true;
     return freezeSourceProof(result);
-  }finally{key.fill(0);await pinned?.close();current();}
+  }finally{key.fill(0);await pinned?.close();if(succeeded)current();}
 }
 
 function freezeSourceProof<T>(value:T):T {

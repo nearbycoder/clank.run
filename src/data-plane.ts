@@ -157,9 +157,10 @@ export function createManagedIngress(options: {
     waiters: Set<() => void>;
   }>();
   const preparations = new Map<string, Promise<void>>();
-  const routeSource = typeof options.routes === "function"
-    ? options.routes
-    : () => options.routes.routes();
+  const routesInput = options.routes;
+  const routeSource = typeof routesInput === "function"
+    ? routesInput
+    : () => routesInput.routes();
 
   const recordCircuitFailure = (routeId: string, target: string): void => {
     const existing = circuits.get(routeId);
@@ -523,7 +524,7 @@ export function createManagedIngress(options: {
           response = await fetcher(target, {
             method: request.method,
             headers,
-            body,
+            body: body as BodyInit | undefined,
             signal: AbortSignal.any([controller.signal, request.signal]),
             redirect: "manual",
           });
@@ -714,8 +715,8 @@ export async function inspectDomainRouting(
     dnsLookup(() => resolver.resolveCname(hostname), true),
     dnsLookup(() => resolver.resolve4(hostname)),
     dnsLookup(() => resolver.resolve6(hostname)),
-    cname ? dnsLookup(() => resolver.resolve4(cname)) : Promise.resolve({ values: [] as string[] }),
-    cname ? dnsLookup(() => resolver.resolve6(cname)) : Promise.resolve({ values: [] as string[] }),
+    cname ? dnsLookup(() => resolver.resolve4(cname)) : Promise.resolve({ values: [] as string[], error: undefined as string | undefined }),
+    cname ? dnsLookup(() => resolver.resolve6(cname)) : Promise.resolve({ values: [] as string[], error: undefined as string | undefined }),
   ]);
   const cnames = uniqueDnsValues(cnameLookup.values.map(normalizeDnsName));
   const addresses = uniqueDnsAddresses([...ipv4Lookup.values, ...ipv6Lookup.values]);
@@ -811,10 +812,13 @@ export function createDomainManager(options: {
     async verify(idInput) {
       const id = opaque(idInput, "domain challenge ID");
       const challenge = await options.store.get(id);
-      if (!challenge || challenge.expiresAt <= Date.now()) {
+      if (!challenge) {
         throw new DomainVerificationError("INVALID_CHALLENGE", "Domain challenge is invalid or expired.");
       }
-      if (challenge.status === "verified") return challenge;
+      if (challenge.status === "verified") return structuredClone(challenge);
+      if (challenge.expiresAt <= Date.now()) {
+        throw new DomainVerificationError("INVALID_CHALLENGE", "Domain challenge is invalid or expired.");
+      }
       const records = await resolver(challenge.recordName);
       const values = records.map((record) => record.join(""));
       if (!values.includes(challenge.recordValue)) {
@@ -904,8 +908,8 @@ export function createHttpPostgresDriver(options: {
   };
   return {
     dialect: "postgres",
-    async query(statement) {
-      return await execute([statement], false).then((results) => results[0] as SqlResult);
+    async query<Row extends Record<string, unknown> = Record<string, unknown>>(statement: SqlStatement): Promise<SqlResult<Row>> {
+      return await execute([statement], false).then((results) => results[0] as SqlResult<Row>);
     },
     transaction: (statements) => execute(statements, true),
     async health() {
@@ -1054,6 +1058,7 @@ function proxyRequestHeaders(request: Request, host: string, trustProxy: boolean
   stripHopHeaders(headers);
   headers.delete("host");
   headers.delete("content-length");
+  headers.set("accept-encoding", "identity");
   for (const name of MANAGED_INGRESS_HEADERS) headers.delete(name);
   const remote = trustProxy
     ? request.headers.get("x-forwarded-for")?.split(",", 1)[0]?.trim()
@@ -1172,6 +1177,11 @@ function proxyResponseHeaders(input: Headers, routeId: string): Headers {
   const headers = new Headers(input);
   stripHopHeaders(headers);
   headers.delete("server");
+  // Fetch transparently decompresses upstream bodies; forwarding stale encoding/length breaks clients.
+  if (headers.has("content-encoding")) {
+    headers.delete("content-encoding");
+    headers.delete("content-length");
+  }
   for (const name of MANAGED_INGRESS_HEADERS) headers.delete(name);
   headers.set("x-clank-route-id", routeId);
   headers.set("x-content-type-options", "nosniff");
@@ -1369,7 +1379,7 @@ function secureHttpUrl(input: string, name: string): string {
     || url.password
     || url.hash
     || (url.protocol !== "https:"
-      && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "::1"].includes(url.hostname)))
+      && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)))
   ) throw new TypeError(`${name} must use HTTPS, except for loopback development.`);
   return url.href;
 }

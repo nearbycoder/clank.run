@@ -126,16 +126,19 @@ export function mountVirtualCollection<Value>(container: HTMLElement, options: {
         if(role==="grid")mount.wrapper.setAttribute("aria-rowindex",String(item.index+1));else{mount.wrapper.setAttribute("aria-posinset",String(item.index+1));mount.wrapper.setAttribute("aria-setsize",String(snapshot.count));}
       }
       // Match DOM reading order after insertions/reorders while retaining row identity.
+      const previouslyFocused = hadFocus && !removedFocus ? doc.activeElement as HTMLElement | null : null;
       let before:ChildNode|null=null;
       for(const item of [...snapshot.items].reverse()){const node=mounted.get(item.key)!.wrapper;if(node.nextSibling!==before)canvas.insertBefore(node,before);before=node;}
       if(hadFocus&&removedFocus){const active=snapshot.items.find(item=>item.index===snapshot.activeIndex);(active?mounted.get(active.key)!.wrapper:viewport).focus({preventScroll:true});}
+      else if(previouslyFocused && previouslyFocused.isConnected && doc.activeElement !== previouslyFocused){previouslyFocused.focus({preventScroll:true});}
     }finally{rendering=false;}
   };
   const resize=()=>model.setViewport(viewport.scrollTop,viewport.clientHeight);
   const scroll=()=>model.setViewport(viewport.scrollTop,viewport.clientHeight);
   const keydown=(event:KeyboardEvent)=>{
     if(event.altKey||event.ctrlKey||event.metaKey||event.shiftKey)return;
-    if(event.target!==viewport && !(event.target instanceof doc.defaultView!.HTMLElement && event.target.parentElement===canvas))return;
+    const ElementCtor = doc.defaultView?.HTMLElement ?? globalThis.HTMLElement;
+    if(event.target!==viewport && !(ElementCtor && event.target instanceof ElementCtor && event.target.parentElement===canvas))return;
     if(!model.navigate(event.key))return;event.preventDefault();render();const snapshot=model.snapshot();const item=snapshot.items.find(item=>item.index===snapshot.activeIndex);if(item)mounted.get(item.key)!.wrapper.focus({preventScroll:true});
   };
   const focusin=(event:FocusEvent)=>{const row=[...mounted.values()].find(mount=>mount.wrapper===event.target);if(row&&model.snapshot().activeIndex!==row.index)model.focus(row.index);};

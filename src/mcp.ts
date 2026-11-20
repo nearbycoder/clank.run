@@ -142,7 +142,7 @@ export interface McpServer<Context = unknown> {
   readonly apps: ReadonlyMap<string, McpAppDefinition>;
   readonly revision: string;
   readonly supportsToolListChanged: boolean;
-  manifest(scopes?: ReadonlySet<string>): {
+  manifest(scopes?: ReadonlySet<string>, allowedActions?: ReadonlySet<string>): {
     protocol: "mcp";
     protocolVersion: typeof MCP_PROTOCOL_VERSION;
     revision: string;
@@ -738,7 +738,11 @@ export function createMcpServer<Context = unknown>(
           modern,
           supportsMcpApps,
         );
-        emitActivity(isRecord(result) && result.isError === true ? "error" : "ok");
+        const isDenied = isRecord(result) && result.isError === true
+          && isRecord(result.structuredContent)
+          && isRecord(result.structuredContent.error)
+          && result.structuredContent.error.code === "GRANT_RESTRICTED";
+        emitActivity(isDenied ? "denied" : isRecord(result) && result.isError === true ? "error" : "ok");
         let created: McpSession | undefined;
         if (!modern && message.method === "initialize" && sessionOptions) {
           created = createSession(requestedProtocol, supportsMcpApps) ?? undefined;
@@ -1404,12 +1408,11 @@ function validateToolHeaders(
       if (typeof cursor !== "boolean" || decoded !== String(cursor)) return `${binding.headerName} does not match its boolean argument.`;
       continue;
     }
-    const numeric = Number(decoded);
     if (
       typeof cursor !== "number"
       || !Number.isSafeInteger(cursor)
-      || !Number.isSafeInteger(numeric)
-      || numeric !== cursor
+      || !/^-?(?:0|[1-9][0-9]*)(?:\.0+)?$/u.test(decoded)
+      || Number(decoded) !== cursor
     ) return `${binding.headerName} does not match its integer argument.`;
   }
   return null;
@@ -1435,14 +1438,7 @@ function modernResult<Context>(
   };
 }
 
-function notificationResponse(method: string): Response {
-  if (
-    method === "notifications/initialized"
-    || method === "notifications/cancelled"
-    || method.startsWith("notifications/")
-  ) {
-    return new Response(null, { status: 202, headers: { "cache-control": "no-store" } });
-  }
+function notificationResponse(_method: string): Response {
   return new Response(null, { status: 202, headers: { "cache-control": "no-store" } });
 }
 
@@ -1531,7 +1527,7 @@ function browserCorsPreflight(request: Request): Response {
     "mcp-protocol-version",
     "mcp-session-id",
   ];
-  if (headers.some((header) => !alwaysAllowed.includes(header) && !/^mcp-param-[a-z0-9-]{1,128}$/u.test(header))) {
+  if (headers.some((header) => !alwaysAllowed.includes(header) && !/^mcp-param-[!#$%&'*+.^_`|~0-9a-z-]{1,128}$/u.test(header))) {
     return rpcHttpError(400, null, -32600, "CORS request headers are not supported.");
   }
   const allowedHeaders = [...new Set([...alwaysAllowed, ...headers])];

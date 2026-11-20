@@ -262,3 +262,59 @@ test("WebAuthn rejects a counter reset to zero while allowing counterless passke
     credential, challenge, origin, rpId, stored: { ...stored, counter: 0 },
   }), { counter: 0, userVerified: true });
 });
+
+test("WebAuthn accepts authenticator data with CBOR extensions when ED flag is set", async () => {
+  const rpId = "todo.test";
+  const origin = "https://todo.test";
+  const challenge = base64url(Buffer.from("extension challenge with enough entropy"));
+  const credentialId = new Uint8Array(16).map((_, index) => index + 10);
+  const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
+  const jwk = publicKey.export({ format: "jwk" });
+  const cose = new Map([[1, 2], [3, -7], [-1, 1], [-2, decode(jwk.x)], [-3, decode(jwk.y)]]);
+  const extensions = cbor(new Map([["credProps", new Map([["rk", 1]])]]));
+  const regAuthData = concatenate(
+    sha256(rpId),
+    Uint8Array.of(0xc5), // UP | UV | AT | ED
+    unsigned32(1),
+    new Uint8Array(16),
+    Uint8Array.of(0, credentialId.byteLength),
+    credentialId,
+    cbor(cose),
+    extensions,
+  );
+  const attestation = cbor(new Map([["fmt", "none"], ["attStmt", new Map()], ["authData", regAuthData]]));
+  const regClientData = new TextEncoder().encode(JSON.stringify({ type: "webauthn.create", challenge, origin }));
+  const stored = await verifyPasskeyRegistration({
+    credential: {
+      id: base64url(credentialId),
+      rawId: base64url(credentialId),
+      type: "public-key",
+      response: { clientDataJSON: base64url(regClientData), attestationObject: base64url(attestation) },
+    },
+    challenge,
+    origin,
+    rpId,
+  });
+  assert.equal(stored.credentialId, base64url(credentialId));
+
+  const authAuthData = concatenate(sha256(rpId), Uint8Array.of(0x85), unsigned32(2), extensions);
+  const authClientData = new TextEncoder().encode(JSON.stringify({ type: "webauthn.get", challenge, origin }));
+  const verified = await verifyPasskeyAuthentication({
+    credential: {
+      id: base64url(credentialId),
+      rawId: base64url(credentialId),
+      type: "public-key",
+      response: {
+        clientDataJSON: base64url(authClientData),
+        authenticatorData: base64url(authAuthData),
+        signature: base64url(sign("sha256", concatenate(authAuthData, sha256(authClientData)), privateKey)),
+        userHandle: null,
+      },
+    },
+    challenge,
+    origin,
+    rpId,
+    stored,
+  });
+  assert.deepEqual(verified, { counter: 2, userVerified: true });
+});

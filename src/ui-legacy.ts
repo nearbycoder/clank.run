@@ -255,6 +255,7 @@ export function clickOutside(
   return (element) => {
     const document = element.ownerDocument;
     const listener = (event: PointerEvent) => {
+      if (event.defaultPrevented || event.button > 0) return;
       const path = typeof event.composedPath === "function" ? event.composedPath() : [];
       if (path.includes(element)) return;
       const target = event.target;

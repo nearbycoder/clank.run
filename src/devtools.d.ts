@@ -1,7 +1,7 @@
-import { renderErrorInbox, type ErrorInboxSnapshot } from "./error-inbox.js";
-import { adviseQueries, type DatabaseQueryDiagnostic, type QueryAdvice } from "./query-advisor.js";
-import { renderAgentActivity, type AgentActivitySnapshot } from "./agent-activity.js";
-import { renderTraceTimeline, type TraceTimelineSnapshot } from "./trace-timeline.js";
+import type { ErrorInboxSnapshot } from "./error-inbox.js";
+import type { DatabaseQueryDiagnostic, QueryAdvice } from "./query-advisor.js";
+import type { AgentActivitySnapshot } from "./agent-activity.js";
+import type { TraceTimelineSnapshot } from "./trace-timeline.js";
 import type { ReactiveDiagnostic, Cleanup } from "./core.js";
 import type { QueryDiagnostic } from "./backend.js";
 import type { HydrationDiagnostic } from "./hydration-inspection.js";

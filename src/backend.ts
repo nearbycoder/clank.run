@@ -992,7 +992,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
     ensureOpen();
     const { where, parameters } = querySelection(schema, name, conditions, ownerId);
     const orderSql = order
-      ? ` ORDER BY ${fieldExpression(order.field)} ${order.direction.toUpperCase()}`
+      ? ` ORDER BY ${fieldExpression(order.field)} ${order.direction.toUpperCase()}${order.field === "_creationTime" ? `, _id ${order.direction.toUpperCase()}` : ""}`
       : " ORDER BY _creation_time ASC, _id ASC";
     const limitSql = count === undefined ? "" : ` LIMIT ${validateLimit(count)}`;
     const sql = `SELECT _id, _owner_id, _creation_time, _version, _data FROM ${tableIdentifier(name)}${where}${orderSql}${limitSql}`;
@@ -2757,6 +2757,7 @@ export async function openBackend<
     for (const [key, entry] of cache) {
       if (entry.dependencies.some(affects)) {
         entry.dirty = true;
+        entry.body = undefined;
         const diagnostic = queryDiagnostic(entry.path);
         if (diagnostic) diagnostic.lastInvalidation = invalidationReason;
         invalidated.add(key);
@@ -3126,7 +3127,7 @@ export async function openBackend<
     async handle(request) {
       ensureOpen();
       const url = new URL(request.url);
-      const securityRoute = (securityRoutePattern ??= new RegExp('^'+prefix+'/organizations/([A-Za-z0-9_-]{8,128})/security-policy(?:/(preview|recover))?$','u')).exec(url.pathname);
+      const securityRoute = (securityRoutePattern ??= new RegExp('^'+prefix.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")+'/organizations/([A-Za-z0-9_-]{8,128})/security-policy(?:/(preview|recover))?$','u')).exec(url.pathname);
       if (securityRoute) {
         try {
           if (!organizationSecurity || securityRoute[1] !== options.organizationSecurity?.organizationId) return problem(404,'NOT_FOUND','Organization security is unavailable.');
@@ -3332,6 +3333,7 @@ export async function openBackend<
       liveDisconnects.clear();
       stopChanges();
       subscribers.clear();
+      servedQuery = undefined;
       cache.clear();
       queryDiagnostics.clear();
       replayStore?.clear();
@@ -4047,11 +4049,16 @@ function databaseChange(
   });
 }
 
+const deepFrozenSnapshots = new WeakSet<object>();
+
 function immutableSnapshot<Value>(value: Value): Value {
-  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
-  // Freezing before descending marks the object as visited, so a cycle stops
-  // at the frozen check without a separate visited set.
-  Object.freeze(value);
+  if (!value || typeof value !== "object") return value;
+  if (Object.isFrozen(value)) {
+    if (deepFrozenSnapshots.has(value)) return value;
+    deepFrozenSnapshots.add(value);
+  } else {
+    Object.freeze(value);
+  }
   if (Array.isArray(value)) {
     for (let index = 0; index < value.length; index++) immutableSnapshot(value[index]);
   } else {

@@ -120,7 +120,6 @@ function parseElement(state, start) {
         const quote = source[index++];
         const valueStart = index;
         while (index < source.length && source[index] !== quote) {
-          if (source[index] === "\\") index++;
           index++;
         }
         if (source[index] !== quote) throw syntaxError(source, valueStart, "Unterminated JSX attribute string.");
@@ -143,6 +142,7 @@ function parseElement(state, start) {
   }
 
   const children = [];
+  let closed = selfClosing;
   if (!selfClosing) {
     while (index < source.length) {
       if (source.startsWith("</", index)) {
@@ -160,6 +160,7 @@ function parseElement(state, start) {
           if (source[index] !== ">") throw syntaxError(source, index, `Expected > after </${tag}.`);
           index++;
         }
+        closed = true;
         break;
       }
       if (source[index] === "<") {
@@ -186,7 +187,7 @@ function parseElement(state, start) {
     }
   }
 
-  if (!selfClosing && index >= source.length && !source.slice(start, index).includes(fragment ? "</>" : `</${tag}>`)) {
+  if (!closed) {
     throw syntaxError(source, start, `Unclosed JSX ${fragment ? "fragment" : `<${tag}>`}.`);
   }
   const type = fragment ? FRAGMENT : tagExpression(tag);
@@ -237,7 +238,15 @@ function isLiteral(code) {
   const input = code.trim();
   if (["true", "false", "null", "undefined", "NaN", "Infinity"].includes(input)) return true;
   const quote = input[0];
-  if ((quote === '"' || quote === "'") && input.length >= 2 && input.at(-1) === quote) return true;
+  if (quote === '"' || quote === "'") {
+    let index = 1;
+    while (index < input.length) {
+      if (input[index] === "\\") index += 2;
+      else if (input[index] === quote) return index === input.length - 1;
+      else index++;
+    }
+    return false;
+  }
   return isNumericLiteral(input);
 }
 
@@ -323,11 +332,22 @@ function readBalanced(source, start, open, close) {
 
 function skipLiteralOrComment(source, index) {
   const quote = source[index];
-  if (quote === '"' || quote === "'" || quote === "`") {
+  if (quote === '"' || quote === "'") {
     index++;
     while (index < source.length) {
       if (source[index] === "\\") index += 2;
       else if (source[index] === quote) return index + 1;
+      else index++;
+    }
+    return index;
+  }
+  if (quote === "`") {
+    index++;
+    while (index < source.length) {
+      if (source[index] === "\\") index += 2;
+      else if (source[index] === "$" && source[index + 1] === "{") {
+        index = readBalanced(source, index + 1, "{", "}").end;
+      } else if (source[index] === "`") return index + 1;
       else index++;
     }
     return index;

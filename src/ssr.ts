@@ -161,7 +161,8 @@ async function renderPromise(input: Promise<unknown>, context: SSRContext): Prom
   // an input subclass customizes methods such as finally.
   const resolved = await input;
   // This continuation is its own synchronous pass with its own inline components.
-  return endPass(renderValue(resolved as Renderable, context), context);
+  const passContext = { ...context, release: [] };
+  return endPass(renderValue(resolved as Renderable, passContext), passContext);
 }
 
 function joinRendered(values: Rendered[]): Rendered {
@@ -278,7 +279,7 @@ function renderComponent(vnode: VNode, context: SSRContext): Rendered {
   // Keep component-owned values alive through async children.
   return rendered.then(
     (value) => { release(); return value; },
-    (error) => { release(); throw error; },
+    (error) => { try { release(); } catch {} throw error; },
   );
 }
 
@@ -571,14 +572,14 @@ function setSSRAttribute(attributes: Attributes, name: string, value: unknown, t
   putAttribute(attributes, name, value === true ? true : String(value));
 }
 
-const ATTRIBUTE_NAMES: Record<string, string> = {
+const ATTRIBUTE_NAMES: Record<string, string> = Object.assign(Object.create(null), {
   htmlFor: "for",
   agentId: "data-clank-id",
   agentAction: "data-clank-action",
   agentDescription: "data-clank-description",
   agentHidden: "data-clank-hidden",
   intent: "data-clank-intent",
-};
+});
 
 function attributeName(property: string): string {
   return ATTRIBUTE_NAMES[property] ?? property;

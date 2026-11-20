@@ -390,7 +390,7 @@ function stableBucket(value: string): number {
 async function signApproval(value: object, secret: string | Uint8Array): Promise<string> {
   const bytes = typeof secret === "string" ? new TextEncoder().encode(secret) : secret;
   if (!(bytes instanceof Uint8Array) || bytes.byteLength < 32) throw new TypeError("Approval secret must contain at least 32 bytes.");
-  const key = await crypto.subtle.importKey("raw", bytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const key = await crypto.subtle.importKey("raw", bytes as BufferSource, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   return base64url(new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(canonical(value)))));
 }
 

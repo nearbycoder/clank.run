@@ -519,6 +519,6 @@ function exact(value: Record<string, unknown>, allowed: readonly string[]): void
 }
 
 async function digest(value: Uint8Array): Promise<string> {
-  const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", value));
+  const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", value as BufferSource));
   return [...bytes].map((part) => part.toString(16).padStart(2, "0")).join("");
 }

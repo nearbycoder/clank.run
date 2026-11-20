@@ -290,3 +290,59 @@ test("the analytics browser client validates, gates, bounds, and batches memory-
   await client.close();
   assert.throws(() => client.track("todo.created", created()), /closed/u);
 });
+
+test("analytics funnels retain maximum conversion across restarts, exclude expired rows, and client.close drains multiple batches", async (t) => {
+  const clock = { now: NOW };
+  const { analytics } = await runtime(t, { minimumCohortSize: 1, retentionDays: 1, now: () => clock.now });
+  // Subject completes step 0 -> step 1, then starts step 0 again later without completing step 1.
+  analytics.track("todo.created", created(), { consent: "granted", subject: "user-1", occurredAt: NOW - 10_000 });
+  analytics.track("todo.completed", { source: "list" }, { consent: "granted", subject: "user-1", occurredAt: NOW - 5_000 });
+  analytics.track("todo.created", created(), { consent: "granted", subject: "user-1", occurredAt: NOW - 1_000 });
+  const funnel = analytics.funnel("activation", { from: NOW - DAY, to: NOW + 1 });
+  assert.deepEqual(funnel.steps, [
+    { event: "todo.created", subjects: 1, conversionFromFirst: 1 },
+    { event: "todo.completed", subjects: 1, conversionFromFirst: 1 },
+  ]);
+
+  // After expiry, query/funnel must exclude expired rows even before purge().
+  clock.now = NOW + 31 * DAY;
+  const expiredQuery = analytics.query({ event: "todo.created", from: NOW - DAY, to: NOW + 1 });
+  assert.equal(expiredQuery.total, null);
+  const expiredFunnel = analytics.funnel("activation", { from: NOW - DAY, to: NOW + 1 });
+  assert.equal(expiredFunnel.scannedEvents, 0);
+  assert.equal(expiredFunnel.steps[0].subjects, null);
+
+  // Client close() must drain more than MAX_BATCH (50) queued events across multiple batches.
+  const batches = [];
+  const client = createAnalyticsClient(definition(), {
+    consent: () => true,
+    doNotTrack: () => false,
+    maxQueue: 120,
+    flushIntervalMs: 60_000,
+    now: () => NOW,
+    async send(events) { batches.push(events.length); },
+  });
+  for (let index = 0; index < 49; index++) client.track("todo.created", created());
+  // Add a second batch worth by letting auto-flush on 50 not run until close via slow send:
+  const slowBatches = [];
+  let releaseFirst;
+  const slowClient = createAnalyticsClient(definition(), {
+    consent: () => true,
+    doNotTrack: () => false,
+    maxQueue: 120,
+    flushIntervalMs: 60_000,
+    now: () => NOW,
+    async send(events) {
+      if (slowBatches.length === 0) await new Promise((resolve) => { releaseFirst = resolve; });
+      slowBatches.push(events.length);
+    },
+  });
+  for (let index = 0; index < 65; index++) slowClient.track("todo.created", created());
+  const closing = slowClient.close();
+  releaseFirst();
+  await closing;
+  assert.deepEqual(slowBatches, [25, 25, 15]);
+  assert.equal(slowClient.queued, 0);
+  await client.close();
+  assert.deepEqual(batches, [25, 24]);
+});

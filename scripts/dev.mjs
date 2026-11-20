@@ -10,18 +10,32 @@ const example = join(root, "examples", "hello");
 const port = Number(process.env.PORT ?? 4173);
 let building = build({ quiet: true });
 let debounce;
+let rebuilding = false;
+let rebuildPending = false;
 
-async function rebuild() {
-  clearTimeout(debounce);
-  debounce = setTimeout(async () => {
-    try {
+async function runBuild() {
+  if (rebuilding) {
+    rebuildPending = true;
+    return;
+  }
+  rebuilding = true;
+  try {
+    do {
+      rebuildPending = false;
       building = build({ quiet: true });
       await building;
       console.log("Rebuilt Clank.");
-    } catch (error) {
-      console.error(error);
-    }
-  }, 50);
+    } while (rebuildPending);
+  } catch (error) {
+    console.error(error);
+  } finally {
+    rebuilding = false;
+  }
+}
+
+function rebuild() {
+  clearTimeout(debounce);
+  debounce = setTimeout(() => { void runBuild(); }, 50);
 }
 
 async function watchTree(directory) {
@@ -67,9 +81,10 @@ async function handle(request, response) {
   let path = null;
   try {
     if (url.pathname === "/") path = await safePath(example, "/index.html");
-    else if (url.pathname.startsWith("/dist/")) path = await safePath(root, pathname);
-    else if (url.pathname.startsWith("/examples/")) path = await safePath(root, pathname);
-    else if (url.pathname.startsWith("/docs/") || url.pathname === "/README.md") path = await safePath(root, pathname);
+    else if (url.pathname.startsWith("/dist/")) path = await safePath(join(root, "dist"), pathname.slice("/dist".length));
+    else if (url.pathname.startsWith("/examples/")) path = await safePath(join(root, "examples"), pathname.slice("/examples".length));
+    else if (url.pathname.startsWith("/docs/")) path = await safePath(join(root, "docs"), pathname.slice("/docs".length));
+    else if (url.pathname === "/README.md") path = await safePath(root, "/README.md");
     else path = await safePath(example, pathname);
     if (!path || !(await stat(path)).isFile()) throw new Error("missing");
     const body = await readFile(path);
@@ -81,7 +96,7 @@ async function handle(request, response) {
     response.end(body);
   } catch {
     response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
-    response.end(`Not found: ${relative(root, path ?? root)}`);
+    response.end(`Not found: ${path ? relative(root, path) : pathname}`);
   }
 }
 

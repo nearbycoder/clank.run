@@ -257,7 +257,7 @@ export async function openPlatformPointInTime(options:{
         else if(intent.receipt!==receipt)throw new Error("Recovery export retry changed its original provider binding.");
       });
       const response=await fetch(new URL("/__clank/pitr/checkpoint",origin),{redirect:"error",signal:cancellation.signal,headers:{authorization:"Bearer "+token,"x-clank-project-id":binding.projectId,"x-clank-node-id":binding.nodeId,"x-clank-release-id":binding.releaseId,"x-clank-runtime-generation":String(binding.generation),"x-clank-recovery-operation-id":operationId}});
-      current();sourceCurrent();if(!response.ok||response.headers.get("x-clank-recovery-protocol")!=="clank-pitr-archive/1"||!response.body)throw new Error("Recovery provider did not return an authenticated checkpoint.");
+      try{current();sourceCurrent();if(!response.ok||response.headers.get("x-clank-recovery-protocol")!=="clank-pitr-archive/1"||!response.body)throw new Error("Recovery provider did not return an authenticated checkpoint.");}catch(error){await response.body?.cancel().catch(()=>undefined);throw error;}
       const reader=response.body.getReader(),chunks:Uint8Array[]=[];let bytes=0;
       try{while(true){const part=await reader.read();current();sourceCurrent();if(part.done)break;bytes+=part.value.byteLength;if(bytes>maxBytes)throw new Error("Recovery provider archive exceeds its byte bound.");chunks.push(part.value);}}finally{await reader.cancel().catch(()=>undefined);reader.releaseLock();}
       const encoded=(globalThis as any).Buffer.concat(chunks),archive=JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(encoded)) as PointInTimeArchive;
@@ -278,7 +278,7 @@ export async function openPlatformPointInTime(options:{
         if(Number(accepted.changes)!==1||Number(advanced.changes)!==1||!retained||retained.owner!==owner||retained.version!==version||retained.enabled!==1||retained.pending!==null||retained.lease!==null||retained.lease_until!==null||retained.epoch!==archive.epoch||retained.sequence!==archive.sequence||retained.digest!==archive.digest||!operation||operation.kind!=="export"||operation.state!=="accepted"||operation.fingerprint!==JSON.stringify({version,owner})||operation.receipt!==JSON.stringify(receipt)||operation.reserved_bytes!==bytes)throw new Error("Recovery checkpoint acknowledgment changed.");
         synchronous(assertCurrent);sourceCurrent();assertOwner(project,owner);return receipt;
       });
-    }catch(error){internal.transaction(()=>{protocol();internal.prepare("UPDATE clank_platform_pitr_policies SET lease=NULL,lease_until=NULL,next_at=?,error=? WHERE project=? AND lease=?").run(Date.now()+30000,"Recovery export failed; exact retry or operator recovery is required.",project,lease);});report(error);throw error;}finally{clearTimeout(deadline);cancellations.delete(cancellation);key?.fill(0);}
+    }catch(error){try{internal.transaction(()=>{protocol();internal.prepare("UPDATE clank_platform_pitr_policies SET lease=NULL,lease_until=NULL,next_at=?,error=? WHERE project=? AND lease=?").run(Date.now()+30000,"Recovery export failed; exact retry or operator recovery is required.",project,lease);});}catch(cleanupError){report(cleanupError);}report(error);throw error;}finally{clearTimeout(deadline);cancellations.delete(cancellation);key?.fill(0);}
   };
   const capture=(project:string,operationId:string,assertCurrent:()=>void)=>{
     const pending=performCapture(project,operationId,assertCurrent);captures.add(pending);void pending.then(()=>captures.delete(pending),()=>captures.delete(pending));return pending;

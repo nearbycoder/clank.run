@@ -21,19 +21,23 @@ export async function openRecycleBin(options: RecycleBinOptions): Promise<Recycl
   const backend = defineBackend({ schema: options.schema, auth: options.auth }).functions(({ query, mutation }) => ({
     list: query({ args: { table: tableSchema, before: s.optional(cursorSchema), clock: s.number({ integer: true }) }, handler: ({ db }, { table, before }) => {
       const source = db.table(table), history = source.history({ before, limit: 100 }), now = Date.now();
-      const items = history.filter(entry => entry.operation === "delete" && entry.recordedAt + retention > now && !source.get(entry.document._id) && source.history(entry.document._id, { limit: 1 })[0]?.cursor.revision === entry.cursor.revision && source.history(entry.document._id, { limit: 1 })[0]?.cursor.sequence === entry.cursor.sequence)
-        .map(entry => ({ id: entry.document._id, table, label: String(entry.document[options.tables[table]!.labelField] ?? entry.document._id).slice(0, 200), deletedAt: entry.recordedAt, expiresAt: entry.recordedAt + retention, cursor: entry.cursor }));
+      const items = history.filter(entry => {
+        if (entry.operation !== "delete" || entry.recordedAt + retention <= now || source.get(entry.document._id)) return false;
+        const latest = source.history(entry.document._id, { limit: 1 })[0];
+        return latest?.cursor.revision === entry.cursor.revision && latest?.cursor.sequence === entry.cursor.sequence;
+      })
+        .map(entry => ({ id: entry.document._id, table, label: String((entry.document as Record<string, unknown>)[options.tables[table]!.labelField] ?? entry.document._id).slice(0, 200), deletedAt: entry.recordedAt, expiresAt: entry.recordedAt + retention, cursor: entry.cursor }));
       return { items, next: history.length === 100 ? history[history.length - 1]!.cursor : null };
     } }),
-    trash: mutation({ args: { table: tableSchema, id: s.string({ min: 1, max: 200 }), expectedVersion: s.number({ integer: true, min: 1 }) }, handler: ({ db }, { table, id, expectedVersion }) => db.table(table).delete(id, { ifVersion: expectedVersion }) }),
+    trash: mutation({ args: { table: tableSchema, id: s.string({ min: 1, max: 200 }), expectedVersion: s.number({ integer: true, min: 1 }) }, handler: ({ db }, { table, id, expectedVersion }) => db.table(table).delete(id as any, { ifVersion: expectedVersion }) }),
     restore: mutation({ args, handler: ({ db }, { table, id, cursor }) => {
-      const source = db.table(table), latest = source.history(id, { limit: 1 })[0];
+      const source = db.table(table), latest = source.history(id as any, { limit: 1 })[0];
       if (!latest || latest.operation !== "delete" || latest.cursor.revision !== cursor.revision || latest.cursor.sequence !== cursor.sequence || latest.recordedAt + retention <= Date.now()) throw new Error("This deleted snapshot is expired or no longer available.");
       const validation = options.validateRestore?.(latest.document, { table, db });
       if (validation && typeof (validation as any).then === "function") throw new TypeError("Restore validation must be synchronous inside the transaction.");
-      return source.restore(id, cursor, { ifVersion: null });
+      return source.restore(id as any, cursor, { ifVersion: null });
     } }),
-    purge: mutation({ args, handler: ({ db }, { table, id, cursor }) => db.table(table).purgeDeleted(id, cursor) }),
+    purge: mutation({ args, handler: ({ db }, { table, id, cursor }) => db.table(table).purgeDeleted(id as any, cursor) }),
   }));
   const runtime = await openBackend(backend, { path: options.path, prefix: options.prefix ?? "__clank/trash", historyRetentionRevisions: options.historyRetentionRevisions });
   return {
@@ -42,7 +46,7 @@ export async function openRecycleBin(options: RecycleBinOptions): Promise<Recycl
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) throw new RangeError("Sweep 1–1,000 expired records per call.");
       const rows = runtime.database[SQLITE_INTERNAL].prepare(`SELECT r.table_name,r.document_id,r.owner_id,r.revision,r.sequence FROM clank_document_revisions r WHERE r.operation='delete' AND r.recorded_at<=? AND r.table_name IN (${names.map(() => "?").join(",")}) AND NOT EXISTS (SELECT 1 FROM clank_document_revisions n WHERE n.table_name=r.table_name AND n.document_id=r.document_id AND (n.revision>r.revision OR (n.revision=r.revision AND n.sequence>r.sequence))) ORDER BY r.recorded_at LIMIT ?`).all(Date.now() - retention, ...names, limit);
       let count = 0;
-      for (const row of rows) count += Number(runtime.database.transaction(db => { const source = db.table(String(row.table_name)), id = String(row.document_id), latest = source.history(id, { limit: 1 })[0]; if (source.get(id) || !latest || latest.cursor.revision !== Number(row.revision) || latest.cursor.sequence !== Number(row.sequence)) return false; return source.purgeDeleted(id, { revision: Number(row.revision), sequence: Number(row.sequence) }); }, { userId: String(row.owner_id) }));
+      for (const row of rows) count += Number(runtime.database.transaction(db => { const source = db.table(String(row.table_name)), id = String(row.document_id) as any, latest = source.history(id, { limit: 1 })[0]; if (source.get(id) || !latest || latest.cursor.revision !== Number(row.revision) || latest.cursor.sequence !== Number(row.sequence)) return false; return source.purgeDeleted(id, { revision: Number(row.revision), sequence: Number(row.sequence) }); }, { userId: String(row.owner_id) }));
       return count;
     },
   };
@@ -67,7 +71,7 @@ export function mountRecycleBin(container: HTMLElement, client: RecycleBinClient
       purge.addEventListener("click", () => { if (confirm.checked) void run(async () => { await client.purge(table, item.id, item.cursor); await refresh(); status.textContent = "Retained history deleted."; }); });
       row.append(title, expiry, restore, label, purge); list.append(row);
     }
-    if (!list.childElementCount) status.textContent = next ? "No deleted records on this page. Load older records." : "Recycle bin is empty.";
+    status.textContent = list.childElementCount ? "" : next ? "No deleted records on this page. Load older records." : "Recycle bin is empty.";
   };
   const run = async (action: () => Promise<void>) => { if (busy || closed) return; busy = true; panel.setAttribute("aria-busy", "true"); try { await action(); } catch { if (!closed) status.textContent = "Record changed or recovery failed. Refresh before retrying."; } finally { busy = false; panel.removeAttribute("aria-busy"); } };
   const reload = document.createElement("button"); reload.type = "button"; reload.textContent = "Refresh recycle bin"; reload.addEventListener("click", () => { void run(() => refresh()); }); more.addEventListener("click", () => { if (next) void run(() => refresh(true)); });

@@ -136,7 +136,7 @@ const COMMANDS = Object.freeze({
     summary: "Replay agent-authored semantic acceptance journeys in an isolated real browser.",
   },
   workbench: {
-    usage: "clank workbench <resilience|compatibility|performance|policy|flag|revision|parity|schema|capacity|upgrade|provenance|promotion|rollout|export|sanitize|provider|contract|visual> [arguments] [--json]",
+    usage: "clank workbench <resilience|compatibility|performance|restore|migrate|policy|flag|revision|parity|schema|capacity|upgrade|provenance|promotion|rollout|export|sanitize|provider|contract|visual> [arguments] [--json]",
     summary: "Inspect, test, govern, promote, and port applications through data-only developer tools.",
   },
   doctor: {
@@ -657,6 +657,15 @@ Platform:
   clank secrets delete NAME
   clank migrate plan [directory]       Inspect local SQLite migration state
   clank migrate apply [directory]      Apply local migrations
+  clank registry <keygen|sign|verify|catalog|install>
+                                        Sign, verify, and install blueprint packages
+  clank costs [directory]              Inspect usage and projected monthly costs
+  clank environment <list|create|promote>
+                                        Manage staged project environments
+  clank release-window <list|create|delete>
+                                        Manage scheduled deployment windows
+  clank dependency <get|check>         Inspect and evaluate deployment dependencies
+  clank channel <status|set|promote>   Manage release channels
   clank inspect <artifact>             Verify and print an artifact manifest
 
 Run clank help <command> or clank <command> --help for focused usage.
@@ -3146,7 +3155,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out the pull-request merge revision
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -3504,6 +3513,7 @@ async function rollback(args) {
   const payload = await platformRequest(profile.server, `/api/projects/${link.projectId}/rollback`, {
     method: "POST",
     token: profile.token,
+    timeoutMs: PLATFORM_DEPLOY_TIMEOUT_MS,
     body: {
       releaseId, ...reviewed, ...(cliDependencyVersion(args) === undefined ? {} : { expectedDependencyVersion: cliDependencyVersion(args) }), ...(cliDependencyCheck(args) === undefined ? {} : { dependencyCheckId: cliDependencyCheck(args) }),
       restoreData: flag(args, "restore-data"),
@@ -3563,6 +3573,7 @@ async function backupCommand(args) {
     const payload = await platformRequest(profile.server, base, {
       method: "POST",
       token: profile.token,
+      timeoutMs: PLATFORM_DEPLOY_TIMEOUT_MS,
       body: { ...(option(args, "reason") ? { reason: option(args, "reason") } : {}) },
     });
     console.log(`Created and verified ${payload.backup.id}`);
@@ -3575,6 +3586,7 @@ async function backupCommand(args) {
     const payload = await platformRequest(profile.server, `${base}/${encodeURIComponent(id)}/verify`, {
       method: "POST",
       token: profile.token,
+      timeoutMs: PLATFORM_DEPLOY_TIMEOUT_MS,
       body: {},
     });
     console.log(`Verified ${payload.verification.id} in ${payload.verification.durationMs}ms`);
@@ -3589,6 +3601,7 @@ async function backupCommand(args) {
     const payload = await platformRequest(profile.server, `${base}/${encodeURIComponent(id)}/restore`, {
       method: "POST",
       token: profile.token,
+      timeoutMs: PLATFORM_DEPLOY_TIMEOUT_MS,
       body: { confirmation },
     });
     console.log(`Restored ${payload.verification.id}`);
@@ -3611,7 +3624,8 @@ async function secrets(args) {
   }
   if (subcommand === "stage") {
     const name = positionals(args)[0]; if (!name) throw new CliError("Usage: clank secrets stage NAME (value is read from stdin)");
-    const value = option(args, "from-env") ? process.env[option(args, "from-env")] : await readStandardInput();
+    const envName = option(args, "from-env");
+    const value = envName ? (Object.hasOwn(process.env, envName) ? process.env[envName] : undefined) : await readStandardInput();
     if (value === undefined) throw new CliError("Secret value was not provided.");
     const result = await platformRequest(profile.server, `${path}/rotations`, { method: "POST", token: profile.token, body: { name, value: value.replace(/\r?\n$/, "") } });
     console.log(JSON.stringify(result, null, 2)); return;
@@ -3629,8 +3643,9 @@ async function secrets(args) {
   if (subcommand === "set") {
     const name = positionals(args)[0];
     if (!name) throw new CliError("Usage: clank secrets set NAME (value is read from stdin)");
-    const value = option(args, "from-env")
-      ? process.env[option(args, "from-env")]
+    const envName = option(args, "from-env");
+    const value = envName
+      ? (Object.hasOwn(process.env, envName) ? process.env[envName] : undefined)
       : await readStandardInput();
     if (value === undefined) throw new CliError("Secret value was not provided.");
     await platformRequest(profile.server, path, {
@@ -4413,9 +4428,15 @@ function delay(milliseconds) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
 }
 
-async function readStandardInput() {
+async function readStandardInput(maxBytes = 1024 * 1024) {
   const chunks = [];
-  for await (const chunk of process.stdin) chunks.push(chunk);
+  let total = 0;
+  for await (const chunk of process.stdin) {
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buf.byteLength;
+    if (total > maxBytes) throw new CliError(`Standard input exceeds ${maxBytes} bytes.`);
+    chunks.push(buf);
+  }
   return Buffer.concat(chunks).toString("utf8");
 }
 

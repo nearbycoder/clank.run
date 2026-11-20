@@ -82,3 +82,25 @@ test("upgrade assistant distinguishes codemods from hard blockers", () => {
   assert.equal(plan.blockers.length, 2);
   assert.deepEqual(plan.edits.map((edit) => edit.kind), ["rename-export", "config"]);
 });
+
+test("diffSchemas preserves composite index column order and action contracts honor tight schema bounds", async () => {
+  const report = diffSchemas(
+    { tables: { events: { columns: { tenant: { type: "text" }, created_at: { type: "integer" } } } } },
+    { tables: { events: { columns: { tenant: { type: "text" }, created_at: { type: "integer" } }, indexes: { events_tenant_time: ["tenant", "created_at"] } } } },
+  );
+  assert.match(report.migrationSql, /ON "events" \("tenant", "created_at"\)/u);
+
+  const bounded = defineAction({
+    name: "metrics.batch",
+    description: "Submit bounded metrics.",
+    input: s.object({
+      tag: s.string({ min: 1, max: 3 }),
+      score: s.number({ max: 0 }),
+      values: s.array(s.string({ min: 1, max: 4 }), { min: 2, max: 3 }),
+    }),
+    output: s.object({ count: s.number() }),
+    handler: ({ values }) => ({ count: values.length }),
+  });
+  const contract = await testActionContract(bounded);
+  assert.equal(contract.ok, true);
+});

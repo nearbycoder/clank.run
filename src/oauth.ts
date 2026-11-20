@@ -1952,9 +1952,9 @@ async function decryptRefreshRetry(
   if (parts.length !== 3 || parts[0] !== "v1") throw new Error("Invalid refresh retry envelope.");
   const decrypted = await crypto.subtle.decrypt({
     name: "AES-GCM",
-    iv: fromBase64url(parts[1]!),
+    iv: fromBase64url(parts[1]!) as BufferSource,
     additionalData: new TextEncoder().encode(`clank-refresh-retry-v1\0${predecessorHash}`),
-  }, await refreshRetryKey(rawRefresh), fromBase64url(parts[2]!));
+  }, await refreshRetryKey(rawRefresh), fromBase64url(parts[2]!) as BufferSource);
   return preparedTokenPair(JSON.parse(new TextDecoder().decode(decrypted)));
 }
 

@@ -102,7 +102,7 @@ function brandedAsset(request: Request, filename: string): Response | Promise<Re
   const url = new URL(request.url);
   url.pathname = `/brand/${filename}`;
   url.search = "";
-  return appFiles.handle(new Request(url, { headers: request.headers }));
+  return appFiles.handle(new Request(url, { method: request.method, headers: request.headers }));
 }
 
 function versionedAsset(request: Request, filename: string): Response | Promise<Response> {
@@ -111,7 +111,7 @@ function versionedAsset(request: Request, filename: string): Response | Promise<
   const url = new URL(request.url);
   url.pathname = `/${target}`;
   url.search = "";
-  return appFiles.handle(new Request(url, { headers: request.headers }));
+  return appFiles.handle(new Request(url, { method: request.method, headers: request.headers }));
 }
 
 function groupFor(slug: string | undefined): DocGroup | undefined {
@@ -1024,7 +1024,7 @@ export const app = createApp({
       headers: { "content-type": "application/xml; charset=utf-8", "cache-control": "public, max-age=3600" },
     });
   })
-  .get(searchIndexPath, () => new Response(searchIndexJson, {
+  .get(searchIndexPath, () => text(searchIndexJson, {
     headers: {
       "content-type": "application/json; charset=utf-8",
       "cache-control": "public, max-age=31536000, immutable",

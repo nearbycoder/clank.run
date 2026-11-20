@@ -259,7 +259,7 @@ export async function sanitizePreviewDatabase(
       }
       database.exec("COMMIT");
     } catch (error) {
-      database.exec("ROLLBACK");
+      try { database.exec("ROLLBACK"); } catch { /* SQLite may already have rolled back. */ }
       throw error;
     }
     database.exec("PRAGMA foreign_keys = ON");

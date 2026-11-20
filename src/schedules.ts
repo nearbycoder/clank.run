@@ -67,8 +67,8 @@ export function previewSchedule(input: RecurrenceRule, options: { after: number;
       : ((date.getUTCFullYear() - startDate.getUTCFullYear()) * 12 + date.getUTCMonth() - startDate.getUTCMonth()) % rule.interval! === 0 && date.getUTCDate() === (rule.dayOfMonth ?? startDate.getUTCDate());
     if (!eligible) continue;
     const iso = date.toISOString().slice(0, 10);
-    if (exceptions.has(iso)) { skipped.push({ date: iso, reason: "exception" }); continue; }
     const wanted = cursor + hour! * 3_600_000 + minute! * 60_000;
+    if (exceptions.has(iso)) { if (wanted > localAfter) skipped.push({ date: iso, reason: "exception" }); continue; }
     // Probe both sides of transitions, then verify candidate local minutes.
     const offsets = new Set<number>();
     for (let shift = -36; shift <= 36; shift += 6) {
@@ -76,7 +76,7 @@ export function previewSchedule(input: RecurrenceRule, options: { after: number;
       offsets.add(wall(probe, format) - probe);
     }
     const candidates = [...offsets].map(offset => wanted - offset).filter(at => wall(at, format) === wanted).sort((a, b) => a - b);
-    if (!candidates.length) { skipped.push({ date: iso, reason: "daylight-saving-gap" }); continue; }
+    if (!candidates.length) { if (wanted > localAfter) skipped.push({ date: iso, reason: "daylight-saving-gap" }); continue; }
     const at = rule.overlap === "later" ? candidates[candidates.length - 1]! : candidates[0]!;
     if (at > options.after) occurrences.push(Object.freeze({ at, local: `${iso}T${rule.time}`, offsetMinutes: (wanted - at) / 60_000, ambiguous: candidates.length > 1 }));
   }

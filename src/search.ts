@@ -150,7 +150,7 @@ export async function openSearch(options: Omit<SearchOptions, "source" | "browsi
         authorized.push({ id: record.id, title: record.title, snippet: record.body.slice(position, position + 240), score });
         acceptedIds.add(record.id);
       }
-      authorized.sort((left, right) => right.score - left.score || left.id.localeCompare(right.id));
+      authorized.sort((left, right) => right.score - left.score || searchOrder(left.id, right.id));
       return { hits: authorized.slice(0, input.limit), total: authorized.length, truncated: byteLimit || candidateLimit || authorized.length > input.limit };
     } }),
     ...(browsingConfig ? {
@@ -308,6 +308,11 @@ function createSearchBrowsing(native: SQLiteInternal, binding: SQLiteSearchBindi
     const usable = row.declaration === declaration;
     return { key: row.key, name: row.name, revision: Number(row.revision), usable, definition: usable ? validateSearchDefinition(JSON.parse(row.definition), config.fields) : null };
   };
+  const parseDefinition = (raw: string): SearchDefinition => {
+    let parsed: unknown;
+    try { parsed = JSON.parse(raw); } catch { return featureInput("Invalid search definition."); }
+    return validateSearchDefinition(parsed, config.fields);
+  };
   const usage = () => native.prepare("SELECT count(*) AS records,coalesce(sum(length(CAST(owner AS BLOB))+length(CAST(index_name AS BLOB))+length(CAST(scope AS BLOB))+length(CAST(key AS BLOB))+length(CAST(name AS BLOB))+length(CAST(definition AS BLOB))+length(CAST(declaration AS BLOB))+length(CAST(fingerprint AS BLOB))+32),0) AS bytes FROM clank_search_definitions").get()!;
   const capacity = () => { const value = usage(); if (!Number.isSafeInteger(value.records) || !Number.isSafeInteger(value.bytes) || Number(value.records) < 0 || Number(value.bytes) < 0 || Number(value.records) > config.maxSavedIdentities || Number(value.bytes) > config.maxSavedBytes) searchCapacity(); };
   return {
@@ -320,7 +325,7 @@ function createSearchBrowsing(native: SQLiteInternal, binding: SQLiteSearchBindi
         capacity();
     },
     browse(context: BrowsingContext, input: { scope: string; definition: string; limit: number; cursor?: string }): SearchPage {
-        const owner = access(context, input.scope), revision = index(), definition = validateSearchDefinition(JSON.parse(input.definition), config.fields);
+        const owner = access(context, input.scope), revision = index(), definition = parseDefinition(input.definition);
         const count = Number(native.prepare(`SELECT count(*) AS n FROM ${SOURCE_SEARCH_FTS} WHERE index_name=? AND scope=?`).get(binding.name, input.scope)?.n ?? 0);
         if (count > scopeMaximum) searchCapacity();
         const words = [...new Set(definition.text.match(/[\p{L}\p{N}\p{M}_]+/gu) ?? [])], terms = [...new Set(words.map(searchFold))];
@@ -375,7 +380,7 @@ function createSearchBrowsing(native: SQLiteInternal, binding: SQLiteSearchBindi
     save(context: BrowsingContext, input: { scope: string; key: string; expectedRevision: number; name: string; definition: string }): SavedSearch {
       if (!native.inTransaction) throw new Error("Saved-search writes require the host mutation transaction.");
       const owner = access(context, input.scope); index();
-      const definition = JSON.stringify(validateSearchDefinition(JSON.parse(input.definition), config.fields)), name = input.name.trim(); if (!name) return featureInput("A saved search needs a name.");
+      const definition = JSON.stringify(parseDefinition(input.definition)), name = input.name.trim(); if (!name) return featureInput("A saved search needs a name.");
       const fingerprint = hash(["save", input.key, input.expectedRevision, name, definition, declaration]);
       const row = native.prepare("SELECT * FROM clank_search_definitions WHERE owner=? AND index_name=? AND scope=? AND key=?").get(owner, binding.name, input.scope, input.key);
       if (row?.fingerprint === fingerprint && row.deleted === 0) return rowOutput(row);

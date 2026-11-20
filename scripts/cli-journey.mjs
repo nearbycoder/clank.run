@@ -127,9 +127,24 @@ async function loadJourneys(path) {
 }
 
 async function boundedRead(path) {
-  const bytes = await readFile(path);
-  if (bytes.byteLength > MAX_JOURNEY_FILE_BYTES) throw new Error("Journey file exceeds 1 MiB.");
-  return bytes.toString("utf8");
+  const { open } = await import("node:fs/promises");
+  const { constants } = await import("node:fs");
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const stats = await handle.stat();
+    if (!stats.isFile() || stats.size > MAX_JOURNEY_FILE_BYTES) throw new Error("Journey file exceeds 1 MiB.");
+    const buffer = Buffer.alloc(stats.size + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, length, buffer.length - length, null);
+      if (!bytesRead) break;
+      length += bytesRead;
+    }
+    if (length > MAX_JOURNEY_FILE_BYTES) throw new Error("Journey file exceeds 1 MiB.");
+    return buffer.subarray(0, length).toString("utf8");
+  } finally {
+    await handle.close();
+  }
 }
 
 async function openBrowser(options) {
@@ -538,9 +553,9 @@ async function writeTextAtomically(path, contents) {
 
 async function writeBinaryAtomically(path, contents) {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  const temporary = `${path}.clank-${process.pid}-${Date.now()}`;
+  const temporary = `${path}.clank-${process.pid}-${crypto.randomUUID()}`;
   try {
-    await writeFile(temporary, contents, { mode: 0o600 });
+    await writeFile(temporary, contents, { flag: "wx", mode: 0o600 });
     await rename(temporary, path);
   } finally {
     await rm(temporary, { force: true });

@@ -101,7 +101,7 @@ export async function generateBlueprintSigningKey(
     : options.scope.role === "registry"
       ? { roles: ["registry"] as const, registries: uniqueStrings(options.scope.registries, (entry) => entry === "*" ? "*" : registryOrigin(entry), "registries", 100) }
       : (() => { throw new TypeError("Blueprint signing key scope role must be publisher or registry."); })();
-  if (("namespaces" in scope && scope.namespaces.length === 0) || ("registries" in scope && scope.registries.length === 0)) {
+  if (("namespaces" in scope && scope.namespaces && scope.namespaces.length === 0) || ("registries" in scope && scope.registries && scope.registries.length === 0)) {
     throw new TypeError("Blueprint signing key scope must contain at least one namespace or registry origin.");
   }
   const crypto = await nodeCrypto();
@@ -216,8 +216,11 @@ export async function signBlueprintCatalog(
   const registry = registryOrigin(input.registry);
   const sequence = positiveInteger(input.sequence, "catalog sequence", 1, Number.MAX_SAFE_INTEGER);
   const createdAt = timestamp(input.createdAt ?? Date.now(), "createdAt");
-  const releases = normalizeCatalogEntries([...input.releases].sort((left, right) =>
-    `${String(left.name)}@${String(left.version)}`.localeCompare(`${String(right.name)}@${String(right.version)}`)));
+  const releases = normalizeCatalogEntries([...input.releases].sort((left, right) => {
+    const a = `${String(left.name)}@${String(left.version)}`;
+    const b = `${String(right.name)}@${String(right.version)}`;
+    return a < b ? -1 : a > b ? 1 : 0;
+  }));
   const unsigned = {
     protocol: "clank-blueprint-catalog/1" as const,
     registry,
@@ -416,7 +419,11 @@ function normalizeCatalogEntries(value: unknown): readonly BlueprintCatalogEntry
   });
   const identities = entries.map((entry) => `${entry.name}@${entry.version}`);
   if (new Set(identities).size !== identities.length) throw new TypeError("Catalog cannot contain duplicate blueprint name and version entries.");
-  const sorted = [...entries].sort((left, right) => `${left.name}@${left.version}`.localeCompare(`${right.name}@${right.version}`));
+  const sorted = [...entries].sort((left, right) => {
+    const a = `${left.name}@${left.version}`;
+    const b = `${right.name}@${right.version}`;
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
   if (canonical(entries) !== canonical(sorted)) throw new TypeError("Catalog releases must be sorted by name and version.");
   return Object.freeze(entries);
 }
@@ -693,7 +700,7 @@ async function sha256(value: string): Promise<string> {
 }
 
 async function sha256Bytes(value: Uint8Array): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", value);
+  const digest = await crypto.subtle.digest("SHA-256", value as BufferSource);
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 

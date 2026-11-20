@@ -91,7 +91,7 @@ export function createGithubActionsOidcVerifier(
     }
   };
 
-  return Object.freeze({
+  const verifier: GithubActionsOidcVerifier = {
     async verify(token, policy) {
       try {
         const normalizedPolicy = normalizePolicy(policy);
@@ -113,7 +113,7 @@ export function createGithubActionsOidcVerifier(
         const valid = await crypto.subtle.verify(
           "RSASSA-PKCS1-v1_5",
           key,
-          parsed.signature,
+          parsed.signature as BufferSource,
           new TextEncoder().encode(parsed.signingInput),
         );
         if (!valid) throw new Error("Invalid GitHub token signature.");
@@ -122,15 +122,16 @@ export function createGithubActionsOidcVerifier(
         throw new GithubActionsOidcError(error);
       }
     },
-  });
+  };
+  return Object.freeze(verifier);
 }
 
 async function fetchGithubKeys(fetcher: typeof fetch, now: number): Promise<CachedKeys> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  let response: Response;
+  let value: unknown;
   try {
-    response = await fetcher(GITHUB_ACTIONS_OIDC_JWKS, {
+    const response = await fetcher(GITHUB_ACTIONS_OIDC_JWKS, {
       method: "GET",
       redirect: "error",
       cache: "no-store",
@@ -142,22 +143,22 @@ async function fetchGithubKeys(fetcher: typeof fetch, now: number): Promise<Cach
         "accept-encoding": "identity",
       },
     });
+    if (
+      response.status !== 200
+      || response.redirected
+      || response.url !== GITHUB_ACTIONS_OIDC_JWKS
+      || response.headers.has("content-encoding")
+      || !response.headers.get("content-type")?.toLowerCase().startsWith("application/json")
+    ) {
+      await response.body?.cancel();
+      throw new Error("GitHub signing-key response is invalid.");
+    }
+    value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(
+      await readResponseBytes(response, MAX_JWKS_BYTES),
+    ));
   } finally {
     clearTimeout(timer);
   }
-  if (
-    response.status !== 200
-    || response.redirected
-    || response.url !== GITHUB_ACTIONS_OIDC_JWKS
-    || response.headers.has("content-encoding")
-    || !response.headers.get("content-type")?.toLowerCase().startsWith("application/json")
-  ) {
-    await response.body?.cancel();
-    throw new Error("GitHub signing-key response is invalid.");
-  }
-  const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(
-    await readResponseBytes(response, MAX_JWKS_BYTES),
-  ));
   if (!plain(value) || !Array.isArray(value.keys) || value.keys.length < 1 || value.keys.length > 20) {
     throw new Error("GitHub signing keys are invalid.");
   }

@@ -51,7 +51,7 @@ export function createRevisionLedger(initialState: unknown, eventsInput: readonl
     const parentId = input.parentId === undefined ? undefined : token(input.parentId, `revision event ${id} parent`);
     if (parentId && !ids.has(parentId)) throw new TypeError(`Revision event ${id} parent must reference an earlier event.`);
     if (!Array.isArray(input.patches ?? []) || (input.patches?.length ?? 0) > 1_000) throw new TypeError(`Revision event ${id} may contain at most 1,000 patches.`);
-    const patches = (input.patches ?? []).map((patch, patchIndex) => normalizePatch(patch, `${id} patch ${patchIndex}`));
+    const patches = (input.patches ?? []).map((patch: RevisionPatch, patchIndex: number) => normalizePatch(patch, `${id} patch ${patchIndex}`));
     ids.add(id);
     return freeze({ id, revision: input.revision, at: iso(input.at, `revision event ${id} time`), kind: input.kind, actor: token(input.actor, `revision event ${id} actor`), summary: text(input.summary, `revision event ${id} summary`, 1_000), ...(input.correlationId ? { correlationId: token(input.correlationId, `revision event ${id} correlation`) } : {}), ...(parentId ? { parentId } : {}), patches: freeze(patches), ...(input.metadata === undefined ? {} : { metadata: data(input.metadata, `revision event ${id} metadata`) }) });
   });
@@ -200,7 +200,7 @@ export async function verifyPortableProjectExport(bundle: PortableProjectExport,
 
 export async function createSanitizedClone<T extends Record<string, unknown>>(rowsInput: readonly T[], policyInput: ClonePolicy, saltInput: string | Uint8Array): Promise<SanitizedClone<T>> {
   if (!Array.isArray(rowsInput) || rowsInput.length > 100_000) throw new TypeError("Clone rows must be an array of at most 100,000 entries.");
-  if (!plain(policyInput) || !(TRANSFORMS as unknown[]).includes(policyInput.default)) throw new TypeError("Clone policy is invalid.");
+  if (!plain(policyInput) || !(TRANSFORMS as readonly unknown[]).includes(policyInput.default)) throw new TypeError("Clone policy is invalid.");
   exact(policyInput, ["default", "fields"], "clone policy");
   const salt = typeof saltInput === "string" ? new TextEncoder().encode(saltInput) : saltInput;
   if (!(salt instanceof Uint8Array) || salt.byteLength < 16) throw new TypeError("Clone salt must contain at least 16 bytes.");
@@ -208,7 +208,7 @@ export async function createSanitizedClone<T extends Record<string, unknown>>(ro
   if (!plain(fields) || Object.keys(fields).length > 10_000) throw new TypeError("Clone policy fields must be an object with at most 10,000 entries.");
   for (const [key, transform] of Object.entries(fields)) {
     text(key, "clone policy field", 500);
-    if (!(TRANSFORMS as unknown[]).includes(transform)) throw new TypeError(`Clone transform for ${key} is invalid.`);
+    if (!(TRANSFORMS as readonly unknown[]).includes(transform)) throw new TypeError(`Clone transform for ${key} is invalid.`);
   }
   const redacted = new Set<string>();
   const rows: T[] = [];
@@ -217,7 +217,7 @@ export async function createSanitizedClone<T extends Record<string, unknown>>(ro
     const output: Record<string, unknown> = Object.create(null);
     for (const [key, value] of Object.entries(row)) {
       const transform = fields[key] ?? policyInput.default;
-      if (!(TRANSFORMS as unknown[]).includes(transform)) throw new TypeError(`Clone transform for ${key} is invalid.`);
+      if (!(TRANSFORMS as readonly unknown[]).includes(transform)) throw new TypeError(`Clone transform for ${key} is invalid.`);
       if (transform === "drop") { redacted.add(key); continue; }
       if (transform === "keep") output[key] = data(value, `clone field ${key}`);
       else if (transform === "redact") { output[key] = "[redacted]"; redacted.add(key); }
@@ -271,7 +271,7 @@ function percent(value: number): string { return `${(value * 100).toFixed(2)}%`;
 function data(value: unknown, label: string): any { try { return freezeDeep(JSON.parse(canonical(value))); } catch { throw new TypeError(`${label} must be JSON data.`); } }
 function freezeDeep(value: any): any { if (value && typeof value === "object") { for (const item of Object.values(value)) freezeDeep(item); Object.freeze(value); } return value; }
 function canonical(value: unknown): string { if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value); if (typeof value === "number" && Number.isFinite(value)) return JSON.stringify(value); if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`; if (plain(value)) return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`; throw new TypeError("Value is not JSON data."); }
-async function sha256(value: string | Uint8Array): Promise<string> { const bytes = typeof value === "string" ? new TextEncoder().encode(value) : value; return [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((byte) => byte.toString(16).padStart(2, "0")).join(""); }
+async function sha256(value: string | Uint8Array): Promise<string> { const bytes = typeof value === "string" ? new TextEncoder().encode(value) : value; return [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes as BufferSource))].map((byte) => byte.toString(16).padStart(2, "0")).join(""); }
 function concat(left: Uint8Array, right: Uint8Array): Uint8Array { const output = new Uint8Array(left.byteLength + right.byteLength); output.set(left); output.set(right, left.byteLength); return output; }
 function base64url(value: Uint8Array): string { let binary = ""; for (const byte of value) binary += String.fromCharCode(byte); return btoa(binary).replace(/\+/gu, "-").replace(/\//gu, "_").replace(/=+$/gu, ""); }
 function fromBase64url(value: unknown): Uint8Array { if (typeof value !== "string" || !/^[A-Za-z0-9_-]*$/u.test(value)) throw new TypeError("Portable content is invalid."); const padded = value.replace(/-/gu, "+").replace(/_/gu, "/") + "=".repeat((4 - value.length % 4) % 4); const binary = atob(padded); return Uint8Array.from(binary, (character) => character.charCodeAt(0)); }
