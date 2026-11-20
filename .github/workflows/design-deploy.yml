@@ -92,14 +92,30 @@ jobs:
         run: |
           RELEASES="$(node ../scripts/clank.mjs releases)"
           echo "$RELEASES"
-          if [[ "$RELEASES" =~ Usage:\ ([0-9]+)/([0-9]+)\ artifacts ]] &&
-             [[ "${BASH_REMATCH[1]}" == "${BASH_REMATCH[2]}" ]]; then
-            OLDEST_INACTIVE="$(awk '$2 == "inactive" && $3 ~ /^[0-9]+$/ { candidate = $1 } END { print candidate }' <<< "$RELEASES")"
-            if [[ -z "$OLDEST_INACTIVE" ]]; then
-              echo "Release capacity is full, but no inactive artifact can be removed safely." >&2
+          if [[ "$RELEASES" =~ Usage:\ ([0-9]+)/([0-9]+)\ artifacts ]]; then
+            USED="${BASH_REMATCH[1]}"
+            LIMIT="${BASH_REMATCH[2]}"
+            mapfile -t FAILED_IDS < <(awk '$1 ~ /^[A-Za-z0-9_-]{8,128}$/ && $2 == "failed" && $3 ~ /^[0-9]+$/ { ids[++n] = $1 } END { for (i = n; i >= 1; i--) print ids[i] }' <<< "$RELEASES")
+            for RELEASE_ID in "${FAILED_IDS[@]}"; do
+              if node ../scripts/clank.mjs releases delete "$RELEASE_ID" --confirm="delete-release clank-design $RELEASE_ID"; then
+                USED=$(( USED - 1 ))
+              fi
+            done
+            if (( USED >= LIMIT )); then
+              mapfile -t INACTIVE_IDS < <(awk '$1 ~ /^[A-Za-z0-9_-]{8,128}$/ && $2 == "inactive" && $3 ~ /^[0-9]+$/ { ids[++n] = $1 } END { for (i = n; i >= 1; i--) print ids[i] }' <<< "$RELEASES")
+              for RELEASE_ID in "${INACTIVE_IDS[@]}"; do
+                if node ../scripts/clank.mjs releases delete "$RELEASE_ID" --confirm="delete-release clank-design $RELEASE_ID"; then
+                  USED=$(( USED - 1 ))
+                  if (( USED < LIMIT )); then
+                    break
+                  fi
+                fi
+              done
+            fi
+            if (( USED >= LIMIT )); then
+              echo "Release capacity is full, and no failed or non-rollback-protected inactive artifact can be removed safely." >&2
               exit 1
             fi
-            node ../scripts/clank.mjs releases delete "$OLDEST_INACTIVE" --confirm="delete-release clank-design $OLDEST_INACTIVE"
           fi
 
       - name: Deploy Design Studio
