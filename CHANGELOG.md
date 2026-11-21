@@ -4,6 +4,23 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+## 0.25.0 - 2026-11-20
+
+- Audit and clean up runtime, security, and type-checking issues across the framework, CLI, and
+  first-party sites: resolve all remaining strict TypeScript semantic diagnostics in `src/`
+  (`type-tests/semantic-baseline.json` at `0`), fix blueprint public-detail authorization,
+  JSX/TSX compilation, reactive/DOM/SSR/forms/UI, HTTP compression and IPv6 host validation,
+  managed-ingress header stripping, analytics funnel bounds, Task compound-failure/race handling,
+  billing null-period fallback, WebAuthn CBOR extensions, webhook retries, and 32-bit timer clamps.
+- Optimize request routing, SSR rendering, reactive scheduling, and database hot paths for 2–5×
+  higher throughput while preserving zero runtime dependencies.
+- Support explicit `CLANK_SQLITE_ISOLATION=trusted-process` for trusted single-host process
+  deployments where nested Linux namespaces are unavailable (requiring `CLANK_HOSTING_PROFILE=trusted`
+  and closed public signup, while keeping kernel resource limits and capability stripping).
+- Bundle the immutable documentation site into the control-plane image via opt-in
+  `CLANK_DOCUMENTATION_HOST`, publish the copyable agent setup prompt on marketing and docs,
+  prune stale failed artifacts before inactive ones in the Design Studio deploy workflow, and pin
+  the production Docker image to Node `22.23.4`.
 - Add eight local-search capabilities: any-term matching, field filters, ID scopes, exclusions,
   phrase matching, title/ID ordering, immutable document lookup and explicit clearing.
 - Add six virtual-collection controls: index/key scrolling, key focus, constant-time key lookup,
@@ -153,6 +170,16 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
   Expired retry identities remain fenced, and holds suppress pruning across upgraded writers.
 - Bound held audit outbox growth, avoid redelivery of acknowledged envelopes, and continue
   delivery of signed pending entries when a later event cannot be captured.
+
+Upgrade requirements:
+
+- Supported Node versions remain `>=22.16 <27` (Node 22, 24, and 26 are covered by release checks).
+- On Linux hosts that deny nested user namespaces (such as single-service trusted Railway
+  deployments), opt into `CLANK_SQLITE_ISOLATION=trusted-process` alongside
+  `CLANK_HOSTING_PROFILE=trusted`, `CLANK_RUNNER=process`, and closed public signup. Default
+  `namespace` isolation remains required for isolated or public hosting.
+- To serve documentation directly from the control-plane Docker image, set
+  `CLANK_DOCUMENTATION_HOST` to one exact hostname distinct from `CLANK_PLATFORM_URL`.
 
 ## 0.24.0 - 2026-10-03
 
