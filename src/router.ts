@@ -59,7 +59,6 @@ interface CompiledRoute {
   kind: number;
   pre: string;
   preSlash: string;
-  key: string;
   firstDyn: number;
   segs: string[];
   names: Array<string | null>;
@@ -80,17 +79,17 @@ function compilePath(path: string): CompiledRoute {
   if (cached) return cached;
   let route: CompiledRoute;
   if (path === "*") {
-    route = { kind: 0, pre: "", preSlash: "", key: "wildcard", firstDyn: 0, segs: [], names: [] };
+    route = { kind: 0, pre: "", preSlash: "", firstDyn: 0, segs: [], names: [] };
   } else {
     const segs = path.split("/").filter(Boolean);
-    let optionalCount = 0, wildcardIndex = -1, firstDyn = -1, pre = "", source = "^";
+    let optCount = 0, wild = false, firstDyn = -1, pre = "", source = "^";
     const names: Array<string | null> = [];
     const keys: string[] = [];
     for (let i = 0; i < segs.length; i++) {
       const seg = segs[i]!;
       source += "/";
       if (seg === "*") {
-        if (wildcardIndex === -1) wildcardIndex = i;
+        wild = true;
         if (firstDyn === -1) firstDyn = i;
         names.push("wildcard");
         keys.push("wildcard");
@@ -99,7 +98,7 @@ function compilePath(path: string): CompiledRoute {
         const opt = seg.charCodeAt(seg.length - 1) === 63;
         const key = seg.slice(1, opt ? -1 : undefined);
         if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(key)) throw new TypeError(`Invalid route parameter name: ${key}`);
-        if (opt) optionalCount++;
+        if (opt) optCount++;
         if (firstDyn === -1) firstDyn = i;
         names.push(key);
         keys.push(key);
@@ -110,13 +109,10 @@ function compilePath(path: string): CompiledRoute {
         source += seg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       }
     }
-    const last = segs.length - 1;
     const preSlash = `${pre}/`;
-    if (firstDyn === -1) route = { kind: 1, pre, preSlash, key: "", firstDyn, segs, names };
-    else if (wildcardIndex === -1 && firstDyn === last && optionalCount <= 1) route = { kind: optionalCount ? 3 : 2, pre, preSlash, key: names[last]!, firstDyn, segs, names };
-    else if (optionalCount === 0 && wildcardIndex === last && firstDyn === last) route = { kind: 4, pre, preSlash, key: "wildcard", firstDyn, segs, names };
-    else if (optionalCount === 0 && wildcardIndex === -1) route = { kind: 5, pre, preSlash: firstDyn > 0 ? preSlash : "/", key: "", firstDyn, segs, names };
-    else route = { kind: 6, pre, preSlash, key: "", firstDyn, segs: keys, names, regex: new RegExp(`${source}/?$`) };
+    if (firstDyn === -1) route = { kind: 1, pre, preSlash, firstDyn, segs, names };
+    else if (!optCount && !wild) route = { kind: 2, pre, preSlash: firstDyn > 0 ? preSlash : "/", firstDyn, segs, names };
+    else route = { kind: 3, pre, preSlash, firstDyn, segs: keys, names, regex: new RegExp(`${source}/?$`) };
   }
   if (patternCache.size >= MAX_PATTERN_CACHE) patternCache.delete(patternCache.keys().next().value!);
   patternCache.set(path, route);
@@ -126,22 +122,7 @@ function compilePath(path: string): CompiledRoute {
 function matchCompiled(r: CompiledRoute, p: string): Record<string, string> | null {
   const kind = r.kind;
   if (kind === 1) return p === r.pre || p === r.preSlash ? {} : null;
-  if (kind >= 2 && kind <= 4) {
-    if (kind === 3 && (p === r.pre || p === r.preSlash)) return {};
-    const pre = r.preSlash;
-    if (!p.startsWith(pre)) return null;
-    const start = pre.length;
-    let end = p.length;
-    if (end > start && p.charCodeAt(end - 1) === 47) end--;
-    if (kind !== 4) {
-      if (end <= start) return null;
-      const slash = p.indexOf("/", start);
-      if (slash !== -1 && slash < end) return null;
-    }
-    const val = decodeSegment(p.slice(start, end));
-    return val === null ? null : { [r.key]: val };
-  }
-  if (kind === 5) {
+  if (kind === 2) {
     const pre = r.preSlash;
     if (!p.startsWith(pre)) return null;
     let end = p.length;
