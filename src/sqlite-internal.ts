@@ -52,8 +52,21 @@ interface SchemaFacts {
   readonly counter: SQLiteStatement;
   version: number;
   readonly answers: Map<string, boolean>;
+  readonly statements: Map<string, SQLiteStatement>;
 }
 const schemaFacts = new WeakMap<object, SchemaFacts>();
+/** Private in-memory databases created by openSQLite cannot be mutated by another connection. */
+const privateMemoryState = new WeakMap<object, { dirty: boolean }>();
+
+/** @internal Mark a connection as a private in-memory SQLite instance whose DDL is tracked. */
+export function registerPrivateMemorySchema(connection: object, state: { dirty: boolean }): void {
+  privateMemoryState.set(connection, state);
+}
+
+/** @internal Pre-populate schema lookup cache outside a transaction so in-transaction calls hit cache immediately. */
+export function primeSchemaLookup(connection: Pick<SQLiteInternal, "prepare">, queries: readonly string[]): void {
+  for (let i = 0; i < queries.length; i++) schemaLookup(connection, queries[i]!);
+}
 
 /**
  * @internal Whether a `sqlite_schema` lookup returns a row.
@@ -65,22 +78,34 @@ const schemaFacts = new WeakMap<object, SchemaFacts>();
  * connection whose counter cannot be read is simply asked every time.
  */
 export function schemaLookup(connection: Pick<SQLiteInternal, "prepare">, sql: string): boolean {
+  let facts = schemaFacts.get(connection);
+  const mem = privateMemoryState.get(connection);
+  if (mem !== undefined && !mem.dirty && facts !== undefined) {
+    const cached = facts.answers.get(sql);
+    if (cached !== undefined) return cached;
+  }
   const inTransaction = Boolean(
     (connection as { inTransaction?: boolean }).inTransaction
     || (connection as { isTransaction?: boolean }).isTransaction,
   );
-  let facts = schemaFacts.get(connection);
   try {
     const counter = facts?.counter ?? connection.prepare("SELECT schema_version FROM pragma_schema_version");
     const version = counter.get()?.schema_version;
     if (typeof version === "number" && Number.isSafeInteger(version)) {
       if (inTransaction && (!facts || facts.version !== version)) {
-        return Boolean(connection.prepare(sql).get());
+        const stmt = facts?.statements.get(sql) ?? connection.prepare(sql);
+        facts?.statements.set(sql, stmt);
+        return Boolean(stmt.get());
       }
-      if (!facts) schemaFacts.set(connection, facts = { counter, version, answers: new Map() });
+      if (!facts) schemaFacts.set(connection, facts = { counter, version, answers: new Map(), statements: new Map() });
       else if (facts.version !== version) { facts.version = version; facts.answers.clear(); }
+      if (mem !== undefined && !inTransaction) mem.dirty = false;
       let answer = facts.answers.get(sql);
-      if (answer === undefined) facts.answers.set(sql, answer = Boolean(connection.prepare(sql).get()));
+      if (answer === undefined) {
+        let stmt = facts.statements.get(sql);
+        if (!stmt) facts.statements.set(sql, stmt = connection.prepare(sql));
+        facts.answers.set(sql, answer = Boolean(stmt.get()));
+      }
       return answer;
     }
   } catch { /* Fall through to the direct lookup. */ }

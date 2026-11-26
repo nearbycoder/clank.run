@@ -1,7 +1,7 @@
 /* @clankImportSource ../vendor/dom.js */
 import { For, Show, computed, effect, onCleanup, signal } from "../vendor/dom.js";
 import { batch } from "../vendor/core.js";
-import { CLANK_THEME_PRESETS } from "../vendor/ui-theme.js";
+import { CLANK_THEME_PRESETS, getClankTheme } from "../vendor/ui-theme.js";
 import { createSynthAudio } from "./synth-audio.js";
 import { TRACKS, STEPS, PRESETS, STORAGE_KEY, MAX_PATTERN_BYTES, DEFAULT_MASTER, DEFAULT_LEVEL, patternFromPreset, readStoredState, importPattern, createPatternHistory, createTapTempo, editTrack, isTransportShortcut, stepDestination, type PatternDocument } from "./synth-data.js";
 
@@ -194,7 +194,11 @@ export function SynthView(_props: SynthBootState) {
       try { window.localStorage.setItem(STORAGE_KEY, value); } catch { /* Browser storage is optional. */ }
     });
     effect(() => { audio.setVolume(masterVolume.value); });
-    effect(() => { document.documentElement.setAttribute("data-clank-theme", selectedTheme.value); });
+    effect(() => {
+      const theme = getClankTheme(selectedTheme.value);
+      document.documentElement.setAttribute("data-clank-theme", selectedTheme.value);
+      document.documentElement.style.colorScheme = theme?.scheme ?? "dark";
+    });
     const keydown = (event: KeyboardEvent) => {
       if (!isTransportShortcut(event)) return;
       event.preventDefault();

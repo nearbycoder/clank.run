@@ -55,59 +55,123 @@ export interface Router {
   Link: Component<Record<string, unknown> & { to: string }>;
 }
 
-const patternCache = new Map<string, { regex: RegExp; keys: string[] }>();
+interface CompiledRoute {
+  kind: number;
+  pre: string;
+  preSlash: string;
+  firstDyn: number;
+  segs: string[];
+  names: Array<string | null>;
+  regex?: RegExp;
+}
+const patternCache = new Map<string, CompiledRoute>();
 const MAX_PATTERN_CACHE = 1_000;
+let lastPattern = "";
+let lastRoute: CompiledRoute | undefined;
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function decodeSegment(raw: string): string | null {
+  if (!raw.includes("%")) return raw;
+  try { return decodeURIComponent(raw); } catch { return null; }
 }
 
-function compilePath(path: string): { regex: RegExp; keys: string[] } {
+function compilePath(path: string): CompiledRoute {
   const cached = patternCache.get(path);
   if (cached) return cached;
-  const keys: string[] = [];
-  if (path === "*") return { regex: /^(.*)$/, keys: ["wildcard"] };
-  const segments = path.split("/").filter(Boolean);
-  let source = "^";
-  for (const segment of segments) {
-    source += "/";
-    if (segment === "*") {
-      keys.push("wildcard");
-      source += "(.*)";
-    } else if (segment.startsWith(":")) {
-      const optional = segment.endsWith("?");
-      const key = segment.slice(1, optional ? -1 : undefined);
-      if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(key)) throw new TypeError(`Invalid route parameter name: ${key}`);
-      keys.push(key);
-      source = optional
-        ? source.slice(0, -1) + "(?:/([^/]+))?"
-        : source + "([^/]+)";
-    } else {
-      source += escapeRegExp(segment);
+  let route: CompiledRoute;
+  if (path === "*") {
+    route = { kind: 0, pre: "", preSlash: "", firstDyn: 0, segs: [], names: [] };
+  } else {
+    const segs = path.split("/").filter(Boolean);
+    let optCount = 0, wild = false, firstDyn = -1, pre = "", source = "^";
+    const names: Array<string | null> = [];
+    const keys: string[] = [];
+    for (let i = 0; i < segs.length; i++) {
+      const seg = segs[i]!;
+      source += "/";
+      if (seg === "*") {
+        wild = true;
+        if (firstDyn === -1) firstDyn = i;
+        names.push("wildcard");
+        keys.push("wildcard");
+        source += "(.*)";
+      } else if (seg.charCodeAt(0) === 58) {
+        const opt = seg.charCodeAt(seg.length - 1) === 63;
+        const key = seg.slice(1, opt ? -1 : undefined);
+        if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(key)) throw new TypeError(`Invalid route parameter name: ${key}`);
+        if (opt) optCount++;
+        if (firstDyn === -1) firstDyn = i;
+        names.push(key);
+        keys.push(key);
+        source = opt ? `${source.slice(0, -1)}(?:/([^/]+))?` : `${source}([^/]+)`;
+      } else {
+        if (firstDyn === -1) pre += `/${seg}`;
+        names.push(null);
+        source += seg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      }
+    }
+    const preSlash = `${pre}/`;
+    if (firstDyn === -1) route = { kind: 1, pre, preSlash, firstDyn, segs, names };
+    else if (!optCount && !wild) route = { kind: 2, pre, preSlash: firstDyn > 0 ? preSlash : "/", firstDyn, segs, names };
+    else route = { kind: 3, pre, preSlash, firstDyn, segs: keys, names, regex: new RegExp(`${source}/?$`) };
+  }
+  if (patternCache.size >= MAX_PATTERN_CACHE) patternCache.delete(patternCache.keys().next().value!);
+  patternCache.set(path, route);
+  return route;
+}
+
+function matchCompiled(r: CompiledRoute, p: string): Record<string, string> | null {
+  const kind = r.kind;
+  if (kind === 1) return p === r.pre || p === r.preSlash ? {} : null;
+  if (kind === 2) {
+    const pre = r.preSlash;
+    if (!p.startsWith(pre)) return null;
+    let end = p.length;
+    if (end > 1 && p.charCodeAt(end - 1) === 47) end--;
+    let pos = pre.length;
+    let params: Record<string, string> | undefined;
+    const segs = r.segs, names = r.names;
+    for (let i = r.firstDyn; i < segs.length; i++) {
+      if (pos >= end) return null;
+      let next = p.indexOf("/", pos);
+      if (next === -1 || next > end) next = end;
+      if (next === pos) return null;
+      const name = names[i];
+      if (name === null) {
+        const seg = segs[i]!;
+        if (next - pos !== seg.length || !p.startsWith(seg, pos)) return null;
+      } else {
+        const val = decodeSegment(p.slice(pos, next));
+        if (val === null) return null;
+        (params ??= {})[name] = val;
+      }
+      pos = next + 1;
+    }
+    return pos === end + 1 ? (params ?? {}) : null;
+  }
+  if (kind === 0) {
+    const val = decodeSegment(p);
+    return val === null ? null : { wildcard: val };
+  }
+  const matched = r.regex!.exec(p);
+  if (!matched) return null;
+  const params: Record<string, string> = {};
+  for (let i = 0; i < r.segs.length; i++) {
+    const raw = matched[i + 1];
+    if (raw !== undefined) {
+      const val = decodeSegment(raw);
+      if (val === null) return null;
+      params[r.segs[i]!] = val;
     }
   }
-  source += segments.length === 0 ? "/?$" : "/?$";
-  const compiled = { regex: new RegExp(source), keys };
-  if (patternCache.size >= MAX_PATTERN_CACHE) patternCache.delete(patternCache.keys().next().value!);
-  patternCache.set(path, compiled);
-  return compiled;
+  return params;
 }
 
 export function matchPath(pattern: string, pathname: string): Record<string, string> | null {
-  const { regex, keys } = compilePath(pattern);
-  const matched = regex.exec(pathname);
-  if (!matched) return null;
-  const params: Record<string, string> = {};
-  try {
-    for (let index = 0; index < keys.length; index++) {
-      const value = matched[index + 1];
-      // Most captures are plain; decoding only matters once a percent sign appears.
-      if (value !== undefined) params[keys[index]!] = value.includes("%") ? decodeURIComponent(value) : value;
-    }
-  } catch {
-    return null;
-  }
-  return params;
+  if (pattern === lastPattern && lastRoute !== undefined) return matchCompiled(lastRoute, pathname);
+  const route = compilePath(pattern);
+  lastPattern = pattern;
+  lastRoute = route;
+  return matchCompiled(route, pathname);
 }
 
 function queryRecord(search: URLSearchParams): Record<string, string | string[]> {

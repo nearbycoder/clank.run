@@ -35,6 +35,14 @@ declare const DOCUMENT_ID_TABLE: unique symbol;
 export type DocumentId<Table extends string> = string & { readonly [DOCUMENT_ID_TABLE]: Table };
 
 type Parser<T> = (input: unknown, path: ReadonlyArray<string | number>) => T;
+/** Sentinel returned by fast validators when input fails and needs slow-path issue reporting. */
+const FAST_FAIL = Symbol("clank.fast-fail");
+type FastValidator = (input: unknown) => unknown;
+const fastValidators = new WeakMap<Schema<any>, FastValidator>();
+/** Inline primitive validator kinds: 1 = plain string, 2 = plain finite number, 3 = boolean. */
+const fastKinds = new WeakMap<Schema<any>, number>();
+const ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
 /**
  * Every schema parses from its own root: a parent adds its key to a child's
  * issues only when one is thrown. Parsers therefore share one empty path and
@@ -44,24 +52,40 @@ const ROOT_PATH: ReadonlyArray<string | number> = Object.freeze([]);
 
 class SchemaValue<T> implements Schema<T> {
   declare readonly description?: string;
-  readonly #parser: Parser<T>;
-  readonly #json: Record<string, unknown>;
-  constructor(parser: Parser<T>, json: Record<string, unknown>, description?: string) { this.#parser = parser; this.#json = json; this.description = description; }
+  readonly _parser: Parser<T>;
+  readonly _fast: FastValidator | undefined;
+  readonly _json: Record<string, unknown>;
+  constructor(parser: Parser<T>, json: Record<string, unknown>, description?: string, fast?: FastValidator) {
+    this._parser = parser;
+    this._fast = fast;
+    this._json = json;
+    this.description = description;
+  }
 
   parse(input: unknown): T {
-    return this.#parser(input, ROOT_PATH);
+    const fast = this._fast;
+    if (fast !== undefined) {
+      const result = fast(input);
+      if (result !== FAST_FAIL) return result as T;
+    }
+    return this._parser(input, ROOT_PATH);
   }
 
   safeParse(input: unknown): { success: true; data: T } | { success: false; error: ValidationError } {
+    const fast = this._fast;
+    if (fast !== undefined) {
+      const result = fast(input);
+      if (result !== FAST_FAIL) return { success: true, data: result as T };
+    }
     try {
-      return { success: true, data: this.parse(input) };
+      return { success: true, data: this._parser(input, ROOT_PATH) };
     } catch (error) {
       return { success: false, error: error instanceof ValidationError ? error : new ValidationError([{ path: [], message: String(error) }]) };
     }
   }
 
   toJSONSchema(): Record<string, unknown> {
-    const output = structuredClone(this.#json);
+    const output = structuredClone(this._json);
     return this.description ? { ...output, description: this.description } : output;
   }
 }
@@ -70,8 +94,17 @@ function issue(path: ReadonlyArray<string | number>, message: string, expected?:
   throw new ValidationError([{ path: [...path], message, expected, received }]);
 }
 
-function schemaValue<T>(parser: Parser<T>, json: Record<string, unknown>, description?: string, children: readonly Schema[] | false = []): Schema<T> {
-  const schema = new SchemaValue(parser, json, description);
+function schemaValue<T>(
+  parser: Parser<T>,
+  json: Record<string, unknown>,
+  description?: string,
+  children: readonly Schema[] | false = [],
+  fast?: FastValidator,
+  kind?: number,
+): Schema<T> {
+  const schema = new SchemaValue(parser, json, description, fast);
+  if (fast !== undefined) fastValidators.set(schema, fast);
+  if (kind !== undefined) fastKinds.set(schema, kind);
   if (children) registerBuiltinSchema(schema, children);
   return schema;
 }
@@ -90,52 +123,71 @@ type InferShape<S extends Shape> = InferSchemaShape<S>;
 export const s = {
   id<const Table extends string>(table: Table, description?: string): Schema<DocumentId<Table>> {
     if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(table)) throw new TypeError(`Invalid table name for ID: ${table}`);
-    return schemaValue((input, path) => typeof input === "string" && /^[A-Za-z0-9_-]{8,128}$/.test(input)
+    return schemaValue((input, path) => typeof input === "string" && ID_PATTERN.test(input)
       ? input as DocumentId<Table>
       : issue(path, `Expected an ID for ${table}.`, `id<${table}>`, input), {
       type: "string",
       format: "clank-id",
       table,
-    }, description);
+    }, description, [], (input) => typeof input === "string" && ID_PATTERN.test(input) ? input : FAST_FAIL);
   },
 
   string(options: { description?: string; min?: number; max?: number; pattern?: RegExp } = {}): Schema<string> {
-    const settings = {
-      ...options,
-      ...(options.pattern ? { pattern: new RegExp(options.pattern.source, options.pattern.flags) } : {}),
-    };
+    const min = options.min;
+    const max = options.max;
+    const pattern = options.pattern ? new RegExp(options.pattern.source, options.pattern.flags) : undefined;
+    const plain = min === undefined && max === undefined && pattern === undefined;
+    const fast: FastValidator = plain
+      ? (input) => typeof input === "string" ? input : FAST_FAIL
+      : (input) => {
+          if (typeof input !== "string") return FAST_FAIL;
+          if (min !== undefined && input.length < min) return FAST_FAIL;
+          if (max !== undefined && input.length > max) return FAST_FAIL;
+          if (pattern !== undefined) {
+            pattern.lastIndex = 0;
+            if (!pattern.test(input)) return FAST_FAIL;
+          }
+          return input;
+        };
     return schemaValue((input, path) => {
       if (typeof input !== "string") return issue(path, "Expected a string.", "string", input);
-      if (settings.min !== undefined && input.length < settings.min) return issue(path, `Must contain at least ${settings.min} characters.`);
-      if (settings.max !== undefined && input.length > settings.max) return issue(path, `Must contain at most ${settings.max} characters.`);
-      if (settings.pattern) {
-        settings.pattern.lastIndex = 0;
-        if (!settings.pattern.test(input)) return issue(path, `Must match ${settings.pattern}.`);
+      if (min !== undefined && input.length < min) return issue(path, `Must contain at least ${min} characters.`);
+      if (max !== undefined && input.length > max) return issue(path, `Must contain at most ${max} characters.`);
+      if (pattern) {
+        pattern.lastIndex = 0;
+        if (!pattern.test(input)) return issue(path, `Must match ${pattern}.`);
       }
       return input;
     }, {
       type: "string",
-      ...(settings.min === undefined ? {} : { minLength: settings.min }),
-      ...(settings.max === undefined ? {} : { maxLength: settings.max }),
-      ...(settings.pattern ? { pattern: settings.pattern.source,
-        ...(settings.pattern.flags ? { "x-clank-pattern-flags": settings.pattern.flags } : {}) } : {}),
-    }, settings.description);
+      ...(min === undefined ? {} : { minLength: min }),
+      ...(max === undefined ? {} : { maxLength: max }),
+      ...(pattern ? { pattern: pattern.source,
+        ...(pattern.flags ? { "x-clank-pattern-flags": pattern.flags } : {}) } : {}),
+    }, options.description, [], fast, plain ? 1 : undefined);
   },
 
   email(options: { description?: string; min?: number; max?: number } = {}): Schema<string> {
-    const settings = { ...options };
+    const min = options.min;
+    const max = options.max;
+    const fast: FastValidator = (input) => {
+      if (typeof input !== "string") return FAST_FAIL;
+      if (min !== undefined && input.length < min) return FAST_FAIL;
+      if (max !== undefined && input.length > max) return FAST_FAIL;
+      return EMAIL_PATTERN.test(input) ? input : FAST_FAIL;
+    };
     return schemaValue((input, path) => {
       if (typeof input !== "string") return issue(path, "Expected an email address.", "email", input);
-      if (settings.min !== undefined && input.length < settings.min) return issue(path, `Must contain at least ${settings.min} characters.`);
-      if (settings.max !== undefined && input.length > settings.max) return issue(path, `Must contain at most ${settings.max} characters.`);
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(input)) return issue(path, "Expected a valid email address.", "email", input);
+      if (min !== undefined && input.length < min) return issue(path, `Must contain at least ${min} characters.`);
+      if (max !== undefined && input.length > max) return issue(path, `Must contain at most ${max} characters.`);
+      if (!EMAIL_PATTERN.test(input)) return issue(path, "Expected a valid email address.", "email", input);
       return input;
     }, {
       type: "string",
       format: "email",
-      ...(settings.min === undefined ? {} : { minLength: settings.min }),
-      ...(settings.max === undefined ? {} : { maxLength: settings.max }),
-    }, settings.description);
+      ...(min === undefined ? {} : { minLength: min }),
+      ...(max === undefined ? {} : { maxLength: max }),
+    }, options.description, [], fast);
   },
 
   url(options: {
@@ -180,47 +232,109 @@ export const s = {
   },
 
   number(options: { description?: string; min?: number; max?: number; integer?: boolean } = {}): Schema<number> {
-    const settings = { ...options };
+    const min = options.min;
+    const max = options.max;
+    const integer = options.integer === true;
+    const plain = !integer && min === undefined && max === undefined;
+    const fast: FastValidator = plain
+      ? (input) => typeof input === "number" && Number.isFinite(input) ? input : FAST_FAIL
+      : (input) => {
+          if (typeof input !== "number" || !Number.isFinite(input)) return FAST_FAIL;
+          if (integer && !Number.isInteger(input)) return FAST_FAIL;
+          if (min !== undefined && input < min) return FAST_FAIL;
+          if (max !== undefined && input > max) return FAST_FAIL;
+          return input;
+        };
     return schemaValue((input, path) => {
       if (typeof input !== "number" || !Number.isFinite(input)) return issue(path, "Expected a finite number.", "number", input);
-      if (settings.integer && !Number.isInteger(input)) return issue(path, "Expected an integer.", "integer", input);
-      if (settings.min !== undefined && input < settings.min) return issue(path, `Must be at least ${settings.min}.`);
-      if (settings.max !== undefined && input > settings.max) return issue(path, `Must be at most ${settings.max}.`);
+      if (integer && !Number.isInteger(input)) return issue(path, "Expected an integer.", "integer", input);
+      if (min !== undefined && input < min) return issue(path, `Must be at least ${min}.`);
+      if (max !== undefined && input > max) return issue(path, `Must be at most ${max}.`);
       return input;
     }, {
-      type: settings.integer ? "integer" : "number",
-      ...(settings.min === undefined ? {} : { minimum: settings.min }),
-      ...(settings.max === undefined ? {} : { maximum: settings.max }),
-    }, settings.description);
+      type: integer ? "integer" : "number",
+      ...(min === undefined ? {} : { minimum: min }),
+      ...(max === undefined ? {} : { maximum: max }),
+    }, options.description, [], fast, plain ? 2 : undefined);
   },
 
   boolean(description?: string): Schema<boolean> {
-    return schemaValue((input, path) => typeof input === "boolean" ? input : issue(path, "Expected a boolean.", "boolean", input), { type: "boolean" }, description);
+    return schemaValue(
+      (input, path) => typeof input === "boolean" ? input : issue(path, "Expected a boolean.", "boolean", input),
+      { type: "boolean" },
+      description,
+      [],
+      (input) => typeof input === "boolean" ? input : FAST_FAIL,
+      3,
+    );
   },
 
   literal<const T extends string | number | boolean | null>(value: T, description?: string): Schema<T> {
-    return schemaValue((input, path) => Object.is(input, value) ? value : issue(path, `Expected ${JSON.stringify(value)}.`, JSON.stringify(value), input), { const: value }, description);
+    return schemaValue(
+      (input, path) => Object.is(input, value) ? value : issue(path, `Expected ${JSON.stringify(value)}.`, JSON.stringify(value), input),
+      { const: value },
+      description,
+      [],
+      (input) => Object.is(input, value) ? value : FAST_FAIL,
+    );
   },
 
   enum<const T extends readonly string[]>(values: T, description?: string): Schema<T[number]> {
     const members = Object.freeze([...values]) as readonly string[];
     if (members.length === 0) throw new TypeError("s.enum() requires at least one value.");
-    if (new Set(members).size !== members.length) throw new TypeError("s.enum() values must be unique.");
-    return schemaValue((input, path) => typeof input === "string" && members.includes(input)
+    const lookup = new Set(members);
+    if (lookup.size !== members.length) throw new TypeError("s.enum() values must be unique.");
+    return schemaValue((input, path) => typeof input === "string" && lookup.has(input)
       ? input as T[number]
-      : issue(path, `Expected one of: ${members.join(", ")}.`, "enum", input), { type: "string", enum: [...members] }, description);
+      : issue(path, `Expected one of: ${members.join(", ")}.`, "enum", input), { type: "string", enum: [...members] }, description, [],
+      (input) => typeof input === "string" && lookup.has(input) ? input : FAST_FAIL);
   },
 
   unknown(description?: string): Schema<unknown> {
-    return schemaValue((input) => input, { optional: true }, description);
+    return schemaValue((input) => input, { optional: true }, description, [], (input) => input);
   },
 
   array<T>(item: Schema<T>, options: { description?: string; min?: number; max?: number } = {}): Schema<T[]> {
-    const settings = { ...options };
+    const min = options.min;
+    const max = options.max;
+    const itemFast = fastValidators.get(item);
+    const itemKind = fastKinds.get(item);
+    const fast: FastValidator | undefined = itemKind === 1 && min === undefined && max === undefined
+      ? (input) => {
+          if (!Array.isArray(input)) return FAST_FAIL;
+          const length = input.length;
+          for (let i = 0; i < length; i++) if (typeof input[i] !== "string") return FAST_FAIL;
+          return input.slice();
+        }
+      : itemKind === 2 && min === undefined && max === undefined
+        ? (input) => {
+            if (!Array.isArray(input)) return FAST_FAIL;
+            const length = input.length;
+            for (let i = 0; i < length; i++) {
+              const v = input[i];
+              if (typeof v !== "number" || !Number.isFinite(v)) return FAST_FAIL;
+            }
+            return input.slice();
+          }
+        : itemFast
+          ? (input) => {
+              if (!Array.isArray(input)) return FAST_FAIL;
+              const length = input.length;
+              if (min !== undefined && length < min) return FAST_FAIL;
+              if (max !== undefined && length > max) return FAST_FAIL;
+              const output = new Array<T>(length);
+              for (let index = 0; index < length; index++) {
+                const parsed = itemFast(input[index]);
+                if (parsed === FAST_FAIL) return FAST_FAIL;
+                output[index] = parsed as T;
+              }
+              return output;
+            }
+          : undefined;
     return schemaValue((input, path) => {
       if (!Array.isArray(input)) return issue(path, "Expected an array.", "array", input);
-      if (settings.min !== undefined && input.length < settings.min) return issue(path, `Must contain at least ${settings.min} items.`);
-      if (settings.max !== undefined && input.length > settings.max) return issue(path, `Must contain at most ${settings.max} items.`);
+      if (min !== undefined && input.length < min) return issue(path, `Must contain at least ${min} items.`);
+      if (max !== undefined && input.length > max) return issue(path, `Must contain at most ${max} items.`);
       const issues: ValidationIssue[] = [];
       const output = new Array<T>(input.length);
       for (let index = 0; index < input.length; index++) {
@@ -235,9 +349,9 @@ export const s = {
     }, {
       type: "array",
       items: item.toJSONSchema(),
-      ...(settings.min === undefined ? {} : { minItems: settings.min }),
-      ...(settings.max === undefined ? {} : { maxItems: settings.max }),
-    }, settings.description, [item]);
+      ...(min === undefined ? {} : { minItems: min }),
+      ...(max === undefined ? {} : { maxItems: max }),
+    }, options.description, [item], fast);
   },
 
   record<T>(
@@ -246,6 +360,26 @@ export const s = {
   ): Schema<Record<string, T>> {
     const keyPattern = options.keyPattern
       ? new RegExp(options.keyPattern.source, options.keyPattern.flags)
+      : undefined;
+    const valueFast = fastValidators.get(value);
+    const fast: FastValidator | undefined = valueFast
+      ? (input) => {
+          if (!input || typeof input !== "object" || Array.isArray(input)) return FAST_FAIL;
+          const source = input as Record<string, unknown>;
+          const output: Record<string, T> = {};
+          for (const key in source) {
+            if (!Object.hasOwn(source, key)) continue;
+            if (key === "__proto__" || key === "prototype" || key === "constructor") return FAST_FAIL;
+            if (keyPattern !== undefined) {
+              keyPattern.lastIndex = 0;
+              if (!keyPattern.test(key)) return FAST_FAIL;
+            }
+            const parsed = valueFast(source[key]);
+            if (parsed === FAST_FAIL) return FAST_FAIL;
+            output[key] = parsed as T;
+          }
+          return output;
+        }
       : undefined;
     return schemaValue((input, path) => {
       if (!input || typeof input !== "object" || Array.isArray(input)) return issue(path, "Expected a record object.", "record", input);
@@ -273,7 +407,7 @@ export const s = {
       additionalProperties: value.toJSONSchema(),
       ...(keyPattern ? { propertyNames: { pattern: keyPattern.source,
         ...(keyPattern.flags ? { "x-clank-pattern-flags": keyPattern.flags } : {}) } } : {}),
-    }, options.description, [value]);
+    }, options.description, [value], fast);
   },
 
   object<S extends Shape>(shape: S, options: { description?: string; strict?: boolean } = {}): Schema<InferShape<S>> {
@@ -291,6 +425,55 @@ export const s = {
     const keys = Object.keys(safeShape);
     const members = keys.map((key) => safeShape[key]!);
     const loose = settings.strict === false;
+    const memberFasts = members.map((member) => fastValidators.get(member));
+    const memberKinds = members.map((member) => fastKinds.get(member) ?? 0);
+    const hasProtoKey = keys.includes("__proto__");
+    const safeKeys = keys.every((key) => !(key in Object.prototype));
+    const allFast = !hasProtoKey && safeKeys && memberFasts.every((fn) => fn !== undefined);
+    const keyCount = keys.length;
+    const fast: FastValidator | undefined = allFast
+      ? keyCount === 0
+        ? (input) => {
+            if (!input || typeof input !== "object" || Array.isArray(input)) return FAST_FAIL;
+            const output: Record<string, unknown> = { ...(input as Record<string, unknown>) };
+            if (!loose) { for (const _ in output) return FAST_FAIL; }
+            return output;
+          }
+        : (input) => {
+            if (!input || typeof input !== "object" || Array.isArray(input)) return FAST_FAIL;
+            const source = input as Record<string, unknown>;
+            const output: Record<string, unknown> = { ...source };
+            let matched = 0;
+            for (let index = 0; index < keyCount; index++) {
+              const key = keys[index]!;
+              const val = output[key];
+              const kind = memberKinds[index]!;
+              if (val !== undefined) {
+                matched++;
+                if (kind === 1) { if (typeof val !== "string") return FAST_FAIL; continue; }
+                if (kind === 2) { if (typeof val !== "number" || !Number.isFinite(val)) return FAST_FAIL; continue; }
+                if (kind === 3) { if (typeof val !== "boolean") return FAST_FAIL; continue; }
+                const parsed = memberFasts[index]!(val);
+                if (parsed === FAST_FAIL) return FAST_FAIL;
+                if (parsed !== val) output[key] = parsed;
+              } else {
+                const own = Object.hasOwn(output, key);
+                if (!own && Object.hasOwn(source, key)) return FAST_FAIL;
+                if (kind !== 0) return FAST_FAIL;
+                const parsed = memberFasts[index]!(undefined);
+                if (parsed === FAST_FAIL) return FAST_FAIL;
+                output[key] = parsed;
+                matched++;
+              }
+            }
+            if (!loose) {
+              let ownCount = 0;
+              for (const _ in output) ownCount++;
+              if (ownCount !== matched) return FAST_FAIL;
+            }
+            return output;
+          }
+      : undefined;
     return schemaValue((input, path) => {
       if (!input || typeof input !== "object" || Array.isArray(input)) return issue(path, "Expected an object.", "object", input);
       const source = input as Record<string, unknown>;
@@ -316,28 +499,39 @@ export const s = {
       properties,
       required,
       additionalProperties: settings.strict === false,
-    }, settings.description, Object.values(safeShape));
+    }, settings.description, Object.values(safeShape), fast);
   },
 
   optional<T>(inner: Schema<T>): Schema<T | undefined> {
-    return schemaValue((input, path) => input === undefined ? undefined : parseAt(inner, input, path), { ...inner.toJSONSchema(), optional: true }, undefined, [inner]);
+    const innerFast = fastValidators.get(inner);
+    return schemaValue(
+      (input, path) => input === undefined ? undefined : parseAt(inner, input, path),
+      { ...inner.toJSONSchema(), optional: true },
+      undefined,
+      [inner],
+      innerFast ? (input) => input === undefined ? undefined : innerFast(input) : undefined,
+    );
   },
 
   nullable<T>(inner: Schema<T>): Schema<T | null> {
     const json = { ...inner.toJSONSchema() }, optional = json.optional === true;
     delete json.optional;
+    const innerFast = fastValidators.get(inner);
     return schemaValue((input, path) => input === null ? null : parseAt(inner, input, path), {
       anyOf: [json, { type: "null" }], ...(optional ? { optional: true } : {}),
-    }, undefined, [inner]);
+    }, undefined, [inner], innerFast ? (input) => input === null ? null : innerFast(input) : undefined);
   },
 
   default<T>(inner: Schema<T>, fallback: T): Schema<T> {
     const snapshot = structuredClone(fallback);
+    const primitiveFallback = snapshot === null || typeof snapshot !== "object";
+    const innerFast = fastValidators.get(inner);
     return schemaValue(
-      (input, path) => input === undefined ? structuredClone(snapshot) : parseAt(inner, input, path),
+      (input, path) => input === undefined ? (primitiveFallback ? snapshot : structuredClone(snapshot)) : parseAt(inner, input, path),
       { ...inner.toJSONSchema(), default: structuredClone(snapshot), optional: true },
       inner.description,
       [inner],
+      innerFast ? (input) => input === undefined ? (primitiveFallback ? snapshot : structuredClone(snapshot)) : innerFast(input) : undefined,
     );
   },
 

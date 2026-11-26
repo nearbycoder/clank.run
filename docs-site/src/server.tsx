@@ -47,6 +47,9 @@ interface Manifest {
 interface DocumentationPage extends DocMetadata {
   markdown: string;
   text: string;
+  titleLower: string;
+  headingsLower: string;
+  textLower: string;
   html: string;
   toc: TableOfContentsEntry[];
 }
@@ -73,10 +76,14 @@ const manifest = JSON.parse(await readFile(`${contentRoot}manifest.json`, "utf8"
 const docs = await Promise.all(manifest.docs.map(async (metadata) => {
   const markdown = await readFile(`${contentRoot}${metadata.slug}.md`, "utf8");
   const rendered = renderMarkdown(markdown);
+  const plainText = markdownPlainText(markdown);
   return {
     ...metadata,
     markdown,
-    text: markdownPlainText(markdown),
+    text: plainText,
+    titleLower: metadata.title.toLowerCase(),
+    headingsLower: metadata.headings.join(" ").toLowerCase(),
+    textLower: plainText.toLowerCase(),
     html: rendered.html,
     toc: rendered.toc,
   } satisfies DocumentationPage;
@@ -432,22 +439,31 @@ function DocPage(props: { doc: DocumentationPage }) {
 function scoreSearch(doc: DocumentationPage, query: string): number {
   const terms = query.toLowerCase().split(/\s+/u).filter((term) => term.length > 1);
   if (!terms.length) return 0;
-  const title = doc.title.toLowerCase();
-  const headings = doc.headings.join(" ").toLowerCase();
-  const body = doc.text.toLowerCase();
-  return terms.reduce((score, term) =>
-    score
-    + (title.includes(term) ? 40 : 0)
-    + (headings.includes(term) ? 15 : 0)
-    + Math.min(8, body.split(term).length - 1), 0);
+  let score = 0;
+  for (let i = 0; i < terms.length; i++) {
+    const term = terms[i]!;
+    if (doc.titleLower.includes(term)) score += 40;
+    if (doc.headingsLower.includes(term)) score += 15;
+    let count = 0;
+    let pos = 0;
+    while (count < 8) {
+      const found = doc.textLower.indexOf(term, pos);
+      if (found < 0) break;
+      count++;
+      pos = found + term.length;
+    }
+    score += count;
+  }
+  return score;
 }
 
 function searchSnippet(doc: DocumentationPage, query: string): string {
   const term = query.toLowerCase().split(/\s+/u).find((entry) => entry.length > 1) ?? "";
-  const index = term ? doc.text.toLowerCase().indexOf(term) : -1;
+  const source = doc.text;
+  const index = term ? doc.textLower.indexOf(term) : -1;
   const start = Math.max(0, index < 0 ? 0 : index - 90);
-  const end = Math.min(doc.text.length, start + 260);
-  return `${start > 0 ? "…" : ""}${doc.text.slice(start, end).trim()}${end < doc.text.length ? "…" : ""}`;
+  const end = Math.min(source.length, start + 260);
+  return `${start > 0 ? "…" : ""}${source.slice(start, end).trim()}${end < source.length ? "…" : ""}`;
 }
 
 function searchDocumentation(query: string) {
@@ -727,10 +743,19 @@ function NotFoundPage() {
   );
 }
 
-async function page(view: unknown, options: PageOptions): Promise<Response> {
-  const nonce = crypto.randomUUID().replaceAll("-", "");
+const NONCE_PLACEHOLDER = `__CLANK_CSP_NONCE_${crypto.randomUUID().replaceAll("-", "")}__`;
+const staticPageCache = new Map<string, Promise<string>>();
+
+function safeTrailingSlashRedirect(url: URL): Response | null {
+  if (url.pathname.length <= 1 || !url.pathname.endsWith("/")) return null;
+  const target = url.pathname.slice(0, -1);
+  if (!target.startsWith("/") || target.startsWith("//") || target.startsWith("/\\") || target.includes("\\")) return null;
+  return new Response(null, { status: 308, headers: { location: `${target}${url.search}` } });
+}
+
+function renderPageDocument(view: unknown, options: PageOptions, nonce: string): Promise<string> {
   const canonical = `${canonicalOrigin}${options.path}`;
-  const document = await renderDocument(
+  return renderDocument(
     <SiteChrome activeSlug={options.activeSlug} toc={options.toc} initialQuery={options.initialQuery} searchGroup={options.searchGroup}>{view}</SiteChrome>,
     {
       title: options.title === "Clank Documentation" ? options.title : `${options.title} · Clank Documentation`,
@@ -764,6 +789,24 @@ async function page(view: unknown, options: PageOptions): Promise<Response> {
       ),
     },
   );
+}
+
+async function page(view: unknown, options: PageOptions, cacheKey?: string): Promise<Response> {
+  const nonce = crypto.randomUUID().replaceAll("-", "");
+  let document: string;
+  if (cacheKey) {
+    let cached = staticPageCache.get(cacheKey);
+    if (!cached) {
+      cached = renderPageDocument(view, options, NONCE_PLACEHOLDER).catch((error) => {
+        staticPageCache.delete(cacheKey);
+        throw error;
+      });
+      staticPageCache.set(cacheKey, cached);
+    }
+    document = (await cached).replaceAll(NONCE_PLACEHOLDER, nonce);
+  } else {
+    document = await renderPageDocument(view, options, nonce);
+  }
   return html(document, {
     status: options.status ?? 200,
     headers: {
@@ -919,15 +962,11 @@ export const app = createApp({
     title: "Clank Documentation",
     description: "Build, understand, secure, and deploy applications with the AI-first Clank TypeScript framework.",
     path: "/",
-  }))
+  }, "home"))
   .get("/docs", () => new Response(null, { status: 308, headers: { location: "/docs/getting-started" } }))
   .get("/docs/:slug", ({ params, url }) => {
-    if (url.pathname.endsWith("/")) {
-      return new Response(null, {
-        status: 308,
-        headers: { location: `${url.pathname.slice(0, -1)}${url.search}` },
-      });
-    }
+    const redirected = safeTrailingSlashRedirect(url);
+    if (redirected) return redirected;
     const doc = docsBySlug.get(params.slug);
     return doc
       ? page(<DocPage doc={doc} />, {
@@ -936,7 +975,7 @@ export const app = createApp({
         path: `/docs/${doc.slug}`,
         activeSlug: doc.slug,
         toc: doc.toc,
-      })
+      }, `doc:${doc.slug}`)
       : page(<NotFoundPage />, {
         title: "Not found",
         description: "The requested Clank documentation page does not exist.",
@@ -1036,9 +1075,8 @@ export const app = createApp({
   .route("*", "/brand/*", ({ request }) => appFiles.handle(request))
   .get("/vendor/*", ({ request }) => vendorFiles.handle(request))
   .route("*", "*", ({ url }) => {
-    if (url.pathname.length > 1 && url.pathname.endsWith("/")) {
-      return new Response(null, { status: 308, headers: { location: `${url.pathname.slice(0, -1)}${url.search}` } });
-    }
+    const redirected = safeTrailingSlashRedirect(url);
+    if (redirected) return redirected;
     return page(<NotFoundPage />, {
       title: "Not found",
       description: "The requested Clank documentation page does not exist.",

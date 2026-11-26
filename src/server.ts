@@ -1,5 +1,5 @@
 import { matchPath } from "./router.ts";
-import { createBufferedResponse } from "./security.ts";
+import { applyBufferedDefaultHeaders, createBufferedResponse } from "./security.ts";
 
 type SegmentParams<Segment extends string> = Segment extends `:${infer Name}?`
   ? { [Key in Name]?: string }
@@ -26,6 +26,7 @@ export type RequestHandler<Path extends string = string, State extends Record<st
 export type Middleware<State extends Record<string, unknown> = Record<string, unknown>> = (context: RequestContext<string, State>, next: () => Promise<Response>) => Response | Promise<Response>;
 
 interface Endpoint {
+  order: number;
   method: string;
   path: string;
   handler: RequestHandler<any, any>;
@@ -33,28 +34,43 @@ interface Endpoint {
   literal?: string;
   /** Text every match of a parameterised route must start with. */
   prefix?: string;
+  /** Single trailing parameter name when the route is strictly `<prefix>/:<param>`. */
+  singleParam?: string;
+  /** First non-empty static prefix segment key for indexed lookup, or "" for catch-all/root-param. */
+  bucket: string;
 }
 
 /**
  * Derive string pre-checks from a route pattern. matchPath() stays the only
- * judge of parameterised routes; these checks just skip patterns that cannot
- * match, and resolve parameterless routes without running a regular expression.
+ * judge of complex parameterised routes; these checks skip patterns that cannot
+ * match and directly match static and single-trailing-parameter routes.
  */
-function describeEndpoint(method: string, path: string, handler: RequestHandler<any, any>): Endpoint {
-  const endpoint: Endpoint = { method, path, handler };
+function describeEndpoint(order: number, method: string, path: string, handler: RequestHandler<any, any>): Endpoint {
+  const endpoint: Endpoint = { order, method, path, handler, bucket: "" };
   if (path === "*") return endpoint;
   const segments = path.split("/").filter(Boolean);
   // A malformed parameter name must keep failing exactly where matchPath() reports it.
   if (segments.some((segment) => segment.startsWith(":") && !/^:[A-Za-z][A-Za-z0-9_]*\??$/.test(segment))) return endpoint;
   let literal = "";
-  for (const segment of segments) {
+  let firstSeg = "";
+  let secondSeg = "";
+  for (let i = 0; i < segments.length; i++) {
+    const segment = segments[i]!;
     if (segment === "*" || segment.startsWith(":")) {
-      endpoint.prefix = segment.startsWith(":") && segment.endsWith("?") ? literal : `${literal}/`;
+      const isOptional = segment.startsWith(":") && segment.endsWith("?");
+      endpoint.prefix = isOptional ? literal : `${literal}/`;
+      endpoint.bucket = secondSeg ? `/${firstSeg}/${secondSeg}` : firstSeg ? `/${firstSeg}` : "";
+      if (!isOptional && segment !== "*" && i === segments.length - 1) {
+        endpoint.singleParam = segment.slice(1);
+      }
       return endpoint;
     }
+    if (i === 0) firstSeg = segment;
+    else if (i === 1) secondSeg = segment;
     literal += `/${segment}`;
   }
   endpoint.literal = literal;
+  endpoint.bucket = literal;
   return endpoint;
 }
 
@@ -65,30 +81,78 @@ function matchEndpoint(endpoint: Endpoint, pathname: string): Record<string, str
       ? {}
       : null;
   }
-  if (endpoint.prefix !== undefined && !pathname.startsWith(endpoint.prefix)) return null;
+  const prefix = endpoint.prefix;
+  if (prefix !== undefined && !pathname.startsWith(prefix)) return null;
+  const param = endpoint.singleParam;
+  if (param !== undefined) {
+    const start = prefix!.length;
+    let end = pathname.length;
+    if (end > start && pathname.charCodeAt(end - 1) === 47) end--;
+    if (end <= start) return null;
+    const slash = pathname.indexOf("/", start);
+    if (slash !== -1 && slash < end) return null;
+    const raw = pathname.slice(start, end);
+    if (!raw.includes("%")) return { [param]: raw };
+    try { return { [param]: decodeURIComponent(raw) }; } catch { return null; }
+  }
   return matchPath(endpoint.path, pathname);
+}
+
+/** Fast pathname extraction for canonical http(s) URLs; falls back to new URL() for unusual forms. */
+function fastPathname(rawUrl: string): string | null {
+  const schemeEnd = rawUrl.indexOf("://");
+  if (schemeEnd === -1) return null;
+  const len = rawUrl.length;
+  let pathStart = -1;
+  for (let i = schemeEnd + 3; i < len; i++) {
+    const c = rawUrl.charCodeAt(i);
+    if (c === 47) { pathStart = i; break; }
+    if (c === 63 || c === 35) return "/";
+    if (c === 92) return null;
+  }
+  if (pathStart === -1) return "/";
+  let end = len;
+  for (let i = pathStart + 1; i < len; i++) {
+    const c = rawUrl.charCodeAt(i);
+    if (c === 63 || c === 35) { end = i; break; }
+    if (c === 92) return null;
+    if (c === 46 && rawUrl.charCodeAt(i - 1) === 47) return null;
+  }
+  return rawUrl.slice(pathStart, end);
+}
+
+class LazyRequestContext<State extends Record<string, unknown>> implements RequestContext<string, State> {
+  request: Request;
+  params: Record<string, string>;
+  _url: URL | undefined;
+  _state: State | undefined;
+  constructor(request: Request, url: URL | undefined, params: Record<string, string>) {
+    this.request = request;
+    this._url = url;
+    this.params = params;
+  }
+  get url(): URL {
+    return this._url ??= new URL(this.request.url);
+  }
+  set url(value: URL) {
+    this._url = value;
+  }
+  get state(): State {
+    return this._state ??= {} as State;
+  }
+  set state(value: State) {
+    this._state = value;
+  }
 }
 
 const JSON_TYPE = "application/json; charset=utf-8";
 const TEXT_TYPE = "text/plain; charset=utf-8";
 const HTML_TYPE = "text/html; charset=utf-8";
-
-/** Response init with a default content type, without building an intermediate Headers when none was supplied. */
-function withContentType(init: ResponseInit, type: string): ResponseInit {
-  const supplied = init.headers;
-  if (supplied === undefined) return { ...init, headers: { "content-type": type } };
-  const prototype = typeof supplied === "object" && supplied !== null ? Object.getPrototypeOf(supplied) : undefined;
-  if (prototype === Object.prototype || prototype === null) {
-    // A plain record converts once inside Response; only add the default when absent.
-    for (const name in supplied as Record<string, string>) {
-      if (name.length === 12 && name.toLowerCase() === "content-type") return init;
-    }
-    return { ...init, headers: { ...(supplied as Record<string, string>), "content-type": type } };
-  }
-  const headers = new Headers(supplied);
-  if (!headers.has("content-type")) headers.set("content-type", type);
-  return { ...init, headers };
-}
+const EMPTY_INIT: ResponseInit = {};
+const NOT_FOUND_BODY = '{"error":{"code":"NOT_FOUND","message":"Route not found."}}';
+const NOT_FOUND_INIT: ResponseInit = { status: 404 };
+const DIRECT_FINALIZER = Symbol("clank.direct-finalizer");
+type DirectFinalizer = (response: Response) => Response;
 
 export interface CreateAppOptions {
   onError?: (error: unknown, context: RequestContext<string, any>) => void;
@@ -105,88 +169,230 @@ export interface RequestApp<State extends Record<string, unknown> = Record<strin
   handle(request: Request): Promise<Response>;
 }
 
+interface RouteIndex {
+  byMethodStatic: Map<string, Map<string, Endpoint>>;
+  anyStatic: Map<string, Endpoint>;
+  seg1Buckets: Map<string, Endpoint[]>;
+  seg2Buckets: Map<string, Endpoint[]>;
+  catchAll: Endpoint[];
+  hasDynamic: boolean;
+  hasSeg1: boolean;
+  hasSeg2: boolean;
+}
+
+function buildRouteIndex(endpoints: Endpoint[]): RouteIndex {
+  const byMethodStatic = new Map<string, Map<string, Endpoint>>();
+  const anyStatic = new Map<string, Endpoint>();
+  const seg1Buckets = new Map<string, Endpoint[]>();
+  const seg2Buckets = new Map<string, Endpoint[]>();
+  const catchAll: Endpoint[] = [];
+  let hasDynamic = false;
+  for (let i = 0; i < endpoints.length; i++) {
+    const ep = endpoints[i]!;
+    if (ep.literal !== undefined) {
+      if (ep.method === "*") {
+        if (!anyStatic.has(ep.literal)) anyStatic.set(ep.literal, ep);
+      } else {
+        let map = byMethodStatic.get(ep.method);
+        if (map === undefined) { map = new Map(); byMethodStatic.set(ep.method, map); }
+        if (!map.has(ep.literal)) map.set(ep.literal, ep);
+      }
+    } else {
+      hasDynamic = true;
+      if (ep.bucket === "") {
+        catchAll.push(ep);
+      } else {
+        const target = ep.bucket.indexOf("/", 1) !== -1 ? seg2Buckets : seg1Buckets;
+        let list = target.get(ep.bucket);
+        if (list === undefined) { list = []; target.set(ep.bucket, list); }
+        list.push(ep);
+      }
+    }
+  }
+  return { byMethodStatic, anyStatic, seg1Buckets, seg2Buckets, catchAll, hasDynamic, hasSeg1: seg1Buckets.size > 0, hasSeg2: seg2Buckets.size > 0 };
+}
+
+function matchBucket(
+  list: Endpoint[] | undefined,
+  method: string,
+  pathname: string,
+  bestOrder: number,
+  context: LazyRequestContext<any>,
+): Endpoint | undefined {
+  if (list === undefined) return undefined;
+  for (let i = 0; i < list.length; i++) {
+    const ep = list[i]!;
+    if (ep.order >= bestOrder) return undefined;
+    if (ep.method !== method && ep.method !== "*") continue;
+    const matched = matchEndpoint(ep, pathname);
+    if (matched !== null) {
+      context.params = matched;
+      return ep;
+    }
+  }
+  return undefined;
+}
+
+function lookupEndpoint(
+  index: RouteIndex,
+  method: string,
+  pathname: string,
+  context: LazyRequestContext<any>,
+): Endpoint | undefined {
+  const len = pathname.length;
+  const key = len > 1 && pathname.charCodeAt(len - 1) === 47
+    ? pathname.slice(0, -1)
+    : pathname === "/" ? "" : pathname;
+  let best: Endpoint | undefined;
+  const mMap = index.byMethodStatic.get(method);
+  const mStatic = mMap !== undefined ? mMap.get(key) : undefined;
+  const wStatic = index.anyStatic.size > 0 ? index.anyStatic.get(key) : undefined;
+  if (mStatic !== undefined && (wStatic === undefined || mStatic.order < wStatic.order)) best = mStatic;
+  else if (wStatic !== undefined) best = wStatic;
+  if (!index.hasDynamic) return best;
+  let bestOrder = best !== undefined ? best.order : Infinity;
+
+  if (len > 1 && pathname.charCodeAt(0) === 47) {
+    const slash2 = pathname.indexOf("/", 1);
+    if (index.hasSeg1) {
+      const seg1 = slash2 === -1 ? pathname : pathname.slice(0, slash2);
+      const found = matchBucket(index.seg1Buckets.get(seg1), method, pathname, bestOrder, context);
+      if (found !== undefined) { best = found; bestOrder = found.order; }
+    }
+    if (index.hasSeg2 && slash2 !== -1 && slash2 + 1 < len) {
+      const slash3 = pathname.indexOf("/", slash2 + 1);
+      const seg2 = slash3 === -1 ? pathname : pathname.slice(0, slash3);
+      const found = matchBucket(index.seg2Buckets.get(seg2), method, pathname, bestOrder, context);
+      if (found !== undefined) { best = found; bestOrder = found.order; }
+    }
+  }
+  if (index.catchAll.length > 0) {
+    const found = matchBucket(index.catchAll, method, pathname, bestOrder, context);
+    if (found !== undefined) best = found;
+  }
+  return best;
+}
+
 export function createApp<State extends Record<string, unknown> = Record<string, unknown>>(
   options: CreateAppOptions = {},
 ): RequestApp<State> {
   const middleware: Middleware<State>[] = [];
   const endpoints: Endpoint[] = [];
+  let routeIndex: RouteIndex | null = null;
+  const handleError = (error: unknown, context: RequestContext<string, State>): Response => {
+    // Observability failures must not replace the redacted HTTP response.
+    try { void Promise.resolve(options.onError?.(error, context)).catch(() => undefined); }
+    catch { /* The observer can also throw synchronously. */ }
+    return json({
+      error: {
+        code: "INTERNAL_ERROR",
+        message: "An internal server error occurred.",
+      },
+    }, {
+      status: 500,
+      headers: {
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "referrer-policy": "no-referrer",
+      },
+    });
+  };
   const app: RequestApp<State> = {
     use(entry) { middleware.push(entry); return app; },
-    route(method, path, handler) { endpoints.push(describeEndpoint(method.toUpperCase(), path, handler as RequestHandler<any, any>)); return app; },
+    route(method, path, handler) {
+      routeIndex = null;
+      endpoints.push(describeEndpoint(endpoints.length, method.toUpperCase(), path, handler as RequestHandler<any, any>));
+      return app;
+    },
     get(path, handler) { return app.route("GET", path, handler); },
     post(path, handler) { return app.route("POST", path, handler); },
     put(path, handler) { return app.route("PUT", path, handler); },
     patch(path, handler) { return app.route("PATCH", path, handler); },
     delete(path, handler) { return app.route("DELETE", path, handler); },
-    async handle(request) {
-      const url = new URL(request.url);
-      const context = { request, url, params: {}, state: {} as State } as RequestContext<string, State>;
+    handle(request) {
+      let parsedUrl: URL | undefined;
+      let pathname = fastPathname(request.url);
+      if (pathname === null) {
+        parsedUrl = new URL(request.url);
+        pathname = parsedUrl.pathname;
+      }
+      const index = routeIndex ??= buildRouteIndex(endpoints);
+      const method = request.method;
+      const upperMethod = method === "GET" || method === "POST" || method === "PUT" || method === "DELETE" || method === "PATCH" || method === "HEAD" || method === "OPTIONS"
+        ? method
+        : method.toUpperCase();
+      const context = new LazyRequestContext<State>(request, parsedUrl, {});
       try {
-        let endpoint: Endpoint | undefined;
-        let params: Record<string, string> = {};
-        const method = request.method.toUpperCase(), pathname = url.pathname;
-        for (let position = 0; position < endpoints.length; position++) {
-          const entry = endpoints[position]!;
-          if (entry.method !== method && entry.method !== "*") continue;
-          const matched = matchEndpoint(entry, pathname);
-          if (matched) {
-            endpoint = entry;
-            params = matched;
-            break;
-          }
-        }
-        (context as RequestContext<string, State>).params = params;
-        // Without middleware there is no chain to build: answer directly.
-        if (middleware.length === 0) {
-          return await (endpoint
+        const endpoint = lookupEndpoint(index, upperMethod, pathname, context);
+        const mwLen = middleware.length;
+        // Without middleware, or with a single response-finalizing middleware (e.g. securityHeaders),
+        // avoid allocating closures and extra async state machines on synchronous handlers.
+        if (mwLen === 0) {
+          const result = endpoint
             ? endpoint.handler(context)
-            : json({ error: { code: "NOT_FOUND", message: "Route not found." } }, { status: 404 }));
+            : createBufferedResponse(NOT_FOUND_BODY, NOT_FOUND_INIT, JSON_TYPE);
+          return result instanceof Promise
+            ? result.catch((error) => handleError(error, context))
+            : Promise.resolve(result);
         }
-        const terminal = async () => endpoint
-          ? endpoint.handler(context)
-          : json({ error: { code: "NOT_FOUND", message: "Route not found." } }, { status: 404 });
-        let index = -1;
+        if (mwLen === 1) {
+          const mw = middleware[0]!;
+          const finalizer = (mw as unknown as Record<symbol, DirectFinalizer | undefined>)[DIRECT_FINALIZER];
+          if (finalizer !== undefined) {
+            const result = endpoint
+              ? endpoint.handler(context)
+              : createBufferedResponse(NOT_FOUND_BODY, NOT_FOUND_INIT, JSON_TYPE);
+            return result instanceof Promise
+              ? result.then(finalizer).catch((error) => handleError(error, context))
+              : Promise.resolve(finalizer(result));
+          }
+          let called = false;
+          const result = mw(context, () => {
+            if (called) return Promise.reject(new Error("next() called more than once."));
+            called = true;
+            try {
+              return Promise.resolve(endpoint
+                ? endpoint.handler(context)
+                : createBufferedResponse(NOT_FOUND_BODY, NOT_FOUND_INIT, JSON_TYPE));
+            } catch (error) {
+              return Promise.reject(error);
+            }
+          });
+          return result instanceof Promise
+            ? result.catch((error) => handleError(error, context))
+            : Promise.resolve(result);
+        }
+        let positionIndex = -1;
         const dispatch = async (position: number): Promise<Response> => {
-          if (position <= index) throw new Error("next() called more than once.");
-          index = position;
+          if (position <= positionIndex) throw new Error("next() called more than once.");
+          positionIndex = position;
           const entry = middleware[position];
-          return entry ? entry(context, () => dispatch(position + 1)) : terminal();
+          return entry
+            ? entry(context, () => dispatch(position + 1))
+            : endpoint
+              ? endpoint.handler(context)
+              : createBufferedResponse(NOT_FOUND_BODY, NOT_FOUND_INIT, JSON_TYPE);
         };
-        return await dispatch(0);
+        return dispatch(0).catch((error) => handleError(error, context));
       } catch (error) {
-        // Observability failures must not replace the redacted HTTP response.
-        try { void Promise.resolve(options.onError?.(error, context)).catch(() => undefined); }
-        catch { /* The observer can also throw synchronously. */ }
-        return json({
-          error: {
-            code: "INTERNAL_ERROR",
-            message: "An internal server error occurred.",
-          },
-        }, {
-          status: 500,
-          headers: {
-            "cache-control": "no-store",
-            "x-content-type-options": "nosniff",
-            "x-frame-options": "DENY",
-            "referrer-policy": "no-referrer",
-          },
-        });
+        return Promise.resolve(handleError(error, context));
       }
     },
   };
   return app;
 }
 
-export function json(value: unknown, init: ResponseInit = {}): Response {
-  return createBufferedResponse(JSON.stringify(value), withContentType(init, JSON_TYPE));
+export function json(value: unknown, init: ResponseInit = EMPTY_INIT): Response {
+  return createBufferedResponse(JSON.stringify(value), init, JSON_TYPE);
 }
 
-export function text(value: string, init: ResponseInit = {}): Response {
-  return createBufferedResponse(value, withContentType(init, TEXT_TYPE));
+export function text(value: string, init: ResponseInit = EMPTY_INIT): Response {
+  return createBufferedResponse(value, init, TEXT_TYPE);
 }
 
-export function html(value: string, init: ResponseInit = {}): Response {
-  return createBufferedResponse(value, withContentType(init, HTML_TYPE));
+export function html(value: string, init: ResponseInit = EMPTY_INIT): Response {
+  return createBufferedResponse(value, init, HTML_TYPE);
 }
 
 export type CorsOrigin = string | readonly string[] | ((origin: string | null, request: Request) => string | null);
@@ -243,8 +449,8 @@ export function securityHeaders<State extends Record<string, unknown> = Record<s
       if (!headers.has(entry[0])) headers.set(entry[0], entry[1]);
     }
   };
-  return async (_context, next) => {
-    const response = await next();
+  const finalize = (response: Response): Response => {
+    if (applyBufferedDefaultHeaders(response, defaults)) return response;
     // These defaults are fixed and only fill gaps, so they can be written onto
     // the handler's own response. Rebuilding a Response is kept for the ones
     // whose headers are immutable (redirects, upstream fetches).
@@ -257,6 +463,9 @@ export function securityHeaders<State extends Record<string, unknown> = Record<s
       return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
     }
   };
+  const mw: Middleware<State> = async (_context, next) => finalize(await next());
+  (mw as unknown as Record<symbol, DirectFinalizer>)[DIRECT_FINALIZER] = finalize;
+  return mw;
 }
 
 export function logger<State extends Record<string, unknown> = Record<string, unknown>>(write: (message: string) => void = console.log): Middleware<State> {

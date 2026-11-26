@@ -439,3 +439,21 @@ test("documentation code fences highlight supported languages without changing o
     "&lt;/code&gt;&lt;script&gt;alert(1)&lt;/script&gt;",
   );
 });
+
+test("documentation site rejects protocol-relative open redirects and unsafe markdown links", async (t) => {
+  const origin = await startDocumentationServer(t);
+  const legitimate = await fetch(`${origin}/docs/getting-started/`, { redirect: "manual" });
+  assert.equal(legitimate.status, 308);
+  assert.equal(legitimate.headers.get("location"), "/docs/getting-started");
+
+  for (const path of ["//evil.example/", "//evil.example/path/", "/\\evil.example/"]) {
+    const response = await fetch(`${origin}${path}`, { redirect: "manual" });
+    assert.equal(response.status, 404, `expected 404 for ${path}`);
+    assert.equal(response.headers.get("location"), null, `unexpected redirect for ${path}`);
+  }
+
+  const { renderMarkdown } = await import("../docs-site/dist/markdown.js");
+  const rendered = renderMarkdown("[a](//evil.example) [b](/\\evil.example) [c](/safe)");
+  assert.doesNotMatch(rendered.html, /evil\.example/u);
+  assert.match(rendered.html, /href="\/safe"/u);
+});

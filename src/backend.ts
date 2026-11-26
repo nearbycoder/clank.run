@@ -38,6 +38,8 @@ import {
 } from "./security.ts";
 import {
   SQLITE_INTERNAL,
+  primeSchemaLookup,
+  registerPrivateMemorySchema,
   retentionHistoryProtection,
   retentionHistoryUsage,
   schemaLookup,
@@ -875,6 +877,20 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
 
   let version = readGlobalRevision(prepared);
   assertChangeJournalIntegrity(prepared, version);
+  const isPrivateMemory = path === ":memory:" && nativeSQLiteHandles.has(native);
+  const memorySchemaState = isPrivateMemory ? { dirty: false } : undefined;
+  let memoryMetaDirty = false;
+  let totalHistoryRows = isPrivateMemory
+    ? Number(prepared("SELECT count(*) AS n FROM clank_document_revisions").get()?.n ?? 0)
+    : Number.POSITIVE_INFINITY;
+  const trustedDecodeTables = new Set<string>();
+  if (isPrivateMemory) {
+    for (const [name, table] of Object.entries(schema.tables) as Array<[string, TableDefinition<any, any, any>]>) {
+      if (isBuiltinSchema(table.schema) && isStrictFlatJsonSchema(table.schema.toJSONSchema())) {
+        trustedDecodeTables.add(name);
+      }
+    }
+  }
   let closed = false;
   const recoveryRequired = !!native.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_pitr_state'").get();
   let capture: import("./sqlite-internal.ts").SQLiteTransactionCapture | undefined;
@@ -915,13 +931,17 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
 
   const synchronizeChanges = (through?: number, strict = true) => {
     if (closed || transactionActive || readActive || synchronizing || nativeControlActive) return;
+    if (isPrivateMemory && !memoryMetaDirty && through === undefined) return;
     synchronizing = true;
     try {
       const target = through ?? readGlobalRevision(prepared);
       if (target < version) {
         throw new Error(`SQLite global revision moved backwards from ${version} to ${target}.`);
       }
-      if (target === version) return;
+      if (target === version) {
+        if (isPrivateMemory && through === undefined) memoryMetaDirty = false;
+        return;
+      }
       const rows = prepared(`SELECT revision, sequence, table_name, document_id, owner_id
         FROM clank_changes
         WHERE revision > ? AND revision <= ?
@@ -947,6 +967,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
         }));
       }
       if (observedRevision !== target) fullInvalidation = true;
+      if (isPrivateMemory && through === undefined) memoryMetaDirty = false;
       publish(databaseChange(target, records, fullInvalidation));
     } catch (error) {
       if (strict) throw error;
@@ -996,8 +1017,21 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
       : " ORDER BY _creation_time ASC, _id ASC";
     const limitSql = count === undefined ? "" : ` LIMIT ${validateLimit(count)}`;
     const sql = `SELECT _id, _owner_id, _creation_time, _version, _data FROM ${tableIdentifier(name)}${where}${orderSql}${limitSql}`;
-    const fields = [...conditions.filter((condition) => condition.comparison === "eq").map((condition) => condition.field), ...conditions.filter((condition) => condition.comparison !== "eq" && condition.comparison !== "neq").map((condition) => condition.field), ...(order ? [order.field] : [])];
-    return observeQuery(name, sql, parameters, fields, () => prepared(sql).all(...parameters)).map((row) => decodeDocument<Schema, Name>(schema, name, row));
+    const fields = options.queryDiagnostics
+      ? [...conditions.filter((condition) => condition.comparison === "eq").map((condition) => condition.field), ...conditions.filter((condition) => condition.comparison !== "eq" && condition.comparison !== "neq").map((condition) => condition.field), ...(order ? [order.field] : [])]
+      : [];
+    const rows = options.queryDiagnostics
+      ? observeQuery(name, sql, parameters, fields, () => prepared(sql).all(...parameters))
+      : prepared(sql).all(...parameters);
+    const definition = tableDefinition(schema, name);
+    const fastDecode = isPrivateMemory && !memoryMetaDirty && trustedDecodeTables.has(name);
+    const out = new Array<DocumentFor<Schema, Name>>(rows.length);
+    for (let i = 0; i < rows.length; i++) {
+      out[i] = fastDecode
+        ? decodeTrustedDocument<Schema, Name>(definition, name, rows[i]!)
+        : decodeDocument<Schema, Name>(schema, name, rows[i]!);
+    }
+    return out;
   };
 
   const getDocument = <Name extends TableName<Schema>>(name: Name, id: Id<Name>, ownerId?: string | null): DocumentFor<Schema, Name> | null => {
@@ -1477,8 +1511,10 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
       assertSynchronous(value, "mutation");
       updateSourceSearch(native, changes.records.values());
       if (changes.records.size > 0) {
-        prepared("UPDATE clank_meta SET _value = _value + 1 WHERE _key = 'global_version'").run();
-        committedVersion = readGlobalRevision(prepared);
+        const bumpRow = prepared("UPDATE clank_meta SET _value = _value + 1 WHERE _key = 'global_version' RETURNING _value").get();
+        committedVersion = bumpRow !== undefined
+          ? safeRevision(bumpRow._value, "global database revision")
+          : readGlobalRevision(prepared);
         if (validatedPending === committedVersion - 1) {
           prepared(`INSERT INTO clank_meta (_key, _value) VALUES ('validated_schema', ?), ('validated_revision', ?)
             ON CONFLICT(_key) DO UPDATE SET _value = excluded._value`).run(storedSchema.fingerprint, committedVersion);
@@ -1523,41 +1559,55 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
             entry.restoredFrom?.sequence ?? null,
           );
         }
-        prepared("DELETE FROM clank_changes WHERE revision < ?")
-          .run(Math.max(1, committedVersion - retention + 1));
-        const holdProtection = retentionHistoryProtection(native), holdNow = Date.now();
-        const heldHistory = retentionHistoryUsage(native, holdProtection, holdNow);
-        if (heldHistory.records > 100000 || heldHistory.bytes > 128 * 1024 * 1024) throw new BackendActionError(503, "RETENTION_CAPACITY", "Held source history exceeds 100,000 records or 128 MiB; review retention before admitting writes.");
-        prepared(`DELETE FROM clank_document_revisions WHERE revision < ?${holdProtection}`)
-          .run(Math.max(1, committedVersion - historyRetention + 1), ...(holdProtection ? [holdNow] : []));
-        const historyCutoff = prepared(`SELECT revision, sequence
-          FROM clank_document_revisions
-          WHERE table_name = ? AND document_id = ?
-          ORDER BY revision DESC, sequence DESC
-          LIMIT 1 OFFSET ?`);
-        const pruneDocumentHistory = prepared(`DELETE FROM clank_document_revisions
-          WHERE table_name = ? AND document_id = ?
-          AND (revision < ? OR (revision = ? AND sequence <= ?))${holdProtection}`);
-        for (const record of changes.records.values()) {
-          const cutoff = historyCutoff.get(record.table, record.id, historyPerDocument);
-          if (!cutoff) continue;
-          const cutoffRevision = positiveIntegerOption(Number(cutoff.revision), "history cutoff revision");
-          const cutoffSequence = safeNonNegativeInteger(cutoff.sequence, "history cutoff sequence");
-          pruneDocumentHistory.run(
-            record.table,
-            record.id,
-            cutoffRevision,
-            cutoffRevision,
-            cutoffSequence,
-            ...(holdProtection ? [holdNow] : []),
-          );
+        if (committedVersion > retention) {
+          prepared("DELETE FROM clank_changes WHERE revision < ?")
+            .run(committedVersion - retention + 1);
+        }
+        const holdProtection = retentionHistoryProtection(native);
+        const holdNow = holdProtection ? Date.now() : 0;
+        if (holdProtection) {
+          const heldHistory = retentionHistoryUsage(native, holdProtection, holdNow);
+          if (heldHistory.records > 100000 || heldHistory.bytes > 128 * 1024 * 1024) throw new BackendActionError(503, "RETENTION_CAPACITY", "Held source history exceeds 100,000 records or 128 MiB; review retention before admitting writes.");
+        }
+        if (committedVersion > historyRetention) {
+          prepared(`DELETE FROM clank_document_revisions WHERE revision < ?${holdProtection}`)
+            .run(committedVersion - historyRetention + 1, ...(holdProtection ? [holdNow] : []));
+          totalHistoryRows = Number.POSITIVE_INFINITY;
+        }
+        if (totalHistoryRows + changes.history.length > historyPerDocument) {
+          const historyCutoff = prepared(`SELECT revision, sequence
+            FROM clank_document_revisions
+            WHERE table_name = ? AND document_id = ?
+            ORDER BY revision DESC, sequence DESC
+            LIMIT 1 OFFSET ?`);
+          const pruneDocumentHistory = prepared(`DELETE FROM clank_document_revisions
+            WHERE table_name = ? AND document_id = ?
+            AND (revision < ? OR (revision = ? AND sequence <= ?))${holdProtection}`);
+          for (const record of changes.records.values()) {
+            const cutoff = historyCutoff.get(record.table, record.id, historyPerDocument);
+            if (!cutoff) continue;
+            const cutoffRevision = positiveIntegerOption(Number(cutoff.revision), "history cutoff revision");
+            const cutoffSequence = safeNonNegativeInteger(cutoff.sequence, "history cutoff sequence");
+            pruneDocumentHistory.run(
+              record.table,
+              record.id,
+              cutoffRevision,
+              cutoffRevision,
+              cutoffSequence,
+              ...(holdProtection ? [holdNow] : []),
+            );
+          }
+          totalHistoryRows = Number.POSITIVE_INFINITY;
         }
       }
       capture?.commit();
       writeGuard?.();
       native.exec("COMMIT");
       // This process's validation was either recorded by that commit or overtaken by another writer.
-      if (committedVersion !== undefined) validatedPending = undefined;
+      if (committedVersion !== undefined) {
+        validatedPending = undefined;
+        if (Number.isFinite(totalHistoryRows)) totalHistoryRows += changes.history.length;
+      }
     } catch (error) {
       if (began) {
         try { native.exec("ROLLBACK"); } catch { /* SQLite may already have rolled back. */ }
@@ -1569,7 +1619,13 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
       snapshotToken = undefined;
       activeChanges = undefined;
     }
-    if (committedVersion !== undefined) synchronizeChanges(committedVersion, false);
+    if (committedVersion !== undefined) {
+      if (committedVersion === version + 1 && !memoryMetaDirty) {
+        publish(databaseChange(committedVersion, [...changes.records.values()], false));
+      } else {
+        synchronizeChanges(committedVersion, false);
+      }
+    }
     return value;
   };
 
@@ -1577,6 +1633,18 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
     ensureOpen();
     if (transactionActive || readActive) {
       throw new Error("Nested database reads are not supported; call helpers with the current database context.");
+    }
+    if (isPrivateMemory && !memoryMetaDirty && !capture && !writeGuard) {
+      readActive = true;
+      snapshotToken = {};
+      try {
+        const value = handler();
+        assertSynchronous(value, "query");
+        return { value, version };
+      } finally {
+        readActive = false;
+        snapshotToken = undefined;
+      }
     }
     for (let attempt = 0; attempt < 8; attempt++) {
       synchronizeChanges(undefined, true);
@@ -1718,6 +1786,11 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
       },
       exec(sql) {
         ensureOpen();
+        if (memorySchemaState !== undefined) {
+          memorySchemaState.dirty = true;
+          memoryMetaDirty = true;
+          totalHistoryRows = Number.POSITIVE_INFINITY;
+        }
         if (capture || writeGuard) {
           if(writeGuard)assertGuardedSQLiteSQL(sql);
           if (capture&&/\b(?:BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|ATTACH|DETACH|PRAGMA|VACUUM)\b/iu.test(sql)) throw new Error("Recovery capture forbids raw transaction controls and connection-changing SQL.");
@@ -1729,6 +1802,11 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
       },
       prepare(sql) {
         ensureOpen();
+        if (memorySchemaState !== undefined && !/^\s*(?:SELECT|EXPLAIN)\b/iu.test(sql)) {
+          memorySchemaState.dirty = true;
+          memoryMetaDirty = true;
+          totalHistoryRows = Number.POSITIVE_INFINITY;
+        }
         // Some PRAGMAs change native connection state during preparation itself.
         if (capture || writeGuard) assertGuardedSQLiteSQL(sql, true);
         let statement = prepared(sql);
@@ -1784,6 +1862,20 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
   if (pollInterval > 0) {
     poller = setInterval(() => synchronizeChanges(undefined, false), pollInterval);
     (poller as ReturnType<typeof setInterval> & { unref?: () => void }).unref?.();
+  }
+  if (!recoveryRequired) {
+    const optionalSchemaChecks = [
+      "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_source_search_indexes'",
+      "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_retention_holds'",
+      "SELECT 1 FROM sqlite_schema WHERE name='clank_organization_security_state' AND type='table'",
+      "SELECT 1 FROM sqlite_schema WHERE name='clank_organization_security_policies' AND type='table'",
+    ];
+    primeSchemaLookup(native, optionalSchemaChecks);
+    primeSchemaLookup(database[SQLITE_INTERNAL], optionalSchemaChecks);
+  }
+  if (memorySchemaState !== undefined) {
+    registerPrivateMemorySchema(native, memorySchemaState);
+    registerPrivateMemorySchema(database[SQLITE_INTERNAL], memorySchemaState);
   }
   if (nativeSQLiteHandles.has(native)) {
     const unchanged = unchangedSourceObjects([database, database[SQLITE_INTERNAL]], false);
@@ -2677,7 +2769,13 @@ export async function openBackend<
     servedQuery = undefined;
     let body = entry !== undefined && entry.value === result.value && entry.version === result.version ? entry.body : undefined;
     if (body === undefined) {
-      body = JSON.stringify({ ok: true, ...result });
+      if (result.value === undefined) {
+        body = `{"ok":true,"version":${result.version}}`;
+      } else if (lastFinalizedJson !== undefined && lastFinalizedValue === result.value) {
+        body = `{"ok":true,"value":${lastFinalizedJson},"version":${result.version}}`;
+      } else {
+        body = JSON.stringify({ ok: true, ...result });
+      }
       if (entry !== undefined && entry.value === result.value && entry.version === result.version && body.length <= MAX_RETAINED_BODY) entry.body = body;
     }
     return createBufferedResponse(body, RESULT_RESPONSE);
@@ -3084,6 +3182,7 @@ export async function openBackend<
     });
   };
 
+  const anonymousCaller = callerFor(anonymous);
   const runtime: BackendRuntime<Schema, Functions, Auth, Jobs, Storage> = {
     definition,
     reviewedActions,
@@ -3111,13 +3210,13 @@ export async function openBackend<
     },
     contractRevision: mcp?.revision ?? null,
     query(pathOrReference: string | FunctionReference<"query", any, any>, input: unknown = {}) {
-      return callerFor(anonymous).query(pathOrReference as any, input);
+      return anonymousCaller.query(pathOrReference as any, input);
     },
     mutation(pathOrReference: string | FunctionReference<"mutation", any, any>, input: unknown = {}) {
-      return callerFor(anonymous).mutation(pathOrReference as any, input);
+      return anonymousCaller.mutation(pathOrReference as any, input);
     },
     subscribe(pathOrReference: string | FunctionReference<"query", any, any>, input: unknown, listener: (value: unknown, version: number) => void) {
-      return callerFor(anonymous).subscribe(pathOrReference as any, input, listener);
+      return anonymousCaller.subscribe(pathOrReference as any, input, listener);
     },
     async caller(request) {
       ensureOpen();
@@ -3126,9 +3225,18 @@ export async function openBackend<
     },
     async handle(request) {
       ensureOpen();
-      const url = new URL(request.url);
-      const securityRoute = (securityRoutePattern ??= new RegExp('^'+prefix.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")+'/organizations/([A-Za-z0-9_-]{8,128})/security-policy(?:/(preview|recover))?$','u')).exec(url.pathname);
+      let parsedUrl: URL | undefined;
+      const rawUrl = request.url;
+      let pathname = fastBackendPathname(rawUrl);
+      if (pathname === null) {
+        parsedUrl = new URL(rawUrl);
+        pathname = parsedUrl.pathname;
+      }
+      const securityRoute = pathname.includes("/security-policy")
+        ? (securityRoutePattern ??= new RegExp('^'+prefix.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")+'/organizations/([A-Za-z0-9_-]{8,128})/security-policy(?:/(preview|recover))?$','u')).exec(pathname)
+        : null;
       if (securityRoute) {
+        const url = parsedUrl ??= new URL(rawUrl);
         try {
           if (!organizationSecurity || securityRoute[1] !== options.organizationSecurity?.organizationId) return problem(404,'NOT_FOUND','Organization security is unavailable.');
           if (url.search || request.headers.has('authorization')) return problem(403,'ORGANIZATION_POLICY_BROWSER','Use your current human browser session.');
@@ -3151,15 +3259,15 @@ export async function openBackend<
       }
       if (reviewedActions?.handles(request)) return reviewedActions.handle(request);
       if (oauth?.handles(request)) return oauth.handle(request);
-      if (mcp && url.pathname === mcpPath) return mcp.handle(request);
-      if (mcp && request.method === "GET" && url.pathname === "/.well-known/clank") {
+      if (mcp && pathname === mcpPath) return mcp.handle(request);
+      if (mcp && request.method === "GET" && pathname === "/.well-known/clank") {
         return agentDiscovery(request);
       }
-      if (mcp && request.method === "GET" && url.pathname === "/.well-known/mcp/server-card.json") {
+      if (mcp && request.method === "GET" && pathname === "/.well-known/mcp/server-card.json") {
         return mcpServerCard(request);
       }
-      if (options.buckets && (url.pathname === options.buckets.basePath || url.pathname.startsWith(`${options.buckets.basePath}/`))) {
-        const capabilityRequest = url.pathname.includes("/cap/") || url.pathname.includes("/version-cap/") || url.pathname.includes("/public/");
+      if (options.buckets && (pathname === options.buckets.basePath || pathname.startsWith(`${options.buckets.basePath}/`))) {
+        const capabilityRequest = pathname.includes("/cap/") || pathname.includes("/version-cap/") || pathname.includes("/public/");
         if (!capabilityRequest && options.verifyOrigin !== false
           && !requestOriginAllowed(request, { allowedOrigins: options.allowedOrigins })) {
           return problem(403, "ORIGIN_MISMATCH", "Cross-origin bucket request rejected.");
@@ -3185,23 +3293,28 @@ export async function openBackend<
             : undefined,
         });
       }
-      if (!url.pathname.startsWith(`${prefix}/`) && url.pathname !== prefix) return problem(404, "NOT_FOUND", "Backend endpoint not found.");
-      if (authRuntime && (url.pathname === `${prefix}/auth` || url.pathname.startsWith(`${prefix}/auth/`))) {
+      if (!pathname.startsWith(`${prefix}/`) && pathname !== prefix) return problem(404, "NOT_FOUND", "Backend endpoint not found.");
+      if (authRuntime && (pathname === `${prefix}/auth` || pathname.startsWith(`${prefix}/auth/`))) {
         return authRuntime.handle(request, `${prefix}/auth`);
       }
       try {
         if (options.verifyOrigin !== false && !requestOriginAllowed(request, { allowedOrigins: options.allowedOrigins })) {
           return problem(403, "ORIGIN_MISMATCH", "Cross-origin backend request rejected.");
         }
-        const relative = url.pathname.slice(prefix.length + 1);
+        const relative = pathname.slice(prefix.length + 1);
         const slash = relative.indexOf("/");
         const operation = slash === -1 ? relative : relative.slice(0, slash);
         let path = "";
         if (slash !== -1) {
-          try {
-            path = decodeURIComponent(relative.slice(slash + 1));
-          } catch {
-            throw new RequestInputError(400, "INVALID_PATH", "The backend function path is not valid URL encoding.");
+          const rawPath = relative.slice(slash + 1);
+          if (!rawPath.includes("%")) {
+            path = rawPath;
+          } else {
+            try {
+              path = decodeURIComponent(rawPath);
+            } catch {
+              throw new RequestInputError(400, "INVALID_PATH", "The backend function path is not valid URL encoding.");
+            }
           }
         }
         if (request.method === "GET" && operation === "manifest") {
@@ -3240,9 +3353,15 @@ export async function openBackend<
             if (!auth?.user || request.headers.get("x-clank-offline-user") !== auth.user.id) throw new RequestInputError(403, "OFFLINE_ACCOUNT_CHANGED", "Queued mutation belongs to another account.");
           }
           const result = invokeMutation(path, await readJsonRequest(request, maxRequestBytes), auth, key);
-          return createBufferedResponse(JSON.stringify({ ok: true, ...result }), RESULT_RESPONSE);
+          const body = result.value === undefined
+            ? `{"ok":true,"version":${result.version}}`
+            : lastFinalizedJson !== undefined && lastFinalizedValue === result.value
+              ? `{"ok":true,"value":${lastFinalizedJson},"version":${result.version}}`
+              : JSON.stringify({ ok: true, ...result });
+          return createBufferedResponse(body, RESULT_RESPONSE);
         }
         if (request.method === "GET" && operation === "live") {
+          const url = parsedUrl ??= new URL(rawUrl);
           const encoded = url.searchParams.get("args") ?? "{}";
           if (new TextEncoder().encode(encoded).byteLength > maxLiveArgumentBytes) {
             return problem(414, "ARGUMENTS_TOO_LARGE", "Live query arguments are too large.");
@@ -3756,23 +3875,51 @@ function parseBackendOutput(fn: AnyBackendFunction, value: unknown): unknown {
   }
 }
 
+function fastBackendPathname(rawUrl: string): string | null {
+  const schemeEnd = rawUrl.indexOf("://");
+  if (schemeEnd === -1) return null;
+  const pathStart = rawUrl.indexOf("/", schemeEnd + 3);
+  if (pathStart === -1) return "/";
+  let end = rawUrl.length;
+  const query = rawUrl.indexOf("?", pathStart);
+  if (query !== -1 && query < end) end = query;
+  const hash = rawUrl.indexOf("#", pathStart);
+  if (hash !== -1 && hash < end) end = hash;
+  const pathname = rawUrl.slice(pathStart, end);
+  if (pathname.includes("/.") || pathname.includes("\\")) return null;
+  return pathname;
+}
+
+const backendUtf8Encoder = new TextEncoder();
+const backendByteLength = typeof (globalThis as { Buffer?: { byteLength(value: string, encoding?: string): number } }).Buffer?.byteLength === "function"
+  ? (value: string) => (globalThis as unknown as { Buffer: { byteLength(value: string, encoding?: string): number } }).Buffer.byteLength(value, "utf8")
+  : (value: string) => backendUtf8Encoder.encode(value).byteLength;
+
+let lastFinalizedValue: unknown;
+let lastFinalizedJson: string | undefined;
+
 function finalizeBackendOutput(fn: AnyBackendFunction, value: unknown, maxBytes: number): unknown {
   let parsed = parseBackendOutput(fn, value);
   try {
-    try { assertJsonOutput(parsed, true, new WeakSet()); }
+    try { assertJsonOutput(parsed, true, undefined); }
     catch (error) {
       if (!fn.returns || !isBuiltinSchema(fn.returns)) throw error;
       // Object parsing preserves absent optional keys for in-process callers.
       // Only omit those synthesized fields at the backend JSON boundary.
       parsed = omitAbsentOptionalOutput(parsed, value, fn.returns.toJSONSchema(), new WeakSet());
-      assertJsonOutput(parsed, true, new WeakSet());
+      assertJsonOutput(parsed, true, undefined);
     }
-    const encoded = new TextEncoder().encode(parsed === undefined ? "" : JSON.stringify(parsed));
-    if (encoded.byteLength > maxBytes) {
+    const serialized = parsed === undefined ? "" : JSON.stringify(parsed);
+    if (backendByteLength(serialized) > maxBytes) {
       throw new RangeError(`Backend output exceeds ${maxBytes} bytes.`);
     }
-    return immutableSnapshot(parsed);
+    const frozen = immutableSnapshot(parsed);
+    lastFinalizedValue = frozen;
+    lastFinalizedJson = parsed === undefined ? undefined : serialized;
+    return frozen;
   } catch (error) {
+    lastFinalizedValue = undefined;
+    lastFinalizedJson = undefined;
     if (error instanceof BackendOutputError) throw error;
     throw new BackendOutputError(error);
   }
@@ -3811,7 +3958,7 @@ function omitAbsentOptionalOutput(parsed: unknown, original: unknown, schema: Re
   } finally { seen.delete(parsed); }
 }
 
-function assertJsonOutput(value: unknown, topLevel: boolean, seen: WeakSet<object>): void {
+function assertJsonOutput(value: unknown, topLevel: boolean, seen: WeakSet<object> | undefined): void {
   if (value === undefined) {
     if (topLevel) return;
     throw new TypeError("Backend output contains undefined.");
@@ -3824,13 +3971,15 @@ function assertJsonOutput(value: unknown, topLevel: boolean, seen: WeakSet<objec
   if (typeof value !== "object") {
     throw new TypeError(`Backend output contains unsupported ${typeof value} data.`);
   }
-  if (seen.has(value)) throw new TypeError("Backend output contains a cycle.");
-  seen.add(value);
+  if (verifiedJsonSnapshots.has(value)) return;
+  const active = seen ?? new WeakSet<object>();
+  if (active.has(value)) throw new TypeError("Backend output contains a cycle.");
+  active.add(value);
   try {
     if (Array.isArray(value)) {
       for (let index = 0; index < value.length; index++) {
         if (!(index in value)) throw new TypeError("Backend output arrays cannot be sparse.");
-        assertJsonOutput(value[index], false, seen);
+        assertJsonOutput(value[index], false, active);
       }
       return;
     }
@@ -3841,11 +3990,12 @@ function assertJsonOutput(value: unknown, topLevel: boolean, seen: WeakSet<objec
     if (Object.getOwnPropertySymbols(value).length > 0) {
       throw new TypeError("Backend output cannot contain symbol properties.");
     }
-    for (const entry of Object.values(value as Record<string, unknown>)) {
-      assertJsonOutput(entry, false, seen);
+    const rec = value as Record<string, unknown>;
+    for (const key in rec) {
+      if (Object.hasOwn(rec, key)) assertJsonOutput(rec[key], false, active);
     }
   } finally {
-    seen.delete(value);
+    active.delete(value);
   }
 }
 
@@ -3903,19 +4053,104 @@ export function functionKey(path: string, args: unknown): string {
   return `${path}\n${stableStringify(args ?? {})}`;
 }
 
+function isSortedPrimitiveObject(value: Record<string, unknown>): boolean {
+  let prev: string | undefined;
+  for (const key in value) {
+    if (!Object.hasOwn(value, key)) continue;
+    if (prev !== undefined && key < prev) return false;
+    prev = key;
+    const entry = value[key];
+    if (entry !== null && typeof entry === "object") return false;
+  }
+  return true;
+}
+
 export function stableStringify(value: unknown): string {
+  if (!value || typeof value !== "object") return JSON.stringify(value);
+  if (!Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    let count = 0;
+    let firstKey = "";
+    for (const key in record) {
+      if (!Object.hasOwn(record, key)) continue;
+      if (count === 0) firstKey = key;
+      count++;
+      if (count > 1) break;
+    }
+    if (count === 0) return "{}";
+    if (count === 1) {
+      const entry = record[firstKey];
+      if (entry === undefined) return "{}";
+      if (entry === null || typeof entry === "boolean") return `{${JSON.stringify(firstKey)}:${entry}}`;
+      if (typeof entry === "number") return `{${JSON.stringify(firstKey)}:${Number.isFinite(entry) ? entry : "null"}}`;
+      if (typeof entry === "string") return `{${JSON.stringify(firstKey)}:${JSON.stringify(entry)}}`;
+    } else if (isSortedPrimitiveObject(record)) {
+      return JSON.stringify(record);
+    }
+  }
   const seen = new Set<object>();
   const normalize = (entry: unknown): unknown => {
     if (!entry || typeof entry !== "object") return entry;
     if (seen.has(entry as object)) throw new TypeError("Cannot serialize circular backend arguments.");
-    seen.add(entry as object);
-    const output = Array.isArray(entry)
-      ? entry.map(normalize)
-      : Object.fromEntries(Object.keys(entry as Record<string, unknown>).sort().map((key) => [key, normalize((entry as Record<string, unknown>)[key])]));
-    seen.delete(entry as object);
+    if (Array.isArray(entry)) {
+      seen.add(entry);
+      const output = new Array(entry.length);
+      for (let i = 0; i < entry.length; i++) output[i] = normalize(entry[i]);
+      seen.delete(entry);
+      return output;
+    }
+    const rec = entry as Record<string, unknown>;
+    if (isSortedPrimitiveObject(rec)) return rec;
+    seen.add(rec);
+    const keys = Object.keys(rec).sort();
+    const output: Record<string, unknown> = {};
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i]!;
+      output[key] = normalize(rec[key]);
+    }
+    seen.delete(rec);
     return output;
   };
   return JSON.stringify(normalize(value));
+}
+
+function isStrictFlatJsonSchema(schema: Record<string, unknown>): boolean {
+  if (!schema || typeof schema !== "object" || schema["x-clank-refinement"] || schema["x-clank-coerce"] || schema.optional || "default" in schema) return false;
+  if (schema.type === "string" || schema.type === "number" || schema.type === "integer" || schema.type === "boolean" || schema.type === "null") return true;
+  if (schema.type === "array") return Boolean(schema.items && typeof schema.items === "object" && isStrictFlatJsonSchema(schema.items as Record<string, unknown>));
+  if (schema.type === "object" && schema.properties && typeof schema.properties === "object") {
+    const props = schema.properties as Record<string, Record<string, unknown>>;
+    const keys = Object.keys(props);
+    const required = Array.isArray(schema.required) ? schema.required as string[] : [];
+    if (required.length !== keys.length) return false;
+    for (let i = 0; i < keys.length; i++) {
+      if (!isStrictFlatJsonSchema(props[keys[i]!]!)) return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+function decodeTrustedDocument<Schema extends DatabaseSchema<any>, Name extends TableName<Schema>>(
+  definition: Schema["tables"][Name],
+  name: Name,
+  row: Record<string, unknown>,
+): DocumentFor<Schema, Name> {
+  const doc = parseStoredData(row._data) as Record<string, unknown>;
+  const id = String(row._id) as Id<Name>;
+  const creationTime = safeNonNegativeInteger(row._creation_time, `${name}/${id} creation time`);
+  const version = positiveIntegerOption(Number(row._version), `${name}/${id} version`);
+  doc._id = id;
+  doc._creationTime = creationTime;
+  doc._version = version;
+  if (definition.ownership === "user") {
+    const ownerId = String(row._owner_id ?? "");
+    if (!ownerId) throw new Error(`Owned table ${name} contains an unowned document (${id}).`);
+    doc._ownerId = ownerId;
+  }
+  immutableSnapshot(doc);
+  verifiedJsonSnapshots.add(doc);
+  return doc as DocumentFor<Schema, Name>;
 }
 
 function decodeDocument<Schema extends DatabaseSchema<any>, Name extends TableName<Schema>>(
@@ -3994,13 +4229,16 @@ function documentWithMetadata<Schema extends DatabaseSchema<any>, Name extends T
   version: number,
   ownerId?: string,
 ): DocumentFor<Schema, Name> {
-  return immutableSnapshot({
+  const doc = {
     ...value,
     _id: id,
     _creationTime: creationTime,
     _version: version,
     ...(tableDefinition(schema, name).ownership === "user" ? { _ownerId: ownerId! } : {}),
-  }) as DocumentFor<Schema, Name>;
+  };
+  const frozen = immutableSnapshot(doc);
+  if (isPureJsonSnapshot(frozen)) verifiedJsonSnapshots.add(frozen as object);
+  return frozen as DocumentFor<Schema, Name>;
 }
 
 function documentValue(document: Record<string, unknown>): Record<string, unknown> {
@@ -4050,15 +4288,34 @@ function databaseChange(
 }
 
 const deepFrozenSnapshots = new WeakSet<object>();
+const verifiedJsonSnapshots = new WeakSet<object>();
+
+function isPureJsonSnapshot(value: unknown): boolean {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value !== "object") return false;
+  if (verifiedJsonSnapshots.has(value)) return true;
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) {
+      if (!(i in value) || !isPureJsonSnapshot(value[i])) return false;
+    }
+    return true;
+  }
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) return false;
+  if (Object.getOwnPropertySymbols(value).length > 0) return false;
+  const rec = value as Record<string, unknown>;
+  for (const key in rec) {
+    if (Object.hasOwn(rec, key) && !isPureJsonSnapshot(rec[key])) return false;
+  }
+  return true;
+}
 
 function immutableSnapshot<Value>(value: Value): Value {
   if (!value || typeof value !== "object") return value;
-  if (Object.isFrozen(value)) {
-    if (deepFrozenSnapshots.has(value)) return value;
-    deepFrozenSnapshots.add(value);
-  } else {
-    Object.freeze(value);
-  }
+  if (deepFrozenSnapshots.has(value)) return value;
+  Object.freeze(value);
+  deepFrozenSnapshots.add(value);
   if (Array.isArray(value)) {
     for (let index = 0; index < value.length; index++) immutableSnapshot(value[index]);
   } else {

@@ -52,53 +52,67 @@ function compactReleaseLayout(source, preserveInteriorSpacing = false) {
   if (source.startsWith("#!")) return source;
   const edits = [];
   let interiorSafe = !preserveInteriorSpacing;
-  const isWord = character => Boolean(character && /[\p{ID_Continue}$\u200c\u200d]/u.test(character));
-  const isStart = character => Boolean(character && /[\p{ID_Start}$_]/u.test(character));
-  const isLineEnd = character => /[\r\n\u2028\u2029]/u.test(character);
-  const isSeparator = character => Boolean(character && ";,:()[]{}".includes(character));
+  const len = source.length;
+  const isAsciiStart = c => (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 36 || c === 95;
+  const isAsciiWord = c => (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c === 36 || c === 95;
+  const isWord = character => {
+    if (!character) return false;
+    const c = character.charCodeAt(0);
+    return c < 128 ? isAsciiWord(c) : /[\p{ID_Continue}$\u200c\u200d]/u.test(character);
+  };
+  const isStart = character => {
+    if (!character) return false;
+    const c = character.charCodeAt(0);
+    return c < 128 ? isAsciiStart(c) : /[\p{ID_Start}$_]/u.test(character);
+  };
+  const isLineEndCode = c => c === 10 || c === 13 || c === 0x2028 || c === 0x2029;
+  const isLineEnd = character => Boolean(character && isLineEndCode(character.charCodeAt(0)));
+  const isSeparatorCode = c => c === 59 || c === 44 || c === 58 || c === 40 || c === 41 || c === 91 || c === 93 || c === 123 || c === 125;
   const expressionWords = new Set(["return", "throw", "case", "default", "extends", "delete", "void", "typeof", "new", "instanceof", "in", "yield", "await", "else", "do"]);
 
   // A regexp literal cannot cross a line terminator; without another slash
   // on this line, division is certain. Declaration types have no regex literals.
   function noClosingSlash(start) {
-    for (let index = start + 1; index < source.length; index++) {
-      if (isLineEnd(source[index])) return true;
-      if (source[index] === "/") return false;
+    for (let index = start + 1; index < len; index++) {
+      const c = source.charCodeAt(index);
+      if (isLineEndCode(c)) return true;
+      if (c === 47) return false;
     }
     return true;
   }
 
-  function quoted(start, quote) {
-    for (let index = start + 1; index < source.length; index++) {
-      const character = source[index];
-      if (character === "\\") {
-        if (source[index + 1] === "\r" && source[index + 2] === "\n") index += 2;
+  function quoted(start, quoteCode) {
+    for (let index = start + 1; index < len; index++) {
+      const c = source.charCodeAt(index);
+      if (c === 92) {
+        if (source.charCodeAt(index + 1) === 13 && source.charCodeAt(index + 2) === 10) index += 2;
         else index++;
-      } else if (character === quote) return index + 1;
-      else if (isLineEnd(character)) return null;
+      } else if (c === quoteCode) return index + 1;
+      else if (isLineEndCode(c)) return null;
     }
     return null;
   }
 
   function regexp(start, ambiguous, inTemplate) {
     let characterClass = false;
-    for (let index = start + 1; index < source.length; index++) {
-      const character = source[index];
-      if (isLineEnd(character)) return null;
+    for (let index = start + 1; index < len; index++) {
+      const c = source.charCodeAt(index);
+      if (isLineEndCode(c)) return null;
       // At a division/regexp boundary, skip only a single-line region which
       // cannot hide a quote, template, comment opener or template brace. Keep
       // the expression boundary ambiguous afterward rather than guessing.
-      if (ambiguous && (/["'`]/u.test(character) || inTemplate && /[{}]/u.test(character))) return null;
-      if (character === "\\") { index++; continue; }
-      if (character === "[") {
+      if (ambiguous && (c === 34 || c === 39 || c === 96 || (inTemplate && (c === 123 || c === 125)))) return null;
+      if (c === 92) { index++; continue; }
+      if (c === 91) {
         // Nested Unicode-v classes need a richer grammar; leave this module.
         if (characterClass) return null;
         characterClass = true;
-      } else if (character === "]") characterClass = false;
-      else if (character === "/" && !characterClass) {
-        if (ambiguous && (source[index + 1] === "*" || source[index + 1] === "/")) return null;
+      } else if (c === 93) characterClass = false;
+      else if (c === 47 && !characterClass) {
+        const nextC = source.charCodeAt(index + 1);
+        if (ambiguous && (nextC === 42 || nextC === 47)) return null;
         index++;
-        while (isWord(source[index])) index++;
+        while (index < len && isWord(source[index])) index++;
         return index;
       }
     }
@@ -107,10 +121,11 @@ function compactReleaseLayout(source, preserveInteriorSpacing = false) {
 
   function template(start, depth) {
     if (depth > 64) return null;
-    for (let index = start + 1; index < source.length;) {
-      if (source[index] === "\\") { index += 2; continue; }
-      if (source[index] === "`") return index + 1;
-      if (source[index] === "$" && source[index + 1] === "{") {
+    for (let index = start + 1; index < len;) {
+      const c = source.charCodeAt(index);
+      if (c === 92) { index += 2; continue; }
+      if (c === 96) return index + 1;
+      if (c === 36 && source.charCodeAt(index + 1) === 123) {
         const next = code(index + 2, true, depth + 1);
         if (next === null) return null;
         index = next;
@@ -123,50 +138,39 @@ function compactReleaseLayout(source, preserveInteriorSpacing = false) {
     let expression = true;
     let previous = "";
     let braces = 0;
-    for (let index = start; index < source.length;) {
-      const character = source[index];
-      if (character === " " || character === "\t") {
+    for (let index = start; index < len;) {
+      const c = source.charCodeAt(index);
+      if (c === 32 || c === 9) {
         let end = index + 1;
-        while (source[end] === " " || source[end] === "\t") end++;
+        while (end < len && (source.charCodeAt(end) === 32 || source.charCodeAt(end) === 9)) end++;
         // These single-character separators cannot combine with a neighbour
         // into a different token. Keep other spacing, including numeric dots,
         // identifier/keyword boundaries, and adjacent operator characters.
         // Newlines remain untouched, so ASI and restricted productions keep
         // their original line terminators. Literals/comments bypass this path.
-        const leading = index === 0 || isLineEnd(source[index - 1]);
-        if (leading || isSeparator(source[index - 1]) || isSeparator(source[end])) {
+        const leading = index === 0 || isLineEndCode(source.charCodeAt(index - 1));
+        if (leading || (index > 0 && isSeparatorCode(source.charCodeAt(index - 1))) || (end < len && isSeparatorCode(source.charCodeAt(end)))) {
           edits.push({ start: index, end, leading });
         }
         index = end;
         continue;
       }
-      if (/\s/u.test(character)) { index++; continue; }
-      if (character === "/" && source[index + 1] === "/") {
-        index += 2;
-        while (index < source.length && !isLineEnd(source[index])) index++;
-        continue;
-      }
-      if (character === "/" && source[index + 1] === "*") {
-        const end = source.indexOf("*/", index + 2);
-        if (end < 0) return null;
-        index = end + 2;
-        continue;
-      }
-      if (character === '"' || character === "'") {
-        const next = quoted(index, character);
-        if (next === null) return null;
-        index = next; expression = false; previous = "literal";
-        continue;
-      }
-      if (character === "`") {
-        const next = template(index, depth);
-        if (next === null) return null;
-        index = next; expression = false; previous = "literal";
-        continue;
-      }
-      if (character === "/") {
+      if (c === 10 || c === 13 || c === 11 || c === 12 || (c >= 128 && /\s/u.test(source[index]))) { index++; continue; }
+      if (c === 47) {
+        const nextC = source.charCodeAt(index + 1);
+        if (nextC === 47) {
+          index += 2;
+          while (index < len && !isLineEndCode(source.charCodeAt(index))) index++;
+          continue;
+        }
+        if (nextC === 42) {
+          const end = source.indexOf("*/", index + 2);
+          if (end < 0) return null;
+          index = end + 2;
+          continue;
+        }
         if (expression === false || expression === "ambiguous" && noClosingSlash(index)) {
-          index += source[index + 1] === "=" ? 2 : 1;
+          index += nextC === 61 ? 2 : 1;
           expression = true; previous = "/";
           continue;
         }
@@ -181,15 +185,32 @@ function compactReleaseLayout(source, preserveInteriorSpacing = false) {
         index = next; expression = ambiguous ? "ambiguous" : false; previous = "literal";
         continue;
       }
+      if (c === 34 || c === 39) {
+        const next = quoted(index, c);
+        if (next === null) return null;
+        index = next; expression = false; previous = "literal";
+        continue;
+      }
+      if (c === 96) {
+        const next = template(index, depth);
+        if (next === null) return null;
+        index = next; expression = false; previous = "literal";
+        continue;
+      }
       // Escaped identifiers obscure keyword/property context. Keep them exact.
-      if (character === "\\") return null;
-      const point = String.fromCodePoint(source.codePointAt(index));
-      if (isStart(point)) {
-        let end = index + point.length;
-        while (end < source.length) {
-          const next = String.fromCodePoint(source.codePointAt(end));
-          if (!isWord(next)) break;
-          end += next.length;
+      if (c === 92) return null;
+      if (c < 128 ? isAsciiStart(c) : isStart(String.fromCodePoint(source.codePointAt(index)))) {
+        let end = c < 128 ? index + 1 : index + String.fromCodePoint(source.codePointAt(index)).length;
+        while (end < len) {
+          const nc = source.charCodeAt(end);
+          if (nc < 128) {
+            if (!isAsciiWord(nc)) break;
+            end++;
+          } else {
+            const next = String.fromCodePoint(source.codePointAt(end));
+            if (!isWord(next)) break;
+            end += next.length;
+          }
         }
         const word = source.slice(index, end);
         const property = previous === "." || previous === "#";
@@ -203,26 +224,31 @@ function compactReleaseLayout(source, preserveInteriorSpacing = false) {
         index = end;
         continue;
       }
-      if (/[0-9]/u.test(character)) {
+      if (c >= 48 && c <= 57) {
         let end = index + 1;
-        while (end < source.length && /[\w.]/u.test(source[end])) end++;
+        while (end < len) {
+          const nc = source.charCodeAt(end);
+          if ((nc >= 48 && nc <= 57) || (nc >= 65 && nc <= 90) || (nc >= 97 && nc <= 122) || nc === 95 || nc === 46) end++;
+          else break;
+        }
         index = end; expression = false; previous = "literal";
         continue;
       }
-      if (character === "{") { if (inTemplate) braces++; expression = true; }
-      else if (character === "}") {
+      const character = source[index];
+      if (c === 123) { if (inTemplate) braces++; expression = true; }
+      else if (c === 125) {
         if (inTemplate && braces === 0) return index + 1;
         if (inTemplate) braces--;
         expression = "ambiguous";
-      } else if (character === ")") expression = "ambiguous";
-      else if (character === "]") expression = false;
-      else if (character === "." && source[index + 1] !== ".") expression = false;
-      else if ((character === "+" || character === "-") && source[index + 1] === character) index++; // Preserve prefix/postfix expectation.
+      } else if (c === 41) expression = "ambiguous";
+      else if (c === 93) expression = false;
+      else if (c === 46 && source.charCodeAt(index + 1) !== 46) expression = false;
+      else if ((c === 43 || c === 45) && source.charCodeAt(index + 1) === c) index++; // Preserve prefix/postfix expectation.
       else expression = true;
       previous = character;
       index++;
     }
-    return inTemplate ? null : source.length;
+    return inTemplate ? null : len;
   }
 
   if (code(0) === null) return source;
@@ -254,21 +280,28 @@ export async function build({ quiet = false } = {}) {
   await mkdir(outputRoot, { recursive: true });
   const sources = await filesUnder(sourceRoot);
   const expectedOutputs = new Set();
+  const tasks = [];
   for (const path of sources) {
     const output = join(outputRoot, relative(sourceRoot, path));
     if (path.endsWith(".d.ts")) {
       expectedOutputs.add(output);
-      await writeFileAtomically(output, declarationReleaseLayout(await readFile(path)));
+      tasks.push(async () => writeFileAtomically(output, declarationReleaseLayout(await readFile(path))));
     } else if (/\.tsx?$/.test(path)) {
       const javascriptOutput = output.replace(/\.tsx?$/, ".js");
       expectedOutputs.add(javascriptOutput);
-      // jobs.ts owns the default workflow output callback. Its reflected source
-      // is part of persisted definition revisions: retain the accepted previous
-      // indentation-only output, including the callback's interior spaces.
-      await compileFile(path, javascriptOutput, { jsxImportSource: "./index.js", releaseLayout: true,
-        preserveInteriorSpacing: relative(sourceRoot, path) === "jobs.ts" });
+      const preserve = relative(sourceRoot, path) === "jobs.ts";
+      tasks.push(() => compileFile(path, javascriptOutput, { jsxImportSource: "./index.js", releaseLayout: true,
+        preserveInteriorSpacing: preserve }));
     }
   }
+  const runConcurrent = async (items, limit = 8) => {
+    let cursor = 0;
+    const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (cursor < items.length) await items[cursor++]();
+    });
+    await Promise.all(workers);
+  };
+  await runConcurrent(tasks);
   // Ship the same canonical prompt with the platform and the documentation site.
   const gettingStarted = await readFile(join(projectRoot, "docs/getting-started.md"), "utf8");
   const setupSection = gettingStarted.split("\n## Set up with an agent\n")[1]?.split("\n## ")[0];
@@ -284,9 +317,10 @@ export async function build({ quiet = false } = {}) {
   }
 
   const exampleRoot = join(projectRoot, "examples");
-  for (const path of await filesUnder(exampleRoot)) {
-    if (/\.tsx?$/.test(path)) await compileFile(path, path.replace(/\.tsx?$/, ".js"), { jsxImportSource: "/dist/index.js" });
-  }
+  const exampleTasks = (await filesUnder(exampleRoot))
+    .filter((path) => /\.tsx?$/.test(path))
+    .map((path) => () => compileFile(path, path.replace(/\.tsx?$/, ".js"), { jsxImportSource: "/dist/index.js" }));
+  await runConcurrent(exampleTasks);
   if (!quiet) console.log(`Built Clank in ${(performance.now() - started).toFixed(1)}ms (zero dependencies).`);
 }
 

@@ -24,8 +24,84 @@ export interface LocalSearchIndex {
   readonly size: number;
 }
 const normalize = (text: string) => text.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase();
-const tokens = (text: string) => [...text.matchAll(/[\p{L}\p{N}_]+/gu)].map(match => ({ term: normalize(match[0]), start: match.index!, end: match.index! + match[0].length }));
+const utf8ByteLength = typeof (globalThis as { Buffer?: { byteLength(value: string, encoding?: string): number } }).Buffer?.byteLength === "function"
+  ? (value: string) => (globalThis as unknown as { Buffer: { byteLength(value: string, encoding?: string): number } }).Buffer.byteLength(value, "utf8")
+  : (value: string) => encoder.encode(value).length;
 const encoder = new TextEncoder();
+
+function isAsciiWord(code: number): boolean {
+  return (code >= 97 && code <= 122) || (code >= 65 && code <= 90) || (code >= 48 && code <= 57) || code === 95;
+}
+
+const tokens = (text: string): Array<{ term: string; start: number; end: number }> => {
+  const len = text.length;
+  const output: Array<{ term: string; start: number; end: number }> = [];
+  let i = 0;
+  while (i < len) {
+    const code = text.charCodeAt(i);
+    if (code >= 128) {
+      return [...text.matchAll(/[\p{L}\p{N}_]+/gu)].map(match => ({
+        term: normalize(match[0]),
+        start: match.index!,
+        end: match.index! + match[0].length,
+      }));
+    }
+    if (!isAsciiWord(code)) { i++; continue; }
+    const start = i;
+    let hasUpper = code >= 65 && code <= 90;
+    i++;
+    while (i < len) {
+      const next = text.charCodeAt(i);
+      if (next >= 128) {
+        return [...text.matchAll(/[\p{L}\p{N}_]+/gu)].map(match => ({
+          term: normalize(match[0]),
+          start: match.index!,
+          end: match.index! + match[0].length,
+        }));
+      }
+      if (!isAsciiWord(next)) break;
+      if (next >= 65 && next <= 90) hasUpper = true;
+      i++;
+    }
+    const raw = text.slice(start, i);
+    output.push({ term: hasUpper ? raw.toLowerCase() : raw, start, end: i });
+  }
+  return output;
+};
+
+/** Fast ASCII indexing pass that avoids intermediate token objects and regex scans. */
+function indexFieldTerms(
+  text: string,
+  isTitle: boolean,
+  terms: Map<string, { title: number; body: number }>,
+): boolean {
+  const len = text.length;
+  let i = 0;
+  while (i < len) {
+    const code = text.charCodeAt(i);
+    if (code >= 128) return false;
+    if (!isAsciiWord(code)) { i++; continue; }
+    const start = i;
+    let hasUpper = code >= 65 && code <= 90;
+    i++;
+    while (i < len) {
+      const next = text.charCodeAt(i);
+      if (next >= 128) return false;
+      if (!isAsciiWord(next)) break;
+      if (next >= 65 && next <= 90) hasUpper = true;
+      i++;
+    }
+    const raw = text.slice(start, i);
+    const term = hasUpper ? raw.toLowerCase() : raw;
+    let freq = terms.get(term);
+    if (freq === undefined) {
+      freq = isTitle ? { title: 1, body: 0 } : { title: 0, body: 1 };
+      terms.set(term, freq);
+    } else if (isTitle) freq.title++;
+    else freq.body++;
+  }
+  return true;
+}
 
 /** A bounded, browser/server inverted index. Index only records the caller is allowed to see. */
 export function createLocalSearchIndex(options: LocalSearchOptions = {}): LocalSearchIndex {
@@ -40,15 +116,37 @@ export function createLocalSearchIndex(options: LocalSearchOptions = {}): LocalS
   const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
   const prepare = (input: SearchDocument) => {
     if (!input || typeof input.id !== "string" || !input.id || input.id.length > 200 || typeof input.title !== "string" || !input.title.trim() || input.title.length > 300 || typeof input.body !== "string" || input.body.length > 32768) throw new TypeError("A search document needs an ID, title, and bounded body.");
-    const document = { id: input.id, title: input.title, body: input.body }, size = encoder.encode(JSON.stringify(document)).length;
+    const document = { id: input.id, title: input.title, body: input.body };
+    const size = utf8ByteLength(JSON.stringify(document));
     const terms = new Map<string, Frequency>();
-    for (const field of ["title", "body"] as const) for (const token of tokens(document[field])) {
-      let frequency = terms.get(token.term);
-      if (!frequency) { frequency = { title: 0, body: 0 }; terms.set(token.term, frequency); }
-      frequency[field]++;
+    let allAscii = indexFieldTerms(document.title, true, terms);
+    if (!allAscii) {
+      terms.clear();
+      for (const token of tokens(document.title)) {
+        let frequency = terms.get(token.term);
+        if (!frequency) { frequency = { title: 0, body: 0 }; terms.set(token.term, frequency); }
+        frequency.title++;
+      }
+    }
+    let bodyAscii = true;
+    if (!indexFieldTerms(document.body, false, terms)) {
+      bodyAscii = false;
+      // Rebuild cleanly if body hit non-ASCII partway through so partial ASCII counts are never doubled.
+      terms.clear();
+      for (const field of ["title", "body"] as const) for (const token of tokens(document[field])) {
+        let frequency = terms.get(token.term);
+        if (!frequency) { frequency = { title: 0, body: 0 }; terms.set(token.term, frequency); }
+        frequency[field]++;
+      }
     }
     // Charge both text and index entries so highly varied input remains bounded.
-    return { document: Object.freeze(document), bytes: size + [...terms.keys()].reduce((sum, term) => sum + encoder.encode(term).length + 96, 0), terms };
+    let termBytes = 0;
+    if (allAscii && bodyAscii) {
+      for (const term of terms.keys()) termBytes += term.length + 96;
+    } else {
+      for (const term of terms.keys()) termBytes += utf8ByteLength(term) + 96;
+    }
+    return { document: Object.freeze(document), bytes: size + termBytes, terms };
   };
   const remove = (id: string) => {
     const existing = documents.get(id); if (!existing) return false;
@@ -78,18 +176,24 @@ export function createLocalSearchIndex(options: LocalSearchOptions = {}): LocalS
     get(id) { return documents.get(id)?.document; },
     clear() { documents.clear(); inverted.clear(); bytes = 0; vocabulary = undefined; },
     replace(inputs) {
-      if (!Array.isArray(inputs) || inputs.length > maximum || new Set(inputs.map(input => input?.id)).size !== inputs.length) throw new TypeError("Replacement documents must have unique IDs within the limit.");
+      if (!Array.isArray(inputs) || inputs.length > maximum) throw new TypeError("Replacement documents must have unique IDs within the limit.");
+      const seenIds = new Set<unknown>();
+      for (let i = 0; i < inputs.length; i++) {
+        const id = inputs[i]?.id;
+        if (seenIds.has(id)) throw new TypeError("Replacement documents must have unique IDs within the limit.");
+        seenIds.add(id);
+      }
       const nextDocuments = new Map<string, Entry>(), nextInverted = new Map<string, Map<string, Frequency>>();
       let nextBytes = 0;
-      for (const input of inputs) {
-        const entry = prepare(input);
-        if (nextDocuments.has(entry.document.id)) throw new TypeError("Replacement documents must have unique IDs within the limit.");
+      for (let i = 0; i < inputs.length; i++) {
+        const entry = prepare(inputs[i]!);
+        const docId = entry.document.id;
         if (nextDocuments.size >= maximum || nextBytes + entry.bytes > byteLimit) throw new RangeError("Local search capacity exceeded.");
-        nextDocuments.set(entry.document.id, entry); nextBytes += entry.bytes;
+        nextDocuments.set(docId, entry); nextBytes += entry.bytes;
         for (const [term, frequency] of entry.terms) {
           let postings = nextInverted.get(term);
           if (!postings) { postings = new Map(); nextInverted.set(term, postings); }
-          postings.set(entry.document.id, frequency);
+          postings.set(docId, frequency);
         }
       }
       documents = nextDocuments; inverted = nextInverted; bytes = nextBytes; vocabulary = undefined;

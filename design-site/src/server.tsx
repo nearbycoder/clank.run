@@ -199,6 +199,13 @@ function llmsIndex(): string {
   return ["# Clank Design Studio", "", "> The canonical interactive catalog for Clank's dependency-free headless UI and theme system.", "", `Framework version: ${manifest.frameworkVersion}`, `Components: ${UI_COMPONENT_COUNT}`, `Themes: ${CLANK_THEME_PRESETS.length}`, "", "## Agent entry points", "", `- [Component catalog](${canonicalOrigin}/api/catalog.json)`, `- [Theme catalog](${canonicalOrigin}/api/themes.json)`, `- [MCP discovery](${canonicalOrigin}/.well-known/clank)`, `- MCP endpoint: ${canonicalOrigin}/__clank/mcp`, "", "## Package imports", "", "- `@clank.run/framework/ui` exports every controller.", "- `@clank.run/framework/ui/<slug>` exposes a focused family path.", "- `@clank.run/framework/ui/theme` exposes typed presets, custom theme validation, CSS generation, and DOM application.", ""].join("\n");
 }
 
+function safeTrailingSlashRedirect(url: URL): Response | null {
+  if (url.pathname.length <= 1 || !url.pathname.endsWith("/")) return null;
+  const target = url.pathname.slice(0, -1);
+  if (!target.startsWith("/") || target.startsWith("//") || target.startsWith("/\\") || target.includes("\\")) return null;
+  return new Response(null, { status: 308, headers: { location: `${target}${url.search}` } });
+}
+
 const app = createApp({ onError(error) { console.error("Design Studio request failed.", error instanceof Error ? error.message : "Unknown error"); } })
   .use(securityHeaders({ contentSecurityPolicy: false }))
   .get("/healthz", () => json({ ok: true, service: "clank-design", version: manifest.frameworkVersion, components: UI_COMPONENT_COUNT, themes: CLANK_THEME_PRESETS.length }, { headers: { "cache-control": "no-store" } }))
@@ -212,7 +219,8 @@ const app = createApp({ onError(error) { console.error("Design Studio request fa
   .get("/", ({ url }) => page("overview", "/", 200, url.search))
   .get("/themes", ({ url }) => page("themes", "/themes", 200, url.search))
   .get("/components/:slug", ({ params, url }) => {
-    if (url.pathname.endsWith("/")) return new Response(null, { status: 308, headers: { location: `${url.pathname.slice(0, -1)}${url.search}` } });
+    const redirected = safeTrailingSlashRedirect(url);
+    if (redirected) return redirected;
     const entry = UI_COMPONENT_CATALOG.find((candidate) => candidate.slug === params.slug);
     return entry ? page(entry.slug, `/components/${entry.slug}`, 200, url.search) : page(params.slug, `/components/${encodeURIComponent(params.slug)}`, 404, url.search);
   })

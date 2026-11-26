@@ -1,4 +1,4 @@
-import { createRoot, isSignal, type Cleanup } from "./core.ts";
+import { ROOT_CLEANUP_STATE, createRoot, isSignal, type Cleanup } from "./core.ts";
 import { agentActionPath, type AgentActionTarget } from "./agent-contract.ts";
 import {
   Fragment,
@@ -98,12 +98,23 @@ export async function renderDocument(view: Renderable, options: RenderDocumentOp
 export function serializeState(value: unknown): string {
   const json = JSON.stringify(value);
   if (json === undefined) throw new TypeError("SSR state must be JSON serializable.");
-  return json
-    .replaceAll("&", "\\u0026")
-    .replaceAll("<", "\\u003c")
-    .replaceAll(">", "\\u003e")
-    .replaceAll("\u2028", "\\u2028")
-    .replaceAll("\u2029", "\\u2029");
+  const len = json.length;
+  let out = "";
+  let last = 0;
+  for (let i = 0; i < len; i++) {
+    const c = json.charCodeAt(i);
+    let esc: string;
+    if (c === 60) esc = "\\u003c";
+    else if (c === 62) esc = "\\u003e";
+    else if (c === 38) esc = "\\u0026";
+    else if (c === 0x2028) esc = "\\u2028";
+    else if (c === 0x2029) esc = "\\u2029";
+    else continue;
+    if (last < i) out += json.slice(last, i);
+    out += esc;
+    last = i + 1;
+  }
+  return last === 0 ? json : last < len ? out + json.slice(last) : out;
 }
 
 export function readState<Value = unknown>(id = "__CLANK_STATE__", root: ParentNode = document): Value | undefined {
@@ -124,7 +135,10 @@ function renderValue(input: Renderable, context: SSRContext): Rendered {
       if (Array.isArray(input)) return renderList(input, context);
       if ((input as unknown as Record<PropertyKey, unknown>)[VNODE]) return renderVNode(input as VNode, context);
       if (isExpression(input)) return renderDynamic(input.read as () => Renderable, context);
-      if (isSignal(input)) return renderDynamic(() => input.value as Renderable, context);
+      if (isSignal(input)) {
+        const content = renderValue(resolveReactive(input.value), context);
+        return context.markers ? wrapRendered(content, "<!--clank:start-->", "<!--clank:end-->") : content;
+      }
       if (isKeyedBlock(input)) return renderKeyed(input, context);
       if (isPortalBlock(input)) return renderPortal(input, context);
       if (input instanceof Promise) {
@@ -267,9 +281,11 @@ function renderComponent(vnode: VNode, context: SSRContext): Rendered {
     rendered = Promise.reject(error);
   }
   // Assigned inside the root callback, which control-flow analysis cannot see.
-  const release = dispose as Cleanup | undefined;
+  const release = dispose as (Cleanup & { [ROOT_CLEANUP_STATE]?: { cleanups: Cleanup[]; escaped?: boolean } }) | undefined;
   if (!release) return rendered;
   if (typeof rendered === "string") {
+    const state = release[ROOT_CLEANUP_STATE];
+    if (state !== undefined && state.cleanups.length === 0 && !state.escaped) return rendered;
     // An inline component stays a plain string, so its ancestors can stay
     // synchronous too. Its root is released when this pass ends: after its
     // siblings, which may still read values it owns.
@@ -339,8 +355,113 @@ function renderElement(vnode: VNode, context: SSRContext): Rendered {
   const tag = vnode.type as string;
   const lowerTag = lowerTagName(tag);
   const props = vnode.props;
-  const attributes: Attributes = { names: [], values: [] };
   const control = lowerTag === "textarea" || lowerTag === "select";
+  const isSelectOrOption = lowerTag === "select" || lowerTag === "option";
+
+  // Fast path: non-select/option elements without alias/bind/agent props build the
+  // opening tag string directly in a single pass with zero attribute-array allocations.
+  if (!isSelectOrOption) {
+    if ((vnode as VNode & { _p?: boolean })._p === false) {
+      const open = `<${tag}>`;
+      if (VOID_ELEMENTS.has(lowerTag)) return open;
+      const ch = props.children as Renderable[];
+      if (ch.length === 1 && typeof ch[0] === "string") {
+        const str = ch[0];
+        context.text?.push(str);
+        return `${open}${escapeText(str)}</${tag}>`;
+      }
+      const children = renderList(ch, context);
+      return typeof children === "string"
+        ? `${open}${children}</${tag}>`
+        : children.then((content) => `${open}${content}</${tag}>`);
+    }
+    let open = `<${tag}`;
+    let baseClassName = "";
+    let classListName = "";
+    let hasValue = false;
+    let controlValue: unknown;
+    let slow = false;
+    for (const property in props) {
+      if (property === "children" || property === "key" || property === "ref" || property === "use" || property === "dangerouslySetInnerHTML") continue;
+      const first = property.charCodeAt(0);
+      if ((first === 111 || first === 79) && /^on(?::|[a-z])/i.test(property)) continue;
+      if (
+        (first === 98 && property.startsWith("bind:"))
+        || (first === 97 && (property === "agentLabel" || property === "agentAction" || property === "agentId" || property === "agentDescription" || property === "agentHidden"))
+        || property === "htmlFor"
+        || property === "intent"
+      ) {
+        slow = true;
+        break;
+      }
+      const raw = props[property];
+      if (control && property === "value") {
+        hasValue = true;
+        controlValue = resolveReactive(raw);
+        if (controlValue === false) controlValue = "";
+        continue;
+      }
+      if (property === "class" || property === "className") {
+        baseClassName = normalizeClass(resolveReactive(raw));
+        continue;
+      }
+      if (property === "classList") {
+        const list = resolveReactive(raw);
+        if (list && typeof list === "object") {
+          const rec = list as Record<string, unknown>;
+          for (const names in rec) {
+            if (Boolean(resolveReactive(rec[names]))) classListName = classListName ? `${classListName} ${names}` : names;
+          }
+        }
+        continue;
+      }
+      if (property === "style") {
+        const style = styleString(resolveReactive(raw));
+        if (style) open += ` style="${escapeAttribute(style)}"`;
+        continue;
+      }
+      const value = resolveReactive(raw);
+      const flags = attributeFlags(property);
+      if (flags & 1 && typeof value === "boolean") {
+        open += ` ${property}="${value ? "true" : "false"}"`;
+        continue;
+      }
+      if (value === false || value === null || value === undefined) continue;
+      if (flags & 2) throw new TypeError(`Inline event attribute ${property} is not allowed.`);
+      if (flags & 4) assertSafeAttributeValue(lowerTag, property, value);
+      open += value === true ? ` ${property}` : ` ${property}="${escapeAttribute(String(value))}"`;
+    }
+    if (!slow) {
+      if (baseClassName || classListName) {
+        const className = classTokens(baseClassName && classListName ? `${baseClassName} ${classListName}` : baseClassName || classListName);
+        if (className) open += ` class="${escapeAttribute(className)}"`;
+      }
+      open += ">";
+      if (VOID_ELEMENTS.has(lowerTag)) return open;
+      if (lowerTag === "textarea" && hasValue) {
+        const text = String(controlValue ?? "");
+        context.text?.push(text);
+        return `${open}${text.length > 0 && (text.charCodeAt(0) === 10 || text.charCodeAt(0) === 13) ? "\n" : ""}${escapeText(text)}</${tag}>`;
+      }
+      const rawHTML = props.dangerouslySetInnerHTML;
+      if (rawHTML === undefined) {
+        const ch = props.children as Renderable[];
+        if (ch.length === 1 && typeof ch[0] === "string") {
+          const str = ch[0];
+          context.text?.push(str);
+          return `${open}${escapeText(str)}</${tag}>`;
+        }
+        const children = renderList(ch, context);
+        return typeof children === "string"
+          ? `${open}${children}</${tag}>`
+          : children.then((content) => `${open}${content}</${tag}>`);
+      }
+      const html = String(resolveReactive(rawHTML && typeof rawHTML === "object" ? (rawHTML as { __html?: unknown }).__html : rawHTML) ?? "");
+      return `${open}${html}</${tag}>`;
+    }
+  }
+
+  const attributes: Attributes = { names: [], values: [] };
   let baseClassName = "";
   let classListName = "";
   let hasValue = false;
@@ -364,8 +485,9 @@ function renderElement(vnode: VNode, context: SSRContext): Rendered {
     if (property === "classList") {
       const list = resolveReactive(raw);
       if (list && typeof list === "object") {
-        for (const [names, enabled] of Object.entries(list as Record<string, unknown>)) {
-          if (Boolean(resolveReactive(enabled))) classListName = [classListName, names].filter(Boolean).join(" ");
+        const rec = list as Record<string, unknown>;
+        for (const names in rec) {
+          if (Boolean(resolveReactive(rec[names]))) classListName = classListName ? `${classListName} ${names}` : names;
         }
       }
       continue;
@@ -411,7 +533,7 @@ function renderElement(vnode: VNode, context: SSRContext): Rendered {
   }
 
   const rawHTML = props.dangerouslySetInnerHTML;
-  if (lowerTag !== "select" && lowerTag !== "option") {
+  if (!isSelectOrOption) {
     // Nothing below can change this element's attributes, so its tag is final now.
     const opening = openingTag(tag, attributes);
     const children = rawHTML === undefined
@@ -514,11 +636,21 @@ function isPortalBlock(value: unknown): value is PortalBlock {
 
 function normalizeClass(value: unknown): string {
   if (typeof value === "string") return value;
-  if (Array.isArray(value)) return value.map(normalizeClass).filter(Boolean).join(" ");
-  if (value && typeof value === "object") {
+  if (Array.isArray(value)) {
     let names = "";
-    for (const [name, enabled] of Object.entries(value as Record<string, unknown>)) {
-      if (Boolean(resolveReactive(enabled))) names = names ? `${names} ${name}` : name;
+    for (let i = 0; i < value.length; i++) {
+      const part = normalizeClass(value[i]);
+      if (part) names = names ? `${names} ${part}` : part;
+    }
+    return names;
+  }
+  if (value && typeof value === "object") {
+    const rec = value as Record<string, unknown>;
+    let names = "";
+    for (const name in rec) {
+      if (Object.hasOwn(rec, name) && Boolean(resolveReactive(rec[name]))) {
+        names = names ? `${names} ${name}` : name;
+      }
     }
     return names;
   }
@@ -538,14 +670,14 @@ function styleProperty(name: string): string {
 function styleString(value: unknown): string {
   if (typeof value === "string") return value;
   if (!value || typeof value !== "object") return "";
+  const rec = value as Record<string, unknown>;
   let style = "";
-  let empty = true;
-  for (const [name, raw] of Object.entries(value as Record<string, unknown>)) {
-    const entry = resolveReactive(raw);
+  for (const name in rec) {
+    if (!Object.hasOwn(rec, name)) continue;
+    const entry = resolveReactive(rec[name]);
     if (entry === null || entry === undefined || entry === false) continue;
     const declaration = `${styleProperty(name)}:${String(entry)}`;
-    style = empty ? declaration : `${style};${declaration}`;
-    empty = false;
+    style = style ? `${style};${declaration}` : declaration;
   }
   return style;
 }
@@ -585,24 +717,47 @@ function attributeName(property: string): string {
   return ATTRIBUTE_NAMES[property] ?? property;
 }
 
+const INTERACTIVE_TAGS = new Set(["a", "button", "input", "select", "summary", "textarea"]);
 function isInteractiveTag(tag: string): boolean {
-  return ["a", "button", "input", "select", "summary", "textarea"].includes(tag);
+  return INTERACTIVE_TAGS.has(tag);
 }
 
-const TEXT_SPECIAL = /[&<>]/;
-const ATTRIBUTE_SPECIAL = /[&<>"']/;
-
 function escapeText(value: string): string {
-  // Most text has nothing to escape; one scan avoids three rewrites of it.
-  return TEXT_SPECIAL.test(value)
-    ? value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
-    : value;
+  const len = value.length;
+  let out = "";
+  let last = 0;
+  for (let i = 0; i < len; i++) {
+    const c = value.charCodeAt(i);
+    let esc: string;
+    if (c === 38) esc = "&amp;";
+    else if (c === 60) esc = "&lt;";
+    else if (c === 62) esc = "&gt;";
+    else continue;
+    if (last < i) out += value.slice(last, i);
+    out += esc;
+    last = i + 1;
+  }
+  return last === 0 ? value : last < len ? out + value.slice(last) : out;
 }
 
 function escapeAttribute(value: string): string {
-  return ATTRIBUTE_SPECIAL.test(value)
-    ? value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;")
-    : value;
+  const len = value.length;
+  let out = "";
+  let last = 0;
+  for (let i = 0; i < len; i++) {
+    const c = value.charCodeAt(i);
+    let esc: string;
+    if (c === 34) esc = "&quot;";
+    else if (c === 38) esc = "&amp;";
+    else if (c === 39) esc = "&#39;";
+    else if (c === 60) esc = "&lt;";
+    else if (c === 62) esc = "&gt;";
+    else continue;
+    if (last < i) out += value.slice(last, i);
+    out += esc;
+    last = i + 1;
+  }
+  return last === 0 ? value : last < len ? out + value.slice(last) : out;
 }
 
 function cssEscape(value: string): string {

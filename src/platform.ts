@@ -17373,14 +17373,26 @@ function writeBillingAccount(
     );
 }
 
-function dashboardProjectUsage(internal: SQLiteInternal, projectIds: readonly string[]): {
+function dashboardProjectUsage(internal: SQLiteInternal, projectIds: readonly string[], releaseIds: readonly string[]): {
   domains: Map<string, { count: number; ready: number }>;
   releases: Map<string, { releases: number; storageBytes: number }>;
+  activeReleases: Map<string, ReleaseRow>;
+  metrics: Map<string, Record<string, number>>;
+  emptyMetrics: Record<string, number>;
 } {
   const domains = new Map<string, { count: number; ready: number }>();
   const releases = new Map<string, { releases: number; storageBytes: number }>();
-  if (projectIds.length === 0) return { domains, releases };
-  // Restrict both aggregates to the freshly authorized project IDs. json_each
+  const activeReleases = new Map<string, ReleaseRow>();
+  const metrics = new Map<string, Record<string, number>>();
+  const range = metricRange("24h");
+  const emptyMetrics = {
+    ...summarizeMetricRows([{}], range.durationMs),
+    activeIntervals: 0,
+    peakRequestsPerMinute: 0,
+    lastRequestAt: null,
+  } as unknown as Record<string, number>;
+  if (projectIds.length === 0) return { domains, releases, activeReleases, metrics, emptyMetrics };
+  // Restrict aggregates to the freshly authorized project IDs. json_each
   // keeps a fixed statement shape without SQLite's bound-parameter limit.
   const ids = JSON.stringify(projectIds);
   for (const row of internal.prepare(`SELECT project_id, count(*) AS count,
@@ -17396,7 +17408,57 @@ function dashboardProjectUsage(internal: SQLiteInternal, projectIds: readonly st
     WHERE project_id IN (SELECT value FROM json_each(?)) GROUP BY project_id`).all(ids)) {
     releases.set(String(row.project_id), { releases: Number(row.releases), storageBytes: Number(row.storage_bytes) });
   }
-  return { domains, releases };
+  if (releaseIds.length > 0) {
+    for (const row of internal.prepare(`SELECT * FROM clank_platform_releases
+      WHERE id IN (SELECT value FROM json_each(?))`).all(JSON.stringify(releaseIds))) {
+      const parsed = releaseRow(row);
+      activeReleases.set(parsed.id, parsed);
+    }
+  }
+  const now = Date.now();
+  for (const row of internal.prepare(`SELECT
+      project_id,
+      count(DISTINCT CASE WHEN request_count > 0 THEN
+        bucket_started_at - (bucket_started_at % ?) END) AS active_intervals,
+      coalesce(max(request_count), 0) AS peak_requests,
+      max(bucket_started_at) AS last_request_at,
+      sum(request_count) AS request_count,
+      sum(error_count) AS error_count,
+      sum(status_2xx) AS status_2xx,
+      sum(status_3xx) AS status_3xx,
+      sum(status_4xx) AS status_4xx,
+      sum(status_5xx) AS status_5xx,
+      sum(duration_sum_ms) AS duration_sum_ms,
+      max(duration_max_ms) AS duration_max_ms,
+      sum(latency_le_50) AS latency_le_50,
+      sum(latency_le_100) AS latency_le_100,
+      sum(latency_le_250) AS latency_le_250,
+      sum(latency_le_500) AS latency_le_500,
+      sum(latency_le_1000) AS latency_le_1000,
+      sum(latency_le_2500) AS latency_le_2500,
+      sum(latency_le_5000) AS latency_le_5000,
+      sum(latency_inf) AS latency_inf,
+      sum(request_bytes) AS request_bytes,
+      sum(response_bytes) AS response_bytes,
+      sum(method_get) AS method_get,
+      sum(method_head) AS method_head,
+      sum(method_post) AS method_post,
+      sum(method_put) AS method_put,
+      sum(method_patch) AS method_patch,
+      sum(method_delete) AS method_delete,
+      sum(method_options) AS method_options,
+      sum(method_other) AS method_other
+    FROM clank_platform_metrics
+    WHERE project_id IN (SELECT value FROM json_each(?)) AND bucket_started_at >= ? AND bucket_started_at < ?
+    GROUP BY project_id`).all(range.intervalMs, ids, now - range.durationMs, now + 1)) {
+    metrics.set(String(row.project_id), {
+      ...summarizeMetricRows([row], range.durationMs),
+      activeIntervals: Number(row.active_intervals),
+      peakRequestsPerMinute: Number(row.peak_requests),
+      lastRequestAt: row.last_request_at == null ? null : Number(row.last_request_at),
+    } as unknown as Record<string, number>);
+  }
+  return { domains, releases, activeReleases, metrics, emptyMetrics };
 }
 
 function dashboardPayload(
@@ -17453,14 +17515,17 @@ function dashboardPayload(
     };
   });
   const projectRows = visibleProjectRows(internal, principal.userId, principal.projectId).filter(row=>!row.organization_id || policyAllows(String(row.organization_id)));
-  const projectUsage = dashboardProjectUsage(internal, projectRows.map((row) => String(row.id)));
+  const activeReleaseIds = projectRows
+    .map((row) => row.active_release_id === null || row.active_release_id === undefined ? null : String(row.active_release_id))
+    .filter((id): id is string => id !== null);
+  const projectUsage = dashboardProjectUsage(internal, projectRows.map((row) => String(row.id)), activeReleaseIds);
   const projects = projectRows.map((source) => {
     const project = projectRow(source);
     const effective = projectQuotas(internal, project, defaults, quotaSnapshot);
-    const release = project.activeReleaseId ? releaseById(internal, project.activeReleaseId) : null;
+    const release = project.activeReleaseId ? (projectUsage.activeReleases.get(project.activeReleaseId) ?? null) : null;
     const domainUsage = projectUsage.domains.get(project.id);
     const releases = projectUsage.releases.get(project.id) ?? { releases: 0, storageBytes: 0 };
-    const metrics = projectMetricSummary(internal, project.id) as Record<string, number>;
+    const metrics = projectUsage.metrics.get(project.id) ?? { ...projectUsage.emptyMetrics };
     return {
       ...projectPayload(project),
       url: appUrlTemplate.replaceAll("{slug}", project.slug)
@@ -21406,7 +21471,7 @@ function safeError(error: unknown): string {
 function statusEscape(value:string):string{return value.replace(/[&<>"']/gu,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));}
 function statusPublicHtml(page:CustomerStatusSnapshot,canonical:string):string{
   const e=statusEscape;
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${e(page.title)}</title><style>body{font:16px/1.55 system-ui,sans-serif;margin:0;color:#182528;background:#f6f8f7}main{max-width:680px;margin:auto;padding:32px 20px}h1{line-height:1.15;font-size:2rem}section,article{background:white;border:1px solid #d5dfdc;border-radius:10px;padding:18px;margin:16px 0;overflow-wrap:anywhere}ul{list-style:none;padding:0}li{padding:14px 0;border-bottom:1px solid #d5dfdc;display:flex;gap:18px;justify-content:space-between;flex-wrap:wrap}a{display:inline-flex;min-height:44px;align-items:center;color:#155e51}a:focus-visible{outline:3px solid #155e51;outline-offset:4px}.copy{white-space:pre-wrap}time{color:#465958}</style></head><body><main><h1>${e(page.title)}</h1><p>${e(page.description)}</p><section aria-label="Component health"><h2>Current component health</h2><ul>${page.components.map(c=>`<li><strong>${e(c.label)}</strong><span>${e(c.health.replace(/-/gu,' '))}${c.complete?'':' · coverage unavailable'}</span></li>`).join('')}</ul></section><h2>Public updates</h2>${page.updates.length?page.updates.map(u=>`<article><h3>${e(u.title)}</h3><p>${e(u.state)}</p><p class="copy">${e(u.message)}</p><time datetime="${new Date(u.publishedAt).toISOString()}">${e(new Date(u.publishedAt).toISOString())}</time></article>`).join(''):'<p>No public updates have been published.</p>'}<a href="${e(new URL('/status/'+page.slug+'/preferences',canonical).href)}">Subscriber preferences and notifications</a></main></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${e(page.title)}</title><style>body{font:16px/1.6 Inter,system-ui,-apple-system,sans-serif;margin:0;color:#142322;background:#f4f7f6}main{max-width:700px;margin:auto;padding:40px 20px}h1{line-height:1.15;font-size:2.1rem;letter-spacing:-.03em;margin:0 0 10px}h2{font-size:1.2rem;letter-spacing:-.02em;margin:24px 0 12px}section,article{background:white;border:1px solid #d7e2de;border-radius:14px;padding:20px 22px;margin:16px 0;overflow-wrap:anywhere;box-shadow:0 2px 10px rgba(20,35,34,.04)}ul{list-style:none;padding:0;margin:0}li{padding:14px 0;border-bottom:1px solid #e4ece9;display:flex;gap:18px;justify-content:space-between;align-items:center;flex-wrap:wrap}li:last-child{border-bottom:0;padding-bottom:0}a{display:inline-flex;min-height:44px;align-items:center;color:#0f5e50;font-weight:600;text-underline-offset:3px}a:focus-visible{outline:3px solid #0f5e50;outline-offset:4px;border-radius:4px}.copy{white-space:pre-wrap;color:#334846}time{color:#546967;font-size:.9rem}</style></head><body><main><h1>${e(page.title)}</h1><p>${e(page.description)}</p><section aria-label="Component health"><h2>Current component health</h2><ul>${page.components.map(c=>`<li><strong>${e(c.label)}</strong><span>${e(c.health.replace(/-/gu,' '))}${c.complete?'':' · coverage unavailable'}</span></li>`).join('')}</ul></section><h2>Public updates</h2>${page.updates.length?page.updates.map(u=>`<article><h3>${e(u.title)}</h3><p>${e(u.state)}</p><p class="copy">${e(u.message)}</p><time datetime="${new Date(u.publishedAt).toISOString()}">${e(new Date(u.publishedAt).toISOString())}</time></article>`).join(''):'<p>No public updates have been published.</p>'}<a href="${e(new URL('/status/'+page.slug+'/preferences',canonical).href)}">Subscriber preferences and notifications</a></main></body></html>`;
 }
 
-function statusFormHtml(content:string):string{return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Customer status administration</title><style>body{font:16px/1.55 system-ui,sans-serif;margin:0;color:#182528;background:#f6f8f7}main{max-width:760px;margin:auto;padding:32px 20px;overflow-wrap:anywhere}h1{line-height:1.15}form,section,article{margin:20px 0;padding:18px;border:1px solid #cbd8d2;border-radius:10px;background:white}label{display:block;margin:12px 0 6px}input,textarea,select,button{font:inherit;box-sizing:border-box;max-width:100%}input,textarea,select{width:100%;min-height:44px;padding:10px;border:1px solid #73847e;border-radius:5px}textarea,pre{white-space:pre-wrap;overflow-wrap:anywhere}button{min-height:44px;padding:10px 16px;margin-top:14px;background:#155e51;color:white;border:0;border-radius:6px;cursor:pointer}button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible,a:focus-visible{outline:3px solid #177766;outline-offset:4px}dialog{width:min(680px,calc(100% - 48px));max-height:calc(100% - 64px);overflow:auto;border:1px solid #82948d;border-radius:14px;padding:24px;color:#182528;background:white;box-shadow:0 20px 80px #0008}dialog::backdrop{background:#10201dcc}dialog h2{margin-top:0}dialog form{margin:16px 0 0;padding:0;border:0;background:transparent}dialog form+form{margin-top:8px}.check{display:flex;gap:12px;align-items:center;min-height:44px}.check input{width:22px;min-height:22px}a{display:inline-flex;align-items:center;min-height:44px;color:#155e51}.copy{white-space:pre-wrap}</style></head><body><main>${content}</main></body></html>`;}
+function statusFormHtml(content:string):string{return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Customer status administration</title><style>body{font:16px/1.6 Inter,system-ui,-apple-system,sans-serif;margin:0;color:#142322;background:#f4f7f6}main{max-width:760px;margin:auto;padding:40px 20px;overflow-wrap:anywhere}h1{line-height:1.15;letter-spacing:-.03em;margin:0 0 12px}h2{font-size:1.25rem;letter-spacing:-.02em;margin:24px 0 10px}form,section,article{margin:20px 0;padding:22px;border:1px solid #d4e0dc;border-radius:14px;background:white;box-shadow:0 2px 10px rgba(20,35,34,.04)}fieldset{border:1px solid #dce6e3;border-radius:10px;padding:12px 16px;margin:16px 0 6px}legend{font-weight:600;font-size:.92rem;color:#2c4240;padding:0 6px}label{display:block;margin:14px 0 6px;font-weight:600;font-size:.92rem;color:#243836}input,textarea,select,button{font:inherit;box-sizing:border-box;max-width:100%}input,textarea,select{width:100%;min-height:44px;padding:10px 12px;border:1px solid #96aba4;border-radius:8px;background-color:#fff;color:#142322;transition:border-color .15s ease,box-shadow .15s ease}input:hover,textarea:hover,select:hover{border-color:#4b6860}select{appearance:none;-webkit-appearance:none;padding-right:38px;cursor:pointer;background-image:linear-gradient(45deg,transparent 50%,#3b544e 50%),linear-gradient(135deg,#3b544e 50%,transparent 50%);background-position:calc(100% - 19px) 50%,calc(100% - 13px) 50%;background-size:6px 6px,6px 6px;background-repeat:no-repeat}textarea,pre{white-space:pre-wrap;overflow-wrap:anywhere}button{min-height:44px;padding:10px 18px;margin-top:16px;background:#0f5e50;color:white;border:0;border-radius:8px;font-weight:600;cursor:pointer;transition:background-color .15s ease}button:hover{background:#0c4d41}button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible,a:focus-visible{outline:3px solid #177766;outline-offset:3px}dialog{width:min(680px,calc(100% - 48px));max-height:calc(100% - 64px);overflow:auto;border:1px solid #82948d;border-radius:16px;padding:24px;color:#142322;background:white;box-shadow:0 24px 80px rgba(10,25,22,.28)}dialog::backdrop{background:#10201dcc}dialog h2{margin-top:0}dialog form{margin:16px 0 0;padding:0;border:0;background:transparent;box-shadow:none}dialog form+form{margin-top:8px}.check{display:flex;gap:12px;align-items:center;min-height:44px;font-weight:500;cursor:pointer}.check input{width:20px;min-height:20px;accent-color:#0f5e50}a{display:inline-flex;align-items:center;min-height:44px;color:#0f5e50;font-weight:600;text-underline-offset:3px}.copy{white-space:pre-wrap}</style></head><body><main>${content}</main></body></html>`;}
