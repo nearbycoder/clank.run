@@ -115,30 +115,45 @@ export function createRenderContexts(): Map<symbol, unknown> {
   return new Map([[RENDER_ID_CONTEXT, { next: 0 } satisfies RenderIdState]]);
 }
 
+const EMPTY_MOUNTS: Array<() => void | Cleanup> = [];
+
+class VNodeImpl implements VNode {
+  declare readonly [VNODE]: true;
+  declare type: ElementType;
+  declare props: Record<string, unknown>;
+  declare key?: PropertyKey;
+  declare _p: boolean;
+  constructor(type: ElementType, props: Record<string, unknown>, key: PropertyKey | undefined, hasProps: boolean) {
+    this.type = type;
+    this.props = props;
+    this.key = key;
+    this._p = hasProps;
+  }
+}
+Object.defineProperty(VNodeImpl.prototype, VNODE, { value: true });
+
 export function h(
   type: ElementType,
   props: Record<string, unknown> | null = null,
   ...children: Renderable[]
 ): VNode {
   if (props === null || props === undefined) {
-    return { [VNODE]: true, type, props: { children }, key: undefined };
+    return new VNodeImpl(type, { children }, undefined, false);
   }
-  const input = props;
-  const declared = input.children;
+  const declared = props.children;
   const normalizedChildren = children.length > 0
     ? children
     : declared === undefined
-      ? []
+      ? children
       : Array.isArray(declared)
         ? declared
         : [declared as Renderable];
-  const output = { ...input, children: normalizedChildren };
-  return {
-    [VNODE]: true,
+  return new VNodeImpl(
     type,
-    props: output,
-    key: input.key as PropertyKey | undefined,
-  };
+    { ...props, children: normalizedChildren },
+    props.key as PropertyKey | undefined,
+    true,
+  );
 }
 
 export const createElement = h;
@@ -289,12 +304,7 @@ function hydrateFragment(parent: Node, values: Renderable[], cursor: HydrationCu
   } catch (error) {
     cleanupAfterError(error, mounted.reverse().map((entry) => () => entry.dispose(false)));
   }
-  return {
-    get nodes() { return mounted.flatMap((entry) => entry.nodes); },
-    dispose(remove = true) {
-      cleanupAll(mounted.splice(0).reverse().map((entry) => () => entry.dispose(remove)));
-    },
-  };
+  return new FragmentMount(mounted);
 }
 
 function hydrateDynamic(parent: Node, read: () => Renderable, cursor: HydrationCursor, context: MountContext): Mounted {
@@ -833,96 +843,105 @@ function reorderKeyed<T>(parent: Node, ordered: KeyedEntry<T>[], previous: numbe
   }
 }
 
-function mountKeyed<T>(parent: Node, block: KeyedBlock<T>, before: Node | null, context: MountContext): Mounted {
-  const ownerDocument = ownerDocumentFor(parent);
-  const start = ownerDocument.createComment("clank:for");
-  const end = ownerDocument.createComment("clank:/for");
-  parent.insertBefore(start, before);
-  parent.insertBefore(end, before);
-  let entries = new Map<unknown, KeyedEntry<T>>();
-  let ordered: KeyedEntry<T>[] = [];
-  let fallback: Mounted | undefined;
+function keyOfItem<T>(block: KeyedBlock<T>, item: T, index: number): unknown {
+  if (typeof block.by === "function") return block.by(item, index);
+  if (block.by !== undefined) return (item as Record<PropertyKey, unknown>)[block.by as PropertyKey] as PropertyKey;
+  if ((typeof item === "object" && item !== null) || typeof item === "function") return item;
+  return `${typeof item}:${String(item)}:${index}`;
+}
 
-  const keyOf = (item: T, index: number): unknown => {
-    if (typeof block.by === "function") return block.by(item, index);
-    if (block.by !== undefined) return (item as Record<PropertyKey, unknown>)[block.by as PropertyKey] as PropertyKey;
-    if ((typeof item === "object" && item !== null) || typeof item === "function") return item;
-    return `${typeof item}:${String(item)}:${index}`;
-  };
+interface KeyedState<T> {
+  entries: Map<unknown, KeyedEntry<T>>;
+  ordered: KeyedEntry<T>[];
+  fallback: Mounted | undefined;
+}
 
-  const stop = effect(() => {
-    parent = end.parentNode ?? parent;
-    const values = resolve(block.each) as T[];
-    if (!Array.isArray(values)) throw new TypeError("For expects an array, signal, computed value, or array accessor.");
-    const keyedValues = values.map((item, index) => ({ item, index, key: keyOf(item, index) }));
-    const uniqueKeys = new Set<unknown>();
-    for (const { key } of keyedValues) {
-      if (uniqueKeys.has(key)) throw new Error(`Duplicate key in For: ${String(key)}`);
-      uniqueKeys.add(key);
-    }
-    const next = new Map<unknown, KeyedEntry<T>>();
-    const nextOrdered: KeyedEntry<T>[] = [];
-    const previous: number[] = [];
-
-    const created: Mounted[] = [];
-    try {
-      batch(() => {
-        keyedValues.forEach(({ item, index, key }) => {
-          let entry = entries.get(key);
-          previous.push(entry ? entry.index.peek() : -1);
-          if (entry) {
-            entry.updateItem(item);
-            entry.index.value = index;
-          } else {
-            const indexState = signal(index);
-            const reactiveItem = createReactiveItem(item);
-            const mounted = mountValue(parent, block.renderItem(reactiveItem.value, () => indexState.value), end, context);
-            created.push(mounted);
-            entry = {
-              key,
-              updateItem: reactiveItem.update,
-              index: indexState,
-              mounted,
-            };
-          }
-          next.set(key, entry);
-          nextOrdered.push(entry);
-        });
-      });
-    } catch (error) {
-      cleanupAfterError(error, created.reverse().map((mounted) => () => mounted.dispose()));
-    }
-
-    const removed = [...entries].filter(([key]) => !next.has(key)).map(([, entry]) => entry);
-    entries = next;
-    ordered = nextOrdered;
-    cleanupAll([
-      ...removed.map((entry) => () => entry.mounted.dispose()),
-      () => {
-        if (ordered.length === 0) {
-          fallback ??= mountValue(parent, block.fallback ?? null, end, context);
+function reconcileKeyed<T>(
+  parent: Node,
+  block: KeyedBlock<T>,
+  values: T[],
+  end: Node,
+  context: MountContext,
+  state: KeyedState<T>,
+): void {
+  const len = values.length;
+  const keys = new Array<unknown>(len);
+  const uniqueKeys = new Set<unknown>();
+  for (let index = 0; index < len; index++) {
+    const key = keyOfItem(block, values[index]!, index);
+    if (uniqueKeys.has(key)) throw new Error(`Duplicate key in For: ${String(key)}`);
+    uniqueKeys.add(key);
+    keys[index] = key;
+  }
+  const prevEntries = state.entries;
+  const next = new Map<unknown, KeyedEntry<T>>();
+  const nextOrdered = new Array<KeyedEntry<T>>(len);
+  const previous = new Array<number>(len);
+  const created: Mounted[] = [];
+  try {
+    batch(() => {
+      for (let index = 0; index < len; index++) {
+        const key = keys[index];
+        const item = values[index]!;
+        let entry = prevEntries.get(key);
+        previous[index] = entry ? entry.index.peek() : -1;
+        if (entry) {
+          entry.updateItem(item);
+          entry.index.value = index;
         } else {
-          fallback?.dispose();
-          fallback = undefined;
-          reorderKeyed(parent, ordered, previous, end);
+          const indexState = signal(index);
+          const reactiveItem = createReactiveItem(item);
+          const mounted = mountValue(parent, block.renderItem(reactiveItem.value, () => indexState.value), end, context);
+          created.push(mounted);
+          entry = { key, updateItem: reactiveItem.update, index: indexState, mounted };
         }
-      },
-    ]);
-  });
+        next.set(key, entry);
+        nextOrdered[index] = entry;
+      }
+    });
+  } catch (error) {
+    cleanupAfterError(error, created.reverse().map((mounted) => () => mounted.dispose()));
+  }
 
+  const removed: KeyedEntry<T>[] = [];
+  for (const [key, entry] of prevEntries) {
+    if (!next.has(key)) removed.push(entry);
+  }
+  state.entries = next;
+  state.ordered = nextOrdered;
+  const finalize = () => {
+    if (state.ordered.length === 0) {
+      state.fallback ??= mountValue(parent, block.fallback ?? null, end, context);
+    } else {
+      state.fallback?.dispose();
+      state.fallback = undefined;
+      reorderKeyed(parent, state.ordered, previous, end);
+    }
+  };
+  if (removed.length === 0) {
+    finalize();
+    return;
+  }
+  cleanupAll([
+    ...removed.map((entry) => () => entry.mounted.dispose()),
+    finalize,
+  ]);
+}
+
+function createKeyedMount<T>(start: Comment, end: Comment, stop: Cleanup, state: KeyedState<T>): Mounted {
   let active = true;
   return {
-    get nodes() { return [start, ...(fallback?.nodes ?? ordered.flatMap((entry) => entry.mounted.nodes)), end]; },
+    get nodes() { return [start, ...(state.fallback?.nodes ?? state.ordered.flatMap((entry) => entry.mounted.nodes)), end]; },
     dispose(remove = true) {
       if (!active) return;
       active = false;
       cleanupAll([
         stop,
-        () => fallback?.dispose(remove),
-        ...ordered.reverse().map((entry) => () => entry.mounted.dispose(remove)),
+        () => state.fallback?.dispose(remove),
+        ...state.ordered.reverse().map((entry) => () => entry.mounted.dispose(remove)),
         () => {
-          entries.clear();
-          ordered = [];
+          state.entries.clear();
+          state.ordered = [];
           if (remove) {
             start.parentNode?.removeChild(start);
             end.parentNode?.removeChild(end);
@@ -933,33 +952,41 @@ function mountKeyed<T>(parent: Node, block: KeyedBlock<T>, before: Node | null, 
   };
 }
 
+function mountKeyed<T>(parent: Node, block: KeyedBlock<T>, before: Node | null, context: MountContext): Mounted {
+  const ownerDocument = ownerDocumentFor(parent);
+  const start = ownerDocument.createComment("clank:for");
+  const end = ownerDocument.createComment("clank:/for");
+  parent.insertBefore(start, before);
+  parent.insertBefore(end, before);
+  const state: KeyedState<T> = { entries: new Map(), ordered: [], fallback: undefined };
+  const stop = effect(() => {
+    parent = end.parentNode ?? parent;
+    const values = resolve(block.each) as T[];
+    if (!Array.isArray(values)) throw new TypeError("For expects an array, signal, computed value, or array accessor.");
+    reconcileKeyed(parent, block, values, end, context, state);
+  });
+  return createKeyedMount(start, end, stop, state);
+}
+
 function hydrateKeyed<T>(parent: Node, block: KeyedBlock<T>, cursor: HydrationCursor, context: MountContext): Mounted {
   const start = expectComment(parent, cursor, "clank:for", context);
-  const keyOf = (item: T, index: number): unknown => {
-    if (typeof block.by === "function") return block.by(item, index);
-    if (block.by !== undefined) return (item as Record<PropertyKey, unknown>)[block.by as PropertyKey] as PropertyKey;
-    if ((typeof item === "object" && item !== null) || typeof item === "function") return item;
-    return `${typeof item}:${String(item)}:${index}`;
-  };
   const initial = resolve(block.each) as T[];
   if (!Array.isArray(initial)) throw hydrationMismatch(parent, cursor.node, context, 7);
   const initialKeys = new Set<unknown>();
   for (let index = 0; index < initial.length; index++) {
-    const key = keyOf(initial[index], index);
+    const key = keyOfItem(block, initial[index]!, index);
     if (initialKeys.has(key)) throw new Error(`Duplicate key in For: ${String(key)}`);
     initialKeys.add(key);
   }
-
-  let entries = new Map<unknown, KeyedEntry<T>>();
-  let ordered: KeyedEntry<T>[] = [];
-  let fallback: Mounted | undefined;
+  const state: KeyedState<T> = { entries: new Map(), ordered: [], fallback: undefined };
   let end: Comment;
   try {
     if (initial.length === 0) {
-      fallback = hydrateValue(parent, unwrapReactive(block.fallback ?? null), cursor, context);
+      state.fallback = hydrateValue(parent, unwrapReactive(block.fallback ?? null), cursor, context);
     } else {
-      initial.forEach((item, index) => {
-        const key = keyOf(item, index);
+      for (let index = 0; index < initial.length; index++) {
+        const item = initial[index]!;
+        const key = keyOfItem(block, item, index);
         const indexState = signal(index);
         const reactiveItem = createReactiveItem(item);
         const entry: KeyedEntry<T> = {
@@ -968,18 +995,17 @@ function hydrateKeyed<T>(parent: Node, block: KeyedBlock<T>, cursor: HydrationCu
           index: indexState,
           mounted: hydrateValue(parent, block.renderItem(reactiveItem.value, () => indexState.value), cursor, context),
         };
-        entries.set(key, entry);
-        ordered.push(entry);
-      });
+        state.entries.set(key, entry);
+        state.ordered.push(entry);
+      }
     }
     end = expectComment(parent, cursor, "clank:/for", context);
   } catch (error) {
     cleanupAfterError(error, [
-      () => fallback?.dispose(false),
-      ...ordered.reverse().map((entry) => () => entry.mounted.dispose(false)),
+      () => state.fallback?.dispose(false),
+      ...state.ordered.reverse().map((entry) => () => entry.mounted.dispose(false)),
     ]);
   }
-
   let first = true;
   let stop: Cleanup;
   try {
@@ -987,92 +1013,16 @@ function hydrateKeyed<T>(parent: Node, block: KeyedBlock<T>, cursor: HydrationCu
       parent = end.parentNode ?? parent;
       const values = resolve(block.each) as T[];
       if (!Array.isArray(values)) throw new TypeError("For expects an array, signal, computed value, or array accessor.");
-      if (first) {
-        first = false;
-        return;
-      }
-      const keyedValues = values.map((item, index) => ({ item, index, key: keyOf(item, index) }));
-      const uniqueKeys = new Set<unknown>();
-      for (const { key } of keyedValues) {
-        if (uniqueKeys.has(key)) throw new Error(`Duplicate key in For: ${String(key)}`);
-        uniqueKeys.add(key);
-      }
-      const next = new Map<unknown, KeyedEntry<T>>();
-      const nextOrdered: KeyedEntry<T>[] = [];
-      const previous: number[] = [];
-      const created: Mounted[] = [];
-      try {
-        batch(() => {
-          keyedValues.forEach(({ item, index, key }) => {
-            let entry = entries.get(key);
-            previous.push(entry ? entry.index.peek() : -1);
-            if (entry) {
-              entry.updateItem(item);
-              entry.index.value = index;
-            } else {
-              const indexState = signal(index);
-              const reactiveItem = createReactiveItem(item);
-              const mounted = mountValue(parent, block.renderItem(reactiveItem.value, () => indexState.value), end, context);
-              created.push(mounted);
-              entry = {
-                key,
-                updateItem: reactiveItem.update,
-                index: indexState,
-                mounted,
-              };
-            }
-            next.set(key, entry);
-            nextOrdered.push(entry);
-          });
-        });
-      } catch (error) {
-        cleanupAfterError(error, created.reverse().map((mounted) => () => mounted.dispose()));
-      }
-
-      const removed = [...entries].filter(([key]) => !next.has(key)).map(([, entry]) => entry);
-      entries = next;
-      ordered = nextOrdered;
-      cleanupAll([
-        ...removed.map((entry) => () => entry.mounted.dispose()),
-        () => {
-          if (ordered.length === 0) {
-            fallback ??= mountValue(parent, block.fallback ?? null, end, context);
-          } else {
-            fallback?.dispose();
-            fallback = undefined;
-            reorderKeyed(parent, ordered, previous, end);
-          }
-        },
-      ]);
+      if (first) { first = false; return; }
+      reconcileKeyed(parent, block, values, end, context, state);
     });
   } catch (error) {
     cleanupAfterError(error, [
-      () => fallback?.dispose(false),
-      ...ordered.reverse().map((entry) => () => entry.mounted.dispose(false)),
+      () => state.fallback?.dispose(false),
+      ...state.ordered.reverse().map((entry) => () => entry.mounted.dispose(false)),
     ]);
   }
-
-  let active = true;
-  return {
-    get nodes() { return [start, ...(fallback?.nodes ?? ordered.flatMap((entry) => entry.mounted.nodes)), end]; },
-    dispose(remove = true) {
-      if (!active) return;
-      active = false;
-      cleanupAll([
-        stop,
-        () => fallback?.dispose(remove),
-        ...ordered.reverse().map((entry) => () => entry.mounted.dispose(remove)),
-        () => {
-          entries.clear();
-          ordered = [];
-          if (remove) {
-            start.parentNode?.removeChild(start);
-            end.parentNode?.removeChild(end);
-          }
-        },
-      ]);
-    },
-  };
+  return createKeyedMount(start, end, stop, state);
 }
 
 interface ReactiveItem<T> {
@@ -1198,7 +1148,7 @@ export function evaluateComponent(vnode: VNode, parentContexts: Map<symbol, unkn
   const frame: ComponentFrame = {
     contexts: parentContexts,
     owned: false,
-    mounts: [],
+    mounts: EMPTY_MOUNTS,
   };
   const previous = currentFrame;
   currentFrame = frame;
@@ -1503,22 +1453,20 @@ function setMultipleSelectValue(element: Element, property: string, value: unkno
 function observeSelectOptions(element: Element, read: () => unknown): Cleanup {
   const Observer = element.ownerDocument?.defaultView?.MutationObserver ?? globalThis.MutationObserver;
   if (element.localName !== "select" || !Observer) return () => {};
-  const observer = new Observer(() => { setMultipleSelectValue(element, "value", read()); });
+  const observer = new Observer(() => {
+    const value = read();
+    if (!setMultipleSelectValue(element, "value", value)) {
+      const next = value === null || value === undefined || value === false ? "" : String(value);
+      if ((element as HTMLSelectElement).value !== next) (element as HTMLSelectElement).value = next;
+    }
+  });
   observer.observe(element, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["value", "multiple"] });
   return () => observer.disconnect();
 }
 
 function bindStyle(element: HTMLElement, styles: Record<string, unknown>): Cleanup {
-  // Styles own the inline declaration. Clear stale SSR/parser styles before attaching property effects.
   element.style.cssText = "";
-  const stops = Object.entries(styles).map(([name, value]) => effect(() => {
-    const next = resolve(value);
-    if (name.startsWith("--") || name.includes("-")) {
-      element.style.setProperty(name, next === null || next === undefined || next === false ? "" : String(next));
-    } else {
-      (element.style as unknown as Record<string, unknown>)[name] = next === false ? "" : next ?? "";
-    }
-  }));
+  const stops = Object.entries(styles).map(([name, value]) => effect(() => setStyleValue(element, name, resolve(value))));
   return () => stops.reverse().forEach((stop) => stop());
 }
 
@@ -1671,7 +1619,8 @@ function normalizeClass(value: unknown): string {
 
 export function onMount(callback: () => void | Cleanup): void {
   if (!currentFrame) throw new Error("onMount() must run while a component is being created.");
-  currentFrame.mounts.push(callback);
+  if (currentFrame.mounts === EMPTY_MOUNTS) currentFrame.mounts = [callback];
+  else currentFrame.mounts.push(callback);
 }
 
 export function createContext<T>(defaultValue: T): ClankContext<T> {

@@ -5,7 +5,8 @@ export type Cleanup = () => void;
 export type Equality<T> = false | ((previous: T, next: T) => boolean);
 
 interface Source {
-  observers: Set<Observer>;
+  _obs1: Observer | null;
+  _obs: Observer[] | null;
   seen: number;
 }
 
@@ -24,7 +25,14 @@ interface Scope {
   parent: Scope | null;
   cleanups: Cleanup[];
   active: boolean;
+  escaped?: boolean;
 }
+
+const EMPTY_SOURCES: Source[] = [];
+const EMPTY_OBSERVERS: ReadonlySet<Observer> = new Set();
+const RAW_SYMBOL = Symbol.for("clank.raw");
+/** @internal Marks a createRoot disposer whose scope has no cleanups and did not escape via getOwner(). */
+export const ROOT_CLEANUP_STATE = Symbol.for("clank.root-cleanups");
 
 let activeObserver: Observer | null = null;
 let activeScope: Scope | null = null;
@@ -32,8 +40,44 @@ let tracking = true;
 let batchDepth = 0;
 let passes = 0;
 let flushing = false;
-const pendingEffects = new Set<ReactiveEffect>();
+let hasDiagnostics = false;
+let pending: ReactiveEffect[] = [];
+let pendingSpare: ReactiveEffect[] = [];
 const transactionStack: Array<Map<ReactiveSignal<unknown>, unknown>> = [];
+
+function addObserver(source: Source, observer: Observer): void {
+  const obs = source._obs;
+  if (obs !== null) { obs.push(observer); return; }
+  const first = source._obs1;
+  if (first === null) { source._obs1 = observer; return; }
+  if (first === observer) return;
+  source._obs = [first, observer];
+  source._obs1 = null;
+}
+
+function removeObserver(source: Source, observer: Observer): void {
+  if (source._obs1 === observer) { source._obs1 = null; return; }
+  const obs = source._obs;
+  if (obs === null) return;
+  const last = obs.length - 1;
+  if (obs[last] === observer) {
+    obs.pop();
+  } else {
+    const i = obs.indexOf(observer);
+    if (i !== -1) obs.splice(i, 1);
+  }
+  if (obs.length === 0) source._obs = null;
+}
+
+function observersView(source: Source): Set<Observer> {
+  if (source._obs !== null) return new Set(source._obs);
+  if (source._obs1 !== null) return new Set([source._obs1]);
+  return EMPTY_OBSERVERS as Set<Observer>;
+}
+
+function endBatch(): void {
+  if (--batchDepth === 0 && pending.length > 0 && !flushing) flushEffects();
+}
 
 export interface ReactiveDiagnostic {
   readonly type: "dependency" | "invalidate" | "run" | "dispose";
@@ -54,7 +98,7 @@ function diagnosticId(value: object): number {
   return id;
 }
 function diagnostic(type: ReactiveDiagnostic["type"], target: Source | Observer, source?: Source, durationMs?: number): void {
-  if (!diagnosticListeners.size || reportingDiagnostic) return;
+  if (!hasDiagnostics || reportingDiagnostic) return;
   const event = Object.freeze({ type, id: diagnosticId(target),
     kind: target instanceof ReactiveSignal ? "signal" as const : target instanceof Computed ? "computed" as const : "effect" as const,
     ...(source ? { sourceId: diagnosticId(source) } : {}),
@@ -69,85 +113,130 @@ function diagnostic(type: ReactiveDiagnostic["type"], target: Source | Observer,
 }
 export function observeReactivity(listener: (event: ReactiveDiagnostic) => void): Cleanup {
   diagnosticListeners.add(listener);
-  return () => { diagnosticListeners.delete(listener); if (!diagnosticListeners.size) diagnosticIds = new WeakMap(); };
+  hasDiagnostics = true;
+  return () => {
+    diagnosticListeners.delete(listener);
+    hasDiagnostics = diagnosticListeners.size > 0;
+    if (!hasDiagnostics) diagnosticIds = new WeakMap();
+  };
 }
 
 function track(source: Source): void {
   const observer = activeObserver;
-  if (!tracking || !observer || !observer.active || source.seen === observer.pass) return;
-  if (!observer.stale && observer.sources[observer.cursor] === source) {
-    source.seen = observer.pass;
-    observer.cursor++;
-    if (diagnosticListeners.size) diagnostic("dependency", observer, source);
+  if (!tracking || observer === null || !observer.active) return;
+  const pass = observer.pass;
+  if (source.seen === pass) return;
+  const cursor = observer.cursor;
+  let sources = observer.sources;
+  if (observer.stale === null && sources[cursor] === source) {
+    source.seen = pass;
+    observer.cursor = cursor + 1;
+    if (hasDiagnostics) diagnostic("dependency", observer, source);
     return;
   }
   if (reads(observer, source)) {
-    source.seen = observer.pass;
+    source.seen = pass;
     return;
   }
-  source.seen = observer.pass;
-  observer.stale ??= observer.sources.splice(observer.cursor);
-  observer.cursor = observer.sources.push(source);
-  source.observers.add(observer);
-  if (diagnosticListeners.size) diagnostic("dependency", observer, source);
+  source.seen = pass;
+  if (sources === EMPTY_SOURCES) {
+    observer.sources = [source];
+    observer.cursor = 1;
+    addObserver(source, observer);
+  } else {
+    if (observer.stale === null && cursor < sources.length) observer.stale = sources.splice(cursor);
+    observer.cursor = sources.push(source);
+    if (observer.stale === null || !observer.stale.includes(source)) addObserver(source, observer);
+  }
+  if (hasDiagnostics) diagnostic("dependency", observer, source);
 }
 
 function reads(observer: Observer, source: Source): boolean {
-  const index = observer.sources.indexOf(source);
-  return index >= 0 && index < observer.cursor;
+  const cursor = observer.cursor;
+  if (cursor === 0) return false;
+  const sources = observer.sources;
+  for (let i = 0; i < cursor; i++) if (sources[i] === source) return true;
+  return false;
 }
 
 function settle(observer: Observer): void {
-  const { sources } = observer;
+  const sources = observer.sources;
   let stale = observer.stale;
   observer.stale = null;
-  if (!observer.active || !stale && observer.cursor === sources.length) return;
+  if (!observer.active || (stale === null && observer.cursor === sources.length)) return;
   stale ??= sources.splice(observer.cursor);
   const kept = stale.length * sources.length > 4096 ? new Set(sources) : null;
-  for (const source of stale) {
-    if (source.seen !== observer.pass && !(kept ? kept.has(source) : sources.includes(source))) source.observers.delete(observer);
+  const pass = observer.pass;
+  for (let i = 0; i < stale.length; i++) {
+    const source = stale[i]!;
+    if (source.seen !== pass && !(kept ? kept.has(source) : sources.includes(source))) removeObserver(source, observer);
   }
 }
 
 function detach(observer: Observer): void {
-  for (const source of observer.sources) source.observers.delete(observer);
-  if (observer.stale) for (const source of observer.stale) source.observers.delete(observer);
-  observer.sources = [];
+  const sources = observer.sources;
+  for (let i = 0; i < sources.length; i++) removeObserver(sources[i]!, observer);
+  const stale = observer.stale;
+  if (stale !== null) {
+    for (let i = 0; i < stale.length; i++) removeObserver(stale[i]!, observer);
+  }
+  observer.sources = EMPTY_SOURCES;
   observer.stale = null;
 }
 
 function notify(source: Source): void {
-  if (diagnosticListeners.size) diagnostic("invalidate", source);
+  if (hasDiagnostics) diagnostic("invalidate", source);
+  const first = source._obs1;
+  if (first !== null) {
+    first.schedule(source);
+    return;
+  }
+  const obs = source._obs;
+  if (obs === null) return;
   // Invalidate all siblings before flushing effects.
   batchDepth++;
   try {
-    for (const observer of source.observers) observer.schedule(source);
+    for (let i = 0; i < obs.length; i++) obs[i]!.schedule(source);
   } finally {
-    batchDepth--;
-    flushEffects();
+    endBatch();
   }
 }
 
 function flushEffects(): void {
-  if (flushing || batchDepth > 0) return;
+  if (flushing || batchDepth > 0 || pending.length === 0) return;
   flushing = true;
-  let passes = 0;
+  let flushPasses = 0;
   try {
-    while (pendingEffects.size > 0) {
-      if (++passes > 10_000) {
-        pendingEffects.clear();
+    while (pending.length > 0) {
+      if (++flushPasses > 10_000) {
+        for (let i = 0; i < pending.length; i++) pending[i]!.queued = false;
+        pending.length = 0;
         throw new Error("Clank detected a reactive cycle after 10,000 updates.");
       }
-      const effects = [...pendingEffects];
-      pendingEffects.clear();
-      for (let index = 0; index < effects.length; index++) {
+      const effects = pending;
+      pending = pendingSpare;
+      pending.length = 0;
+      pendingSpare = effects;
+      const count = effects.length;
+      for (let index = 0; index < count; index++) {
+        const eff = effects[index]!;
+        if (!eff.queued) continue;
+        eff.queued = false;
         try {
-          effects[index].run();
+          eff.run();
         } catch (error) {
-          for (const remaining of effects.slice(index + 1)) if (remaining.active) pendingEffects.add(remaining);
+          for (let rest = index + 1; rest < count; rest++) {
+            const remaining = effects[rest]!;
+            if (remaining.active) {
+              remaining.queued = true;
+              pending.push(remaining);
+            }
+          }
+          effects.length = 0;
           throw error;
         }
       }
+      effects.length = 0;
     }
   } finally {
     flushing = false;
@@ -155,7 +244,7 @@ function flushEffects(): void {
 }
 
 function registerCleanup(cleanup: Cleanup): Cleanup {
-  if (activeScope?.active) activeScope.cleanups.push(cleanup);
+  if (activeScope !== null && activeScope.active) activeScope.cleanups.push(cleanup);
   return cleanup;
 }
 
@@ -165,21 +254,30 @@ export interface SignalOptions<T> {
 }
 
 export class ReactiveSignal<T> implements Source {
-  readonly [SIGNAL] = true;
-  readonly observers = new Set<Observer>();
-  seen = 0;
-  readonly name?: string;
-  readonly equals: Equality<T>;
-  #value: T;
+  declare readonly [SIGNAL]: true;
+  declare _obs1: Observer | null;
+  declare _obs: Observer[] | null;
+  declare seen: number;
+  declare readonly name?: string;
+  declare readonly equals: Equality<T>;
+  declare _v: T;
 
-  constructor(value: T, options: SignalOptions<T> = {}) {
-    this.#value = value;
-    this.name = options.name;
-    this.equals = options.equals ?? Object.is;
+  constructor(value: T, options?: SignalOptions<T>) {
+    this._v = value;
+    this._obs1 = null;
+    this._obs = null;
+    this.seen = 0;
+    this.name = options?.name;
+    this.equals = options?.equals ?? Object.is;
+  }
+
+  get observers(): Set<Observer> {
+    return observersView(this);
   }
 
   get value(): T {
-    return this.get();
+    if (activeObserver !== null) track(this);
+    return this._v;
   }
 
   set value(next: T) {
@@ -187,25 +285,30 @@ export class ReactiveSignal<T> implements Source {
   }
 
   get(): T {
-    track(this);
-    return this.#value;
+    if (activeObserver !== null) track(this);
+    return this._v;
   }
 
   peek(): T {
-    return this.#value;
+    return this._v;
   }
 
   set(next: T | ((current: T) => T)): T {
-    const value = typeof next === "function"
-      ? (next as (current: T) => T)(this.#value)
-      : next;
-    const equal = this.equals !== false && this.equals(this.#value, value);
-    if (equal) return this.#value;
-    const transaction = transactionStack.at(-1);
-    if (transaction && !transaction.has(this as ReactiveSignal<unknown>)) {
-      transaction.set(this as ReactiveSignal<unknown>, this.#value);
+    return this._set(typeof next === "function" ? (next as (current: T) => T)(this._v) : next);
+  }
+
+  /** @internal Direct value write without updater-function interpretation. */
+  _set(value: T): T {
+    const prev = this._v;
+    const eq = this.equals;
+    if (eq === Object.is ? Object.is(prev, value) : eq !== false && eq(prev, value)) return prev;
+    if (transactionStack.length > 0) {
+      const transaction = transactionStack[transactionStack.length - 1]!;
+      if (!transaction.has(this as ReactiveSignal<unknown>)) {
+        transaction.set(this as ReactiveSignal<unknown>, prev);
+      }
     }
-    this.#value = value;
+    this._v = value;
     notify(this);
     return value;
   }
@@ -215,7 +318,7 @@ export class ReactiveSignal<T> implements Source {
   }
 
   subscribe(listener: (value: T, previous: T) => void, immediate = false): Cleanup {
-    let previous = this.peek();
+    let previous = this._v;
     if (immediate) listener(previous, previous);
     return effect(() => {
       const next = this.get();
@@ -228,15 +331,16 @@ export class ReactiveSignal<T> implements Source {
   }
 
   _restore(value: T): void {
-    if (Object.is(this.#value, value)) return;
-    this.#value = value;
+    if (Object.is(this._v, value)) return;
+    this._v = value;
     notify(this);
   }
 
   toJSON(): T {
-    return this.peek();
+    return this._v;
   }
 }
+Object.defineProperty(ReactiveSignal.prototype, SIGNAL, { value: true });
 
 export function signal<T>(value: T, options?: SignalOptions<T>): ReactiveSignal<T> {
   return new ReactiveSignal(value, options);
@@ -247,133 +351,164 @@ export function isSignal(value: unknown): value is ReactiveSignal<unknown> | Com
 }
 
 export class Computed<T> implements Source, Observer {
-  readonly [SIGNAL] = true;
-  readonly observers = new Set<Observer>();
-  seen = 0;
-  sources: Source[] = [];
-  cursor = 0;
-  stale: Source[] | null = null;
-  pass = 0;
-  active = true;
-  #dirty = true;
-  #evaluating = false;
-  #value!: T;
+  declare readonly [SIGNAL]: true;
+  declare _obs1: Observer | null;
+  declare _obs: Observer[] | null;
+  declare seen: number;
+  declare sources: Source[];
+  declare cursor: number;
+  declare stale: Source[] | null;
+  declare pass: number;
+  declare active: boolean;
+  declare _dirty: boolean;
+  declare _eval: boolean;
+  declare _v: T;
+  declare readonly derive: () => T;
+  declare readonly name?: string;
 
-  declare readonly derive: () => T; declare readonly name?: string;
   constructor(derive: () => T, name?: string) {
-    this.derive = derive; this.name = name;}
+    this.derive = derive;
+    this.name = name;
+    this._obs1 = null;
+    this._obs = null;
+    this.seen = 0;
+    this.sources = EMPTY_SOURCES;
+    this.cursor = 0;
+    this.stale = null;
+    this.pass = 0;
+    this.active = true;
+    this._dirty = true;
+    this._eval = false;
+    this._v = undefined as T;
+  }
+
+  get observers(): Set<Observer> {
+    return observersView(this);
+  }
 
   get dependencies(): Set<Source> {
     return new Set(this.sources);
   }
 
   get value(): T {
-    return this.get();
+    if (activeObserver !== null) track(this);
+    if (this._dirty) this.evaluate();
+    return this._v;
   }
 
   get(): T {
-    track(this);
-    if (this.#dirty) this.evaluate();
-    return this.#value;
+    if (activeObserver !== null) track(this);
+    if (this._dirty) this.evaluate();
+    return this._v;
   }
 
   peek(): T {
-    if (!this.#dirty) return this.#value;
+    if (!this._dirty) return this._v;
     const previous = activeObserver;
     activeObserver = null;
     try {
       this.evaluate();
-      return this.#value;
+      return this._v;
     } finally {
       activeObserver = previous;
     }
   }
 
   schedule(): void {
-    if (this.#dirty || !this.active) return;
-    this.#dirty = true;
+    if (this._dirty || !this.active) return;
+    this._dirty = true;
     notify(this);
   }
 
   private evaluate(): void {
-    if (this.#evaluating) throw new Error(`Circular computed${this.name ? ` \"${this.name}\"` : ""}.`);
-    this.#evaluating = true;
-    const diagnosticStarted = diagnosticListeners.size ? performance.now() : 0;
+    if (this._eval) throw new Error(`Circular computed${this.name ? ` \"${this.name}\"` : ""}.`);
+    this._eval = true;
+    const diagnosticStarted = hasDiagnostics ? performance.now() : 0;
     this.pass = ++passes;
     this.cursor = 0;
     const previous = activeObserver;
     activeObserver = this;
     try {
-      this.#value = this.derive();
-      this.#dirty = false;
+      this._v = this.derive();
+      this._dirty = false;
     } finally {
       activeObserver = previous;
-      settle(this);
-      this.#evaluating = false;
-      if (diagnosticListeners.size) diagnostic("run", this, undefined, performance.now() - diagnosticStarted);
+      if (this.stale !== null || this.cursor !== this.sources.length) settle(this);
+      this._eval = false;
+      if (hasDiagnostics) diagnostic("run", this, undefined, performance.now() - diagnosticStarted);
     }
   }
 
   dispose(): void {
-    diagnostic("dispose", this);
+    if (hasDiagnostics) diagnostic("dispose", this);
     this.active = false;
     detach(this);
-    this.observers.clear();
+    this._obs1 = null;
+    this._obs = null;
   }
 
   toJSON(): T {
     return this.peek();
   }
 }
+Object.defineProperty(Computed.prototype, SIGNAL, { value: true });
 
-export function computed<T>(derive: () => T, options: { name?: string } = {}): Computed<T> {
-  const value = new Computed(derive, options.name);
-  registerCleanup(() => value.dispose());
+export function computed<T>(derive: () => T, options?: { name?: string }): Computed<T> {
+  const value = new Computed(derive, options?.name);
+  if (activeScope !== null && activeScope.active) activeScope.cleanups.push(() => value.dispose());
   return value;
 }
 
 class ReactiveEffect implements Observer {
-  sources: Source[] = [];
+  sources: Source[] = EMPTY_SOURCES;
   cursor = 0;
   stale: Source[] | null = null;
   pass = 0;
   active = true;
-  #running = false;
-  #reading = false;
-  #initialized = false;
-  #cleanup: Cleanup | undefined;
-  #register: ((cleanup: Cleanup) => void) | undefined;
+  queued = false;
+  _running = false;
+  _reading = false;
+  _init = false;
+  _cleanup: Cleanup | undefined;
+  _register: ((cleanup: Cleanup) => void) | undefined;
 
   declare readonly callback: (onCleanup: (cleanup: Cleanup) => void) => void | Cleanup;
   constructor(callback: (onCleanup: (cleanup: Cleanup) => void) => void | Cleanup) {
-    this.callback = callback;}
+    this.callback = callback;
+  }
 
   schedule(source?: Source): void {
-    // While running, only sources read again in this pass count; writes during previous cleanup never re-queue.
-    if (!this.active || this.#running && (!this.#reading || source && source.seen !== this.pass && !reads(this, source))) return;
-    pendingEffects.add(this);
-    flushEffects();
+    if (!this.active || (this._running && (!this._reading || (source !== undefined && source.seen !== this.pass && !reads(this, source))))) return;
+    if (!this.queued) {
+      this.queued = true;
+      pending.push(this);
+    }
+    if (!flushing && batchDepth === 0) flushEffects();
   }
 
   run(): void {
-    if (!this.active || this.#running) return;
-    this.#running = true;
-    const initial = !this.#initialized;
-    this.#initialized = true;
-    const diagnosticStarted = diagnosticListeners.size ? performance.now() : 0;
-    pendingEffects.delete(this);
+    if (!this.active || this._running) return;
+    this._running = true;
+    const initial = !this._init;
+    this._init = true;
+    const diagnosticStarted = hasDiagnostics ? performance.now() : 0;
+    this.queued = false;
     const previous = activeObserver;
     try {
-      const previousCleanup = this.#cleanup;
-      this.#cleanup = undefined;
-      activeObserver = null;
-      previousCleanup?.();
+      const previousCleanup = this._cleanup;
+      if (previousCleanup !== undefined) {
+        this._cleanup = undefined;
+        activeObserver = null;
+        previousCleanup();
+      }
       this.pass = ++passes;
       this.cursor = 0;
-      this.#reading = true;
+      this._reading = true;
       activeObserver = this;
-      const nextCleanup = this.callback(this.#register ??= (next) => { this.#cleanup = next; });
-      if (typeof nextCleanup === "function") this.#cleanup = nextCleanup;
+      const nextCleanup = this.callback.length === 0
+        ? (this.callback as () => void | Cleanup)()
+        : this.callback(this._register ??= (next) => { this._cleanup = next; });
+      if (typeof nextCleanup === "function") this._cleanup = nextCleanup;
     } catch (error) {
       if (initial) {
         activeObserver = previous;
@@ -383,26 +518,28 @@ class ReactiveEffect implements Observer {
       throw error;
     } finally {
       activeObserver = previous;
-      if (this.#reading) {
-        this.#reading = false;
-        settle(this);
+      if (this._reading) {
+        this._reading = false;
+        if (this.stale !== null || this.cursor !== this.sources.length) settle(this);
       }
-      this.#running = false;
-      if (diagnosticListeners.size) diagnostic("run", this, undefined, performance.now() - diagnosticStarted);
+      this._running = false;
+      if (hasDiagnostics) diagnostic("run", this, undefined, performance.now() - diagnosticStarted);
     }
   }
 
   dispose(): void {
     if (!this.active) return;
-    diagnostic("dispose", this);
+    if (hasDiagnostics) diagnostic("dispose", this);
     this.active = false;
-    pendingEffects.delete(this);
+    this.queued = false;
     detach(this);
-    const cleanup = this.#cleanup;
-    this.#cleanup = undefined;
-    const previous = activeObserver;
-    activeObserver = null;
-    try { cleanup?.(); } finally { activeObserver = previous; }
+    const cleanup = this._cleanup;
+    if (cleanup !== undefined) {
+      this._cleanup = undefined;
+      const previous = activeObserver;
+      activeObserver = null;
+      try { cleanup(); } finally { activeObserver = previous; }
+    }
   }
 }
 
@@ -412,15 +549,16 @@ export interface EffectOptions {
 
 export function effect(
   callback: (onCleanup: (cleanup: Cleanup) => void) => void | Cleanup,
-  options: EffectOptions = {},
+  options?: EffectOptions,
 ): Cleanup {
   const observer = new ReactiveEffect(callback);
-  const dispose = registerCleanup(() => observer.dispose());
-  if (!options.defer) {
+  const dispose = () => observer.dispose();
+  if (activeScope !== null && activeScope.active) activeScope.cleanups.push(dispose);
+  if (!options?.defer) {
     const wasFlushing = flushing;
     flushing = true;
     try { observer.run(); } finally { flushing = wasFlushing; }
-    flushEffects();
+    if (pending.length > 0 && !flushing && batchDepth === 0) flushEffects();
   } else observer.schedule();
   return dispose;
 }
@@ -430,8 +568,7 @@ export function batch<T>(callback: () => T): T {
   try {
     return callback();
   } finally {
-    batchDepth--;
-    flushEffects();
+    endBatch();
   }
 }
 
@@ -473,14 +610,16 @@ export function onCleanup(cleanup: Cleanup): Cleanup {
 export function createRoot<T>(callback: (dispose: Cleanup) => T): T {
   const parent = activeScope;
   const scope: Scope = { parent, cleanups: [], active: true };
-  const dispose = () => {
+  const dispose: Cleanup & { [ROOT_CLEANUP_STATE]?: Scope } = () => {
     if (!scope.active) return;
     scope.active = false;
+    const list = scope.cleanups;
+    if (list.length === 0) return;
     const errors: unknown[] = [];
     const previous = activeObserver;
     activeObserver = null;
     try {
-      for (const cleanup of scope.cleanups.splice(0).reverse()) {
+      for (const cleanup of list.splice(0).reverse()) {
         try { cleanup(); } catch (error) { errors.push(error); }
       }
     } finally {
@@ -489,6 +628,7 @@ export function createRoot<T>(callback: (dispose: Cleanup) => T): T {
     if (errors.length === 1) throw errors[0];
     if (errors.length > 1) throw new AggregateError(errors, "Multiple Clank cleanup callbacks failed.");
   };
+  dispose[ROOT_CLEANUP_STATE] = scope;
   activeScope = scope;
   try {
     return callback(dispose);
@@ -505,6 +645,7 @@ export function createRoot<T>(callback: (dispose: Cleanup) => T): T {
 }
 
 export function getOwner(): object | null {
+  if (activeScope !== null) activeScope.escaped = true;
   return activeScope;
 }
 
@@ -522,70 +663,67 @@ const rawByProxy = new WeakMap<object, object>();
 const proxyByRaw = new WeakMap<object, object>();
 
 export function store<T extends object>(initial: T): T {
+  const cachedProxy = proxyByRaw.get(initial);
+  if (cachedProxy !== undefined) return cachedProxy as T;
   if (rawByProxy.has(initial)) return initial;
-  if (proxyByRaw.has(initial)) return proxyByRaw.get(initial) as T;
   const signals = new Map<PropertyKey, ReactiveSignal<unknown>>();
-  const iteration = signal(0);
+  const iteration = new ReactiveSignal(0);
+  const isArray = Array.isArray(initial);
   const proxied = new Proxy(initial, {
     get(target, key, receiver) {
       if (key === STORE) return true;
-      if (key === Symbol.for("clank.raw")) return target;
-      let entry: ReactiveSignal<unknown>;
-      const existing = signals.get(key);
-      if (existing) entry = existing;
-      else {
-        entry = signal<unknown>(Reflect.get(target, key, receiver), { equals: Object.is });
+      if (key === RAW_SYMBOL) return target;
+      let entry = signals.get(key);
+      if (entry === undefined) {
+        entry = new ReactiveSignal<unknown>(Reflect.get(target, key, receiver));
         signals.set(key, entry);
       }
       const value = entry.get();
-      return value && typeof value === "object" ? store(value as object) : value;
+      if (value === null || typeof value !== "object") return value;
+      return proxyByRaw.get(value as object) ?? store(value as object);
     },
     set(target, key, value, receiver) {
       const owned = Object.hasOwn(target, key);
-      const array = Array.isArray(target) ? target : undefined;
-      const previousLength = array?.length ?? 0;
-      const raw = toRaw(value);
+      const raw = value !== null && typeof value === "object" ? (rawByProxy.get(value as object) ?? value) : value;
+      if (!isArray && owned && key !== "__proto__") {
+        const result = Reflect.set(target, key, raw, receiver);
+        signals.get(key)?._set(Reflect.get(target, key, receiver));
+        return result;
+      }
+      const array = isArray ? target as unknown[] : undefined;
+      const previousLength = array ? array.length : 0;
       const previousKeyCount = array && key === "length" && (typeof raw !== "number" || raw < previousLength)
         ? Reflect.ownKeys(target).length
         : 0;
       const result = key === "__proto__"
-        ? Reflect.defineProperty(target, key, {
-            value: raw,
-            enumerable: true,
-            configurable: true,
-            writable: true,
-          })
+        ? Reflect.defineProperty(target, key, { value: raw, enumerable: true, configurable: true, writable: true })
         : Reflect.set(target, key, raw, receiver);
-      batch(() => {
-        // Rejected length writes can still truncate; refresh only cached reads.
-        signals.get(key)?.set(() => Reflect.get(target, key, receiver));
+      batchDepth++;
+      try {
+        signals.get(key)?._set(Reflect.get(target, key, receiver));
         if (array && key === "length" && array.length < previousLength) {
           for (const [property, cached] of signals) {
             const index = typeof property === "string" ? Number(property) : NaN;
             if (Number.isInteger(index) && index >= array.length && index < previousLength && String(index) === property) {
-              cached.set(() => Reflect.get(target, property, receiver));
+              cached._set(Reflect.get(target, property, receiver));
             }
           }
-          // Shape changes only when own indexes vanish.
-          if (Reflect.ownKeys(target).length < previousKeyCount) iteration.update((count) => count + 1);
+          if (Reflect.ownKeys(target).length < previousKeyCount) iteration._set(iteration._v + 1);
         }
-        // Index writes can grow length; publish both before flushing.
-        if (array && key !== "length" && array.length !== previousLength) {
-          signals.get("length")?.set(array.length);
-        }
-        if (owned !== Object.hasOwn(target, key)) iteration.update((count) => count + 1);
-      });
+        if (array && key !== "length" && array.length !== previousLength) signals.get("length")?._set(array.length);
+        if (owned !== Object.hasOwn(target, key)) iteration._set(iteration._v + 1);
+      } finally { endBatch(); }
       return result;
     },
     deleteProperty(target, key) {
       const owned = Object.hasOwn(target, key);
       const result = Reflect.deleteProperty(target, key);
       if (!result || !owned) return result;
-      batch(() => {
-        // Deleting an own shadow exposes the prototype getter.
-        signals.get(key)?.set(() => Reflect.get(target, key, proxied));
-        iteration.update((count) => count + 1);
-      });
+      batchDepth++;
+      try {
+        signals.get(key)?._set(Reflect.get(target, key, proxied));
+        iteration._set(iteration._v + 1);
+      } finally { endBatch(); }
       return result;
     },
     ownKeys(target) {

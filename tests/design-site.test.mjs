@@ -185,3 +185,16 @@ test("Design Studio source remains a zero-dependency first-party Clank project",
   assert.equal(manifest.componentCount, 39);
   assert.equal(manifest.themeCount, 10);
 });
+
+test("Design Studio keeps trailing-slash redirects same-origin", async (t) => {
+  const origin = await startDesignServer(t);
+  const valid = await fetch(`${origin}/components/select/`, { redirect: "manual" });
+  assert.equal(valid.status, 308);
+  assert.equal(valid.headers.get("location"), "/components/select");
+
+  for (const path of ["//evil.example/", "/\\evil.example/"]) {
+    const response = await fetch(`${origin}${path}`, { redirect: "manual" });
+    assert.equal(response.status, 404, `expected 404 for ${path}`);
+    assert.equal(response.headers.get("location"), null, `unexpected redirect for ${path}`);
+  }
+});

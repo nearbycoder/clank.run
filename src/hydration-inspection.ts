@@ -26,7 +26,7 @@ export function withHydrationSource(vnode: VNode, source: HydrationSource): VNod
   if ((!vnode || vnode[VNODE] !== true) || !source || typeof source.file !== "string" || source.file.length > 4096 || !Number.isSafeInteger(source.line) || source.line < 1 || source.line > 10000000 || !Number.isSafeInteger(source.column) || source.column < 1 || source.column > 10000000) throw new TypeError("Invalid hydration source location.");
   const file = source.file.split(/[\\/]/u).at(-1) ?? "";
   if (!/^[A-Za-z0-9_.-]{1,128}$/u.test(file)) throw new TypeError("Hydration source requires a bounded file basename.");
-  return { ...vnode, source: Object.freeze({ file, line: source.line, column: source.column }) };
+  return { ...vnode, [VNODE]: true, source: Object.freeze({ file, line: source.line, column: source.column }) };
 }
 
 

@@ -6,6 +6,7 @@ import {
   setTrustedClientAddress,
   takeBufferedBody,
   takeRequestHandoff,
+  writeBufferedHeaders,
 } from "./security.ts";
 
 export interface FetchApplication {
@@ -170,6 +171,45 @@ export async function serve(app: FetchApplication | ((request: Request) => Respo
   };
 }
 
+interface StaticModules {
+  fs: {
+    realpath(path: string): Promise<string>;
+    stat(path: string): Promise<{
+      isDirectory(): boolean; isFile(): boolean;
+      size: number; mtimeMs: number; ctimeMs: number; ino: number;
+    }>;
+  };
+  createReadStream(path: string): unknown;
+  Readable: { toWeb(stream: unknown): ReadableStream<Uint8Array> };
+  path: {
+    resolve(...segments: string[]): string;
+    relative(from: string, to: string): string;
+    sep: string;
+    extname(value: string): string;
+  };
+}
+let staticModulesPromise: Promise<StaticModules> | undefined;
+function loadStaticModules(): Promise<StaticModules> {
+  if (!staticModulesPromise) {
+    const fsPromisesName = "node:fs/promises";
+    const fsName = "node:fs";
+    const streamName = "node:stream";
+    const pathName = "node:path";
+    staticModulesPromise = Promise.all([
+      import(fsPromisesName),
+      import(fsName),
+      import(streamName),
+      import(pathName),
+    ]).then(([fs, fsSync, stream, path]) => ({
+      fs: fs as unknown as StaticModules["fs"],
+      createReadStream: (fsSync as unknown as { createReadStream(p: string): unknown }).createReadStream,
+      Readable: (stream as unknown as { Readable: StaticModules["Readable"] }).Readable,
+      path: path as unknown as StaticModules["path"],
+    }));
+  }
+  return staticModulesPromise;
+}
+
 /** Serves a directory through Fetch responses with traversal protection and streaming-friendly MIME headers. */
 export function staticFiles(root: string, options: StaticFilesOptions = {}): FetchApplication {
   const normalizedPrefix = trimBoundarySlashes(options.prefix ?? "");
@@ -178,27 +218,7 @@ export function staticFiles(root: string, options: StaticFilesOptions = {}): Fet
   return {
     async handle(request) {
       if (request.method !== "GET" && request.method !== "HEAD") return new Response("Method not allowed", { status: 405, headers: { allow: "GET, HEAD" } });
-      const fileSystemName = "node:fs/promises";
-      const pathName = "node:path";
-      const fs = await import(fileSystemName) as unknown as {
-        realpath(path: string): Promise<string>;
-        stat(path: string): Promise<{
-          isDirectory(): boolean; isFile(): boolean;
-          size: number; mtimeMs: number; ctimeMs: number; ino: number;
-        }>;
-      };
-      const fsSyncName = "node:fs";
-      const streamName = "node:stream";
-      const { createReadStream } = await import(fsSyncName) as unknown as { createReadStream(path: string): unknown };
-      const { Readable } = await import(streamName) as unknown as {
-        Readable: { toWeb(stream: unknown): ReadableStream<Uint8Array> };
-      };
-      const path = await import(pathName) as unknown as {
-        resolve(...segments: string[]): string;
-        relative(from: string, to: string): string;
-        sep: string;
-        extname(value: string): string;
-      };
+      const { fs, createReadStream, Readable, path } = await loadStaticModules();
       const url = new URL(request.url);
       if (prefix && url.pathname !== prefix && !url.pathname.startsWith(`${prefix}/`)) return new Response("Not found", { status: 404 });
       let relative: string;
@@ -321,11 +341,18 @@ async function dispatch(
   // Cancelling an unread upload can abort the request while its rejection
   // response remains writable. Track the response connection separately.
   let responseClosed = false;
-  incoming.once("aborted", () => abort.abort(new Error("Request aborted.")));
-  outgoing.once("close", () => {
+  let completed = false;
+  const onAborted = () => { if (!completed) abort.abort(new Error("Request aborted.")); };
+  const onClose = () => {
     responseClosed = true;
-    abort.abort(connectionClosed());
-  });
+    if (!completed) abort.abort(connectionClosed());
+  };
+  incoming.once("aborted", onAborted);
+  outgoing.once("close", onClose);
+  const finish = () => {
+    completed = true;
+    outgoing.removeListener("close", onClose);
+  };
   const body = method === "GET" || method === "HEAD"
     ? undefined
     : boundedRequestBody(incoming, options.maxBodySize ?? 1024 * 1024, headerValue(received["content-length"]) ?? null);
@@ -341,7 +368,8 @@ async function dispatch(
     const callback = takeRequestHandoff(request);
     if (callback) afterWrite(callback);
   };
-  const response = await handler(request);
+  const handled = handler(request);
+  const response = handled instanceof Promise ? await handled : handled;
   // If an application translated the stream error into its own response, the
   // transport limit still wins. Otherwise a chunked upload could turn a 413
   // into an application-level 500 after crossing the adapter boundary.
@@ -357,33 +385,37 @@ async function dispatch(
   }
   outgoing.statusCode = response.status;
   outgoing.statusMessage = response.statusText;
-  const responseHeaders = response.headers as Headers & { getSetCookie?: () => string[] };
-  const cookies = responseHeaders.getSetCookie?.() ?? [];
-  response.headers.forEach((value, name) => {
-    if (name !== "set-cookie") outgoing.setHeader(name, value);
-  });
-  if (cookies.length) outgoing.setHeader("set-cookie", cookies);
+  if (!writeBufferedHeaders(response, outgoing)) {
+    const responseHeaders = response.headers as Headers & { getSetCookie?: () => string[] };
+    const cookies = responseHeaders.getSetCookie?.() ?? [];
+    response.headers.forEach((value, name) => {
+      if (name !== "set-cookie") outgoing.setHeader(name, value);
+    });
+    if (cookies.length) outgoing.setHeader("set-cookie", cookies);
+  }
   const encoding = zlib ? negotiateCompression(response, method, headerValue(received["accept-encoding"]) ?? null, outgoing, buffered) : null;
   if (buffered !== undefined) {
     const text = takeBufferedBody(response);
     if (text !== undefined) {
-      if (method === "HEAD") outgoing.end();
+      if (method === "HEAD") { finish(); outgoing.end(); }
       else if (encoding && zlib) {
         const compressed = await compressText(text, encoding, zlib);
         if (responseClosed) return;
+        finish();
         if (compressed) outgoing.end(compressed);
         else {
           // Compression failed before any byte was sent: fall back to the identity body.
           outgoing.removeHeader("content-encoding");
           outgoing.end(text);
         }
-      } else outgoing.end(text);
+      } else { finish(); outgoing.end(text); }
       handoff();
       return;
     }
   }
   if (!response.body || method === "HEAD") {
     await response.body?.cancel("HEAD response has no body").catch(() => undefined);
+    finish();
     outgoing.end();
     handoff();
     return;

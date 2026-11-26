@@ -34,7 +34,7 @@ function slugPart(value: string): string {
 
 function safeHref(raw: string): { href: string; external: boolean } | null {
   const value = raw.trim();
-  if (!value || value.startsWith("//")) return null;
+  if (!value || value.startsWith("//") || value.startsWith("/\\") || /[\u0000-\u001f\u007f]/u.test(value)) return null;
   if (value.startsWith("#") || value.startsWith("/")) return { href: value, external: false };
   const scheme = value.match(/^([a-z][a-z0-9+.-]*):/iu)?.[1]?.toLowerCase();
   if (scheme === "http" || scheme === "https") {
